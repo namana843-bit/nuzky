@@ -55,6 +55,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     ),
     // Only renders a frame and writes its mask to the cache.
     rules("segment_subject", Always, false, true, true),
+    // Replaces the keyframes of the clips it moves.
+    rules("reframe", Never, true, false, true),
     rules("transcribe", Never, false, false, true),
     rules("get_transcript", Always, false, true, false),
     rules("edit_transcript", When(|args| args["dry_run"] == true), true, false, false),
@@ -138,6 +140,7 @@ mod tests {
                 "build_captions",
                 "apply_zooms",
                 "propose_reels",
+                "reframe",
                 "resolve_recovery"
             ])
         );
@@ -168,6 +171,7 @@ mod tests {
                 "segment_subject",
                 "inspect_thumbnail",
                 "transcribe",
+                "reframe",
                 "export_video",
                 "export_thumbnail"
             ])
