@@ -170,7 +170,6 @@ mod tests {
         );
         assert_eq!(fields(FeedbackKind::Idea), [pair("template", "feature_request.yml"), pair("version", "0.2.0")]);
         assert_eq!(feedback_url(FeedbackKind::Message, "0.2.0", "macOS 15.3 · aarch64"), X_PROFILE);
-        // Every field the app fills in is one the form has.
         for (form, ids) in [
             (include_str!("../../.github/ISSUE_TEMPLATE/bug_report.yml"), ["version", "system"].as_slice()),
             (include_str!("../../.github/ISSUE_TEMPLATE/feature_request.yml"), ["version"].as_slice()),

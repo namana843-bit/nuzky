@@ -81,7 +81,6 @@ def diagnostics(r):
     r.add_clip('clip.mp4')
     clips = r.track()
 
-    # An export into a folder Nuzky may not write to.
     locked = r.work / 'locked'
     locked.mkdir()
     locked.chmod(0o500)
@@ -132,7 +131,13 @@ def diagnostics(r):
     models.chmod(0o700)
     r.s.run("window.__nuzky.store.setState({toasts: []})")
 
-    # Copy diagnostics from Send feedback in the editor's top bar.
+    # An error that names a private folder, a caption and a secret, as the interface would report one.
+    r.s.call('window.__nuzky.api.logUiError(arguments[0])',
+             f'Cannot draw {r.work}/Private Trip/clip.mp4 with caption "Ahoj Jano" and token=5eed5eed5eed')
+    log = log_text(r)
+    r.check('the log keeps an error of the interface without its folder, caption or token',
+            re.search(r'^\S+Z ERROR ui: Cannot draw clip\.mp4 with caption "…" and token=\[hidden\]$', log, re.M)
+            and secret_free(r, log) and 'Ahoj' not in log and '5eed5eed' not in log, log[-400:])
     r.s.run("const b = document.querySelector('header [data-feedback]'); b.focus(); b.click();")
     menu = wait(lambda: r.s.run(MENU), 3)
     r.check('Send feedback offers Copy diagnostics and Open logs folder',
@@ -145,8 +150,9 @@ def diagnostics(r):
     version = r.s.run('return window.__nuzky.updates.getState().version')
     r.check('Copy diagnostics copies the version, system and graphics backend',
             text.startswith(f'Nuzky {version}\nSystem: ') and re.search(r'^Graphics: .+\((metal|vulkan|dx12|gl)\)$', text, re.M), text[:300])
-    r.check('and the end of the log with the failed export, without folders',
-            re.search(r'^Last \d+ lines of the log:$', text, re.M) and 'Exporting out.mp4 failed' in text and secret_free(r, text), text[-600:])
+    r.check('and the end of the log with the failed export and the cleaned interface error, without folders',
+            re.search(r'^Last \d+ lines of the log:$', text, re.M) and 'Exporting out.mp4 failed' in text
+            and 'Cannot draw clip.mp4' in text and 'Ahoj' not in text and secret_free(r, text), text[-600:])
     r.check('a toast says they were copied',
             wait(lambda: any(t['text'] == 'Diagnostics copied. Paste them into your bug report.' for t in r.s.run(TOASTS)), 3), r.s.run(TOASTS))
 
@@ -169,10 +175,9 @@ def diagnostics(r):
             and query.get('template') == 'bug_report.yml' and query.get('version') == version and query.get('system'), (url, query))
     r.check('and copies the diagnostics to paste into it', wait(lambda: (r.s.run(COPIED) or [''])[-1].startswith(f'Nuzky {version}'), 3))
 
-    # A normal quit is not a crash.
     close_window()
-    if not MACOS:
-        wait(lambda: app_pid(r) is None, 15)
+    # Stopping the session would end the app with SIGTERM, which also clears the marker; it has to quit by itself.
+    r.check('the window closes and Nuzky quits', wait(lambda: (r.app.poll() is not None) if MACOS else app_pid(r) is None, 15))
     restart(r)
     time.sleep(1)
     r.check('after quitting normally the next start says nothing about a crash',
@@ -186,6 +191,11 @@ def diagnostics(r):
     r.check('a bug while drawing shows what happened instead of an empty window',
             screen.startswith('Something went wrong in this window') and 'Report a bug…' in screen, screen)
     r.check('Reload has the focus', r.s.run("return document.activeElement?.textContent === 'Reload'"))
+    before = len(opened(r))
+    r.s.run(CLICK, '[role=alertdialog]', 'Report a bug…')
+    r.check('Report a bug… there copies the diagnostics, says so in the card and opens the bug form',
+            wait(lambda: 'Diagnostics copied. Paste them into your bug report.' in r.s.run("return document.querySelector('[role=alertdialog]').textContent"), 5)
+            and len(opened(r)) == before + 1 and 'template=bug_report.yml' in opened(r)[-1], opened(r)[before:])
     r.shot('window-error')
     r.check('the log records it', wait(lambda: 'ERROR ui: The window stopped drawing' in log_text(r), 5), log_text(r)[-400:])
     r.s.run(CLICK, '[role=alertdialog]', 'Reload')

@@ -6,7 +6,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, plainError } from "./lib/api";
 import { setLimits } from "./lib/limits";
 import { onReframeJob } from "./lib/reframe";
-import { retrySpeech, useSpeech } from "./lib/speech";
+import { canRetrySpeech, retrySpeech, useSpeech } from "./lib/speech";
 import { reportBug } from "./lib/diagnostics";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, runWasDiscarded, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
 import { US, formatDuration } from "./lib/time";
@@ -176,8 +176,8 @@ function onJob(job: JobEvent) {
   if (job.kind === "cover" || job.kind === "vision-models") onCoverJob(job);
   if (job.kind === "reframe") onReframeJob(job);
   if (job.kind === "captions" && job.status === "done") toast({ kind: "success", text: `Added ${job.output ?? "captions"}` });
-  // The panel shows the failure too, with Open logs folder.
-  const retry = { label: "Try again", run: retrySpeech };
+  // The panel shows the failure too, with Open logs folder. In another project the toast goes.
+  const retry = { label: "Try again", run: () => retrySpeech(job.id), valid: () => canRetrySpeech(job.id) };
   if (job.kind === "captions" && job.status === "failed") toast({ kind: "error", text: `Captions failed: ${plainError(job.message ?? "")}`, action: retry });
   if (job.kind === "transcript" && job.status === "done") toast({ kind: "success", text: `Transcript ready: ${job.output ?? "words"}` });
   if (job.kind === "transcript" && job.status === "failed") toast({ kind: "error", text: `Transcript failed: ${plainError(job.message ?? "")}`, action: retry });

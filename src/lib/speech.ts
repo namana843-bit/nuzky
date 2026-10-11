@@ -110,31 +110,36 @@ export function useTranscriptView(): { view: TranscriptView | null; error: strin
 /** How captions look: their style with its font, and the entry and exit animation of every caption. */
 export type CaptionLook = { style: TextStyle; animIn: Animation | null; animOut: Animation | null };
 
-let lastSpeech: { captions: CaptionLook | null; refresh: boolean } | null = null;
+/** What each transcript or captions job was asked for and in which project, so Try again repeats that job there. */
+const asked = new Map<string, { captions: CaptionLook | null; refresh: boolean; epoch: string | undefined }>();
 
 /** Starts recognition for the transcript, of every heard file with `refresh`, or for captions in `captions`. */
 export async function startSpeech(captions: CaptionLook | null, refresh = false) {
   // Captions change the project; a transcript only reads it.
   if (captions && aiLocked()) return;
-  lastSpeech = { captions, refresh };
   const { model, language, captionWords } = useSpeech.getState();
   // Taken before waiting, so a project opened meanwhile refuses the request instead of running it.
   const epoch = currentEpoch();
   // The backend transcribes the project as it is when the job starts; wait for queued edits.
   await whenIdle();
   try {
-    if (captions) {
-      const words = captionWords || null;
-      await api.startCaptions(model, language, captions, words, words ? SHORT_CAPTION_CHARS : null, epoch);
-    } else await api.startTranscript(model, language, refresh, epoch);
+    const words = captionWords || null;
+    const job = captions
+      ? await api.startCaptions(model, language, captions, words, words ? SHORT_CAPTION_CHARS : null, epoch)
+      : await api.startTranscript(model, language, refresh, epoch);
+    asked.set(job, { captions, refresh, epoch });
   } catch (e) {
     useEditor.getState().toast({ kind: "error", text: errorText(e) });
   }
 }
 
-/** Starts the last transcript or captions again as they were asked for, after a failure. */
-export function retrySpeech() {
-  if (lastSpeech) void startSpeech(lastSpeech.captions, lastSpeech.refresh);
+/** Whether `job` can run again: its project is still open. A job whose start has not answered yet counts as open. */
+export const canRetrySpeech = (job: string) => (asked.get(job)?.epoch ?? currentEpoch()) === currentEpoch();
+
+/** Starts a failed transcript or captions job again as it was asked for, in the same project. */
+export function retrySpeech(job: string) {
+  const request = asked.get(job);
+  if (request && canRetrySpeech(job)) void startSpeech(request.captions, request.refresh);
 }
 
 /**

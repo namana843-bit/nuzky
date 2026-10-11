@@ -2,9 +2,10 @@
 //! folder, and a short diagnostics text with the version, system, graphics and the end of the log. Nothing is sent
 //! anywhere; the person copies the text or opens the folder.
 //!
-//! The log keeps no one's work or identity. Text between double quotes or backticks, where captions and other typed
-//! text appear in error and panic messages, is left out, a path keeps only its last part and tokens and keys are
-//! hidden.
+//! The log keeps no one's work or identity. Text between double quotes, curly quotes or backticks, where captions,
+//! project names and other typed text appear in error and panic messages, is left out, a path keeps only its last
+//! part and tokens and keys are hidden. Debug and trace records, where libraries dump whole HTTP requests, stay in
+//! the terminal.
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-use log::{Log, Metadata, Record};
+use log::{Level, Log, Metadata, Record};
 use tauri::AppHandle;
 
 use crate::{CmdResult, store, updates};
@@ -24,6 +25,8 @@ const MAX_BYTES: u64 = 1 << 20;
 /// How much of the log Copy diagnostics includes.
 const TAIL_LINES: usize = 200;
 const RUNNING: &str = "running-";
+/// A marker while it is being locked, before it is published under `RUNNING`.
+const STARTING: &str = "starting-";
 
 pub fn logs_dir() -> PathBuf {
     store::data_dir().join("logs")
@@ -42,14 +45,14 @@ pub fn init() {
         eprintln!("Nuzky cannot tell whether it crashed: {error}");
     }
     log::set_max_level(stderr.filter());
-    if log::set_boxed_logger(Box::new(Logger { stderr, file: Mutex::new(file) })).is_ok() {
+    if log::set_boxed_logger(Box::new(Logger { stderr, file })).is_ok() {
         record_panics();
     }
 }
 
 struct Logger {
     stderr: env_logger::Logger,
-    file: Mutex<Option<LogFile>>,
+    file: Option<LogFile>,
 }
 
 impl Log for Logger {
@@ -62,7 +65,9 @@ impl Log for Logger {
             return;
         }
         self.stderr.log(record);
-        if let Some(file) = self.file.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+        if let Some(file) = &self.file
+            && record.level() <= Level::Info
+        {
             let now = jiff::Timestamp::now();
             file.append(&format!("{now:.0} {} {}: {}\n", record.level(), record.target(), record.args()));
         }
@@ -71,29 +76,26 @@ impl Log for Logger {
     fn flush(&self) {}
 }
 
+/// Opened for each record, so a Nuzky in another window that moved the full log aside never leaves this one writing
+/// into the old file.
 struct LogFile {
     dir: PathBuf,
-    file: File,
-    size: u64,
 }
 
 impl LogFile {
     fn open(dir: &Path) -> std::io::Result<Self> {
         std::fs::create_dir_all(dir)?;
-        let file = OpenOptions::new().create(true).append(true).open(dir.join(LOG))?;
-        Ok(Self { dir: dir.into(), size: file.metadata()?.len(), file })
+        Ok(Self { dir: dir.into() })
     }
 
-    fn append(&mut self, record: &str) {
+    fn append(&self, record: &str) {
         let record = scrub(record);
-        if self.size + record.len() as u64 > MAX_BYTES
-            && std::fs::rename(self.dir.join(LOG), self.dir.join(OLDER_LOG)).is_ok()
-            && let Ok(fresh) = Self::open(&self.dir)
-        {
-            *self = fresh;
+        let path = self.dir.join(LOG);
+        if std::fs::metadata(&path).is_ok_and(|log| log.len() + record.len() as u64 > MAX_BYTES) {
+            std::fs::rename(&path, self.dir.join(OLDER_LOG)).ok();
         }
-        if self.file.write_all(record.as_bytes()).is_ok() {
-            self.size += record.len() as u64;
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+            file.write_all(record.as_bytes()).ok();
         }
     }
 }
@@ -122,22 +124,26 @@ pub fn crashed_before() -> bool {
 static MARKER: OnceLock<(PathBuf, File)> = OnceLock::new();
 
 /// Every running Nuzky holds a lock on a file of its own in `dir`. A file nobody holds was left by one that never
-/// quit; files another open Nuzky window holds stay.
+/// quit; files another open Nuzky window holds stay. A file shows under `RUNNING` only once it is locked, so a Nuzky
+/// starting at the same moment never takes it for a crash.
 fn watch_for_crashes(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     for entry in std::fs::read_dir(dir)?.flatten() {
-        if !entry.file_name().to_string_lossy().starts_with(RUNNING) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(RUNNING) && !name.starts_with(STARTING) {
             continue;
         }
         let left = File::open(entry.path()).is_ok_and(|file| file.try_lock().is_ok());
         if left {
-            CRASHED.store(true, Ordering::Relaxed);
+            CRASHED.fetch_or(name.starts_with(RUNNING), Ordering::Relaxed);
             std::fs::remove_file(entry.path()).ok();
         }
     }
-    let path = dir.join(format!("{RUNNING}{}", std::process::id()));
-    let file = File::create(&path)?;
+    let starting = dir.join(format!("{STARTING}{}", std::process::id()));
+    let file = File::create(&starting)?;
     file.lock()?;
+    let path = dir.join(format!("{RUNNING}{}", std::process::id()));
+    std::fs::rename(&starting, &path)?;
     #[cfg(unix)]
     quit_on_signals(&path);
     MARKER.set((path, file)).ok();
@@ -223,20 +229,25 @@ pub fn scrub(text: &str) -> String {
     hide_secrets(&shorten_paths(&hide_quoted(text)))
 }
 
-/// Text between double quotes or backticks on one line: captions, words and names in error and panic messages.
+/// Text between double quotes, curly quotes or backticks on one line: captions, words and project names in error and
+/// panic messages.
 fn hide_quoted(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        let close = (c == '"' || c == '`').then(|| closing(&chars, i + 1, c)).flatten();
-        if let Some(end) = close {
+        let quote = match c {
+            '"' | '`' => Some(c),
+            '“' => Some('”'),
+            _ => None,
+        };
+        if let Some(end) = quote.and_then(|quote| closing(&chars, i + 1, quote)) {
             out.push(c);
             if end > i + 1 {
                 out.push('…');
             }
-            out.push(c);
+            out.push(chars[end]);
             i = end + 1;
         } else {
             out.push(c);
@@ -246,7 +257,7 @@ fn hide_quoted(text: &str) -> String {
     out
 }
 
-/// Where the quote opened before `from` closes on the same line, past escaped quotes.
+/// Where `quote` closes the quote opened before `from` on the same line, past escaped quotes.
 fn closing(chars: &[char], from: usize, quote: char) -> Option<usize> {
     let mut i = from;
     while i < chars.len() && chars[i] != '\n' {
@@ -259,8 +270,9 @@ fn closing(chars: &[char], from: usize, quote: char) -> Option<usize> {
     None
 }
 
-/// Paths lose their folders, which name the person and where their files are. A path may hold spaces, so it is
-/// taken to run to the end of the clause; that can drop words after it, never a folder.
+/// Paths lose their folders, which name the person and where their files are. A folder may hold spaces, commas and
+/// apostrophes, so a path is taken to run to the end of its line, or to the line's last `'` when one opened it; that
+/// can drop words after it, never a folder.
 fn shorten_paths(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -271,10 +283,9 @@ fn shorten_paths(text: &str) -> String {
             i += 1;
             continue;
         }
-        let mut end = i;
-        while end < chars.len() && !clause_ends(&chars, end) {
-            end += 1;
-        }
+        let line_end = (i..chars.len()).find(|&j| chars[j] == '\n' || chars[j] == '\r').unwrap_or(chars.len());
+        let quoted = i > 0 && chars[i - 1] == '\'';
+        let end = (i..line_end).rev().find(|&j| quoted && chars[j] == '\'').unwrap_or(line_end);
         let path = &chars[i..end];
         let trimmed = path.iter().rposition(|c| !is_separator(*c)).map_or(0, |last| last + 1);
         let name = path[..trimmed].iter().rposition(|c| is_separator(*c)).map_or(0, |sep| sep + 1);
@@ -298,12 +309,8 @@ fn path_starts(chars: &[char], i: usize) -> bool {
     after_gap && (rooted || home || drive || file_url)
 }
 
-fn clause_ends(chars: &[char], i: usize) -> bool {
-    "\n\r\"'`<>|;".contains(chars[i]) || ([':', ','].contains(&chars[i]) && chars.get(i + 1) == Some(&' '))
-}
-
-/// Tokens and keys in `name=value` and after `Bearer`, and long hexadecimal strings, which is what the preview, IPC
-/// and test bridge secrets are.
+/// Tokens and keys in `name=value`, after `Bearer` and in an `Authorization` header, and long hexadecimal strings,
+/// which is what the preview, IPC and test bridge secrets are.
 fn hide_secrets(text: &str) -> String {
     const HIDDEN: &str = "[hidden]";
     let chars: Vec<char> = text.chars().collect();
@@ -324,6 +331,12 @@ fn hide_secrets(text: &str) -> String {
                 i = value_ends(i + 1);
                 continue;
             }
+        }
+        if out.ends_with("Authorization:") {
+            out.push(' ');
+            out.push_str(HIDDEN);
+            i = (i..chars.len()).find(|&j| chars[j] == '\n').unwrap_or(chars.len());
+            continue;
         }
         if chars[i..].starts_with(&['B', 'e', 'a', 'r', 'e', 'r', ' ']) {
             out.push_str("Bearer ");
@@ -369,7 +382,12 @@ mod tests {
                 "Requesting https://freesound.org/apiv2/search/?query=rain&token=abcDEF123: 401",
                 "Requesting https://freesound.org/apiv2/search/?query=rain&token=[hidden]: 401",
             ),
-            ("Authorization: Bearer sk-abc.def", "Authorization: Bearer [hidden]"),
+            ("Bearer sk-abc.def refused", "Bearer [hidden] refused"),
+            ("Authorization: Token abc DEF\nnext", "Authorization: [hidden]\nnext"),
+            ("Cannot open /Users/jana/Jana's private/clip.mov", "Cannot open clip.mov"),
+            ("Cannot read /home/jana/Family, Jana/clip.mov: denied", "Cannot read clip.mov: denied"),
+            ("ffmpeg: '/Users/jana/Jana's Videos/a.mov': Invalid data", "ffmpeg: 'a.mov': Invalid data"),
+            ("No poster for “Klient Novák, svatba”: no GPU", "No poster for “…”: no GPU"),
             (
                 "ws://127.0.0.1:4321/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef refused",
                 "ws://127.0.0.1:4321/[hidden] refused",
@@ -391,13 +409,15 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         let file = LogFile::open(&dir).unwrap();
         let logger = Logger {
-            stderr: env_logger::Builder::new().filter_level(log::LevelFilter::Info).is_test(true).build(),
-            file: Mutex::new(Some(file)),
+            stderr: env_logger::Builder::new().filter_level(log::LevelFilter::Trace).is_test(true).build(),
+            file: Some(file),
         };
         // The test binary has one logger; this one writes into `dir` for as long as the test needs it.
         assert!(log::set_boxed_logger(Box::new(logger)).is_ok(), "another test installed a logger");
-        log::set_max_level(log::LevelFilter::Info);
+        log::set_max_level(log::LevelFilter::Trace);
         record_panics();
+        // How an HTTP library dumps a request it sends, which only the terminal may show.
+        log::trace!(target: "ureq_proto::util", "Authorization: Token 1d2e3f4a5b6c");
         // Shaped like the preview and IPC secrets: 64 hexadecimal digits.
         let token = "5eed".repeat(16);
         let panicked = std::thread::Builder::new()
@@ -418,6 +438,7 @@ mod tests {
         assert!(line.contains("diagnostics.rs:"), "{line}");
         assert!(line.ends_with("Cannot write reel.mp4 with token=[hidden]"), "{line}");
         assert!(!log.contains(&token) && !log.contains("/home/jana") && !log.contains("private"), "{log}");
+        assert!(!log.contains("1d2e3f4a5b6c") && !log.contains("ureq_proto"), "{log}");
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -446,7 +467,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(LOG), vec![b'x'; MAX_BYTES as usize - 10]).unwrap();
-        let mut file = LogFile::open(&dir).unwrap();
+        let file = LogFile::open(&dir).unwrap();
         file.append("a record longer than ten bytes\n");
         assert_eq!(std::fs::metadata(dir.join(OLDER_LOG)).unwrap().len(), MAX_BYTES - 10);
         assert_eq!(std::fs::read_to_string(dir.join(LOG)).unwrap(), "a record longer than ten bytes\n");
