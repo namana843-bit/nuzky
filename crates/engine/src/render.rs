@@ -152,7 +152,9 @@ fn placement(
                 Some(TransitionRole { kind: TransitionKind::ZoomIn, progress, incoming: false }) => 1.0 + progress,
                 _ => 1.0,
             };
-            let scale = 2.0_f32.powf((k * transform.scale * zoom).clamp(1.0, MAX_TEXT_SCALE).log2().ceil());
+            // A power of two keeps the raster through a scale animation. A small preview gets a small raster too:
+            // shrinking text more than twice skips pixels and leaves jagged edges.
+            let scale = 2.0_f32.powf((k * transform.scale * zoom).clamp(1.0 / 64.0, MAX_TEXT_SCALE).log2().ceil());
             let wrap = style.max_width.unwrap_or(canvas.width as f32 * 0.9);
             // Karaoke: the word being said, by its place in the whole text, which a typewriter reveals from the start.
             let spoken = style.highlight.as_ref().and_then(|_| spoken_word(text, words, t_us - clip.start_us));
@@ -923,9 +925,15 @@ mod tests {
             let bounds = layer_bounds(&project, t, &mut text);
             for visible in visible_clips(&project.tracks[0], t) {
                 let Some(base) = placement(&project, visible, t, 1.0, &mut text) else { continue };
-                for k in [0.5, 1.0, 2.0, 4.0] {
+                for k in [0.25, 0.5, 1.0, 2.0, 4.0] {
+                    // A raster below full size rounds up to whole pixels of its own: less than one on screen.
+                    let near = |a: f32, b: f32| (a - b).abs() * k < 1.0;
                     let place = placement(&project, visible, t, k, &mut text).unwrap();
-                    assert_eq!(place.size, base.size);
+                    assert!(
+                        near(place.size.0, base.size.0) && near(place.size.1, base.size.1),
+                        "{:?} at {k}",
+                        place.size
+                    );
                     let mut corners = placement_quad(&project, &place, k);
                     if let Some(role) = visible.transition {
                         corners = transition_geometry(
@@ -940,7 +948,9 @@ mod tests {
                         .0;
                     }
                     if let Some((_, expected, _)) = bounds.iter().find(|(id, ..)| *id == visible.clip.id) {
-                        assert_eq!(corners.map(|p| [p[0] / k, p[1] / k]), *expected);
+                        let close =
+                            corners.iter().zip(expected).all(|(p, e)| near(p[0] / k, e[0]) && near(p[1] / k, e[1]));
+                        assert!(close, "{corners:?} at {k}, expected {expected:?}");
                     }
                 }
             }

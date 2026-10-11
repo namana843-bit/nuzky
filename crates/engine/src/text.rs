@@ -412,8 +412,12 @@ fn stamp(swash: &mut SwashCache, fonts: &mut FontSystem, glyph: &Placed, mask: &
     });
 }
 
-/// Approximates a round brush outline by stamping the glyph mask on three rings.
+/// Approximates a round brush outline by stamping the glyph mask on three rings. An outline under half a pixel,
+/// such as a thin one in a small preview, is the half-pixel ring at its share of coverage, so it fades instead of
+/// vanishing.
 fn dilate(mask: &[u8], w: usize, h: usize, radius: f32) -> Vec<u8> {
+    let share = (radius * 512.0).min(256.0) as u32;
+    let radius = radius.max(0.5);
     let mut out = mask.to_vec();
     let mut offsets = Vec::new();
     for ring in [1.0, 0.66, 0.33] {
@@ -436,7 +440,7 @@ fn dilate(mask: &[u8], w: usize, h: usize, radius: f32) -> Vec<u8> {
             for x in 0..w as i32 {
                 let sx = x - dx;
                 if sx >= 0 && sx < w as i32 {
-                    let v = mask[src + sx as usize];
+                    let v = ((mask[src + sx as usize] as u32 * share) >> 8) as u8;
                     let o = &mut out[row + x as usize];
                     if v > *o {
                         *o = v;
@@ -461,6 +465,17 @@ mod tests {
     use cosmic_text::skrifa::{FontRef, MetadataProvider};
 
     const CZECH: &str = "Příliš žluťoučký kůň ěščřžýáíéúůťďň ĚŠČŘŽÝÁÍÉÚŮŤĎŇ";
+
+    #[test]
+    fn outline_under_half_a_pixel_fades_instead_of_vanishing() {
+        let mut dot = vec![0u8; 25];
+        dot[12] = 255;
+        let beside = |radius| dilate(&dot, 5, 5, radius)[13];
+        // A 1.5 px outline drawn at a quarter of its size, as a small preview does.
+        assert_eq!(beside(0.375), 191);
+        assert_eq!(beside(0.5), 255);
+        assert_eq!(beside(1.5), 255);
+    }
 
     fn style(family: &str) -> TextStyle {
         TextStyle {
