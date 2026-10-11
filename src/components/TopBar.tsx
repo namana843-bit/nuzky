@@ -89,10 +89,10 @@ export function JobIndicator() {
   const running = Object.values(jobs).filter((j) => j.status === "running");
   if (running.length === 0) return null;
   const j =
+    // Its Stop is only here; an export and recognition have theirs in their dialog and tab.
+    running.find((x) => x.kind === "speech-model") ??
     running.find((x) => x.kind === "export") ??
     running.find((x) => x.kind === "captions" || x.kind === "transcript") ??
-    // An agent waits for it, and its Stop is here.
-    running.find((x) => x.kind === "speech-model") ??
     // Ahead of the audio prepared beside it on import, so its Stop is there.
     running.find((x) => x.kind === "proxy") ??
     running[0];
@@ -126,7 +126,7 @@ export function JobIndicator() {
     return (
       <span className="bar flex h-8 items-center gap-1.5 rounded-full pl-3 pr-1 text-[12px] font-medium text-fg" role="status">
         {body}
-        <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" aria-label="Stop downloading the speech model" title="Stop downloading the speech model. The AI goes on without a transcript." onClick={() => void api.cancelJob(j.id)}>
+        <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" aria-label="Stop downloading the speech model" title="Stop downloading the speech model" onClick={() => void api.cancelJob(j.id)}>
           Stop
         </Button>
       </span>

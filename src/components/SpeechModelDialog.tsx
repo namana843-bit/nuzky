@@ -8,43 +8,55 @@ export function SpeechModelDialog() {
   const question = useEditor((s) => s.speechModelQuestion);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    if (!question || dialog.current?.open) return;
-    dialog.current?.showModal();
-    dialog.current?.querySelector<HTMLButtonElement>("[data-autofocus]")?.focus();
+    const d = dialog.current;
+    if (!d) return;
+    // Closing, also when the agent no longer waits, gives focus back to where it was.
+    if (!question) return void (d.open && d.close());
+    if (d.open) return;
+    d.showModal();
+    // It opens unasked, so the dialog takes focus rather than a button: a Space typed meanwhile starts nothing.
+    d.focus();
   }, [question]);
-  if (!question) return null;
   const answer = (download: boolean) => {
-    // Closed before it unmounts, so focus goes back where it was.
-    dialog.current?.close();
+    if (!question) return;
     useEditor.setState({ speechModelQuestion: null });
     api.answerSpeechModel(question.id, download).catch((e) => useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) }));
   };
   return (
     <dialog
       ref={dialog}
+      tabIndex={-1}
       aria-labelledby="speech-model-title"
       aria-describedby="speech-model-text"
       onCancel={(e) => {
         e.preventDefault();
         answer(false);
       }}
-      onKeyDown={trapTab}
-      className="dialog-in overlay fixed inset-0 m-auto w-[440px] rounded-[20px] p-6 text-fg backdrop:bg-black/45"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && e.target === e.currentTarget) answer(true);
+        trapTab(e);
+      }}
+      className="dialog-in overlay fixed inset-0 m-auto w-[440px] rounded-[20px] p-6 text-fg outline-none backdrop:bg-black/45"
     >
-      <h2 id="speech-model-title" className="text-[17px] font-semibold">
-        Download the speech model?
-      </h2>
-      <p id="speech-model-text" className="mt-2 text-[13px] text-fg/85">
-        The AI needs to know what is said in your video. Nuzky recognises speech on this computer with a speech model, a one-time download of {question.sizeMb} MB.
-      </p>
-      <div className="mt-6 flex justify-end gap-2">
-        <Button pill onClick={() => answer(false)}>
-          Not now
-        </Button>
-        <Button pill variant="primary" data-autofocus onClick={() => answer(true)}>
-          Download
-        </Button>
-      </div>
+      {question && (
+        <>
+          <h2 id="speech-model-title" className="text-[17px] font-semibold leading-[22px] tracking-[-0.025em]">
+            Download the speech model?
+          </h2>
+          <p id="speech-model-text" className="mt-2 text-[13px] text-fg/85">
+            The AI needs to know what is said in your video. Nuzky recognises speech on this computer with a speech model, a one-time download of {question.sizeMb} MB. Once it is
+            downloaded, the AI goes on by itself; with Not now, it goes on without a transcript.
+          </p>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button pill onClick={() => answer(false)}>
+              Not now
+            </Button>
+            <Button pill variant="primary" onClick={() => answer(true)}>
+              Download
+            </Button>
+          </div>
+        </>
+      )}
     </dialog>
   );
 }

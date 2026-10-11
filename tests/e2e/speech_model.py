@@ -63,7 +63,7 @@ def before(r):
 def dialog(r):
     return r.s.run("""const d = document.querySelector(arguments[0]);
         return {open: !!d?.open, count: document.querySelectorAll(arguments[0]).length, text: d?.innerText ?? '',
-                focused: d?.contains(document.activeElement) && document.activeElement.textContent.trim() === 'Download',
+                focused: !!d && document.activeElement === d,
                 question: window.__nuzky.store.getState().speechModelQuestion};""", DIALOG)
 
 
@@ -88,10 +88,14 @@ def speech_model(r):
         if not r.check('the agent asks to download the missing model', wait(lambda: dialog(r)['open'], 15), dialog(r)):
             return
         d = dialog(r)
-        r.check('the dialog names the download, shows 548 MB and focuses Download',
+        r.check('the dialog names the download, shows 548 MB and takes focus itself',
                 d['count'] == 1 and 'Download the speech model?' in d['text'] and '548 MB' in d['text'] and d['focused']
                 and d['question']['sizeMb'] == 548 and 'id' in d['question'], d)
+        time.sleep(0.4)  # past the 200 ms fade-in
         r.shot('dialog')
+        press('space')
+        time.sleep(0.5)
+        r.check('a Space typed while it opens starts nothing', dialog(r)['open'] and not speech_job(r) and not r.models.requests)
         press('Escape')
         r.check('Escape closes the question', wait(lambda: not dialog(r)['open'] and dialog(r)['question'] is None, 3))
         reopened = []
@@ -115,9 +119,9 @@ def speech_model(r):
 
         r.models.rate = 20 * 1024 * 1024
         send(r, PROMPT)
-        r.check('a new turn asks again and focuses Download', wait(lambda: dialog(r)['open'] and dialog(r)['focused'], 15))
+        r.check('a new turn asks again', wait(lambda: dialog(r)['open'] and dialog(r)['focused'], 15))
         press('Return')
-        r.check('Return accepts the download and closes the question', wait(lambda: not dialog(r)['open'] and dialog(r)['question'] is None, 3))
+        r.check('Enter downloads and closes the question', wait(lambda: not dialog(r)['open'] and dialog(r)['question'] is None, 3))
         r.check('the speech-model job reports progress', wait(lambda: (j := speech_job(r)) and j['status'] == 'running'
                 and j['progress'] >= 0.01 and j['label'] == 'Speech model' and j['id'].startswith('speech-model:'), 15), speech_job(r))
         r.check('the top bar shows the download percentage and Stop', r.s.run("""const h = document.querySelector('header');
