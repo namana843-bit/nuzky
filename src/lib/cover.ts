@@ -324,7 +324,7 @@ export async function downloadModels() {
 /** Why a cover job failed, in plain words; a model that does not load is damaged and is downloaded again. */
 function failure(message: string | null): Partial<CoverState> {
   const text = message ?? "";
-  if (/Loading \S+\.onnx/.test(text)) return { failed: "A cover model is damaged. Download the cover models again.", damaged: true };
+  if (/Loading .+\.onnx/.test(text)) return { failed: "A cover model is damaged. Download the cover models again.", damaged: true };
   return { failed: plainError(text), damaged: false };
 }
 

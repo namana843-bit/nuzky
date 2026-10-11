@@ -153,7 +153,7 @@ A 9:16 cover for Reels and TikTok (1080 Ã— 1920) and a YouTube thumbnail (1280 Ã
 - **The frame's own place**: clicking the picture selects the frame; it moves and scales like a text, and the inspector's Frame section sets its scale, position and rotation, with Reset.
 - **What the apps cover**: on by default and remembered, separately from the preview's safe zone; on a cover the Reels interface (as the preview's safe zone) and the 3:4 middle of the profile grid, on a YouTube thumbnail the corner of the duration badge. Remove cover (or thumbnail) removes it with Undo in a toast.
 - **Media missing**: the cover says which file is missing and to put it back; Pick for me and the export say so too.
-- **A damaged model**: when a cover model does not load, the job says so and Download again checks every cover model against its checksum and downloads the damaged ones again.
+- **A damaged model**: when a cover model does not load, Pick for me says "A cover model is damaged. Download the cover models again." on every system, also where the models' folder has a space in its path, as `~/Library/Application Support` on macOS, never the model runtime's own error. Download again checks every cover model against its checksum and downloads the damaged ones again.
 - **Make it with AI** in the editor's header, and Make a thumbnail in the AI panel, start the agent on a cover (see AI panel).
 
 ### AI panel
