@@ -115,6 +115,9 @@ struct Hello {
     /// Attached with `--current`, which the app's Agent access lets in or refuses.
     #[serde(default)]
     current: bool,
+    /// The AI panel's conversation, which owns the jobs this connection starts, so they outlive the turn.
+    #[serde(default)]
+    conversation: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 struct Request {
@@ -297,7 +300,9 @@ fn connection(
             return Ok(());
         }
     };
-    let backend = Arc::new(Backend::shared(host, project, Client { id: new_id(), access: hello.access })?);
+    // Only a conversation the app began: any other client's jobs end with its connection.
+    let id = hello.conversation.filter(|id| host.jobs.in_conversation(id)).unwrap_or_else(new_id);
+    let backend = Arc::new(Backend::shared(host, project, Client { id, access: hello.access })?);
     send(&mut stream, &json!({"ok":true,"session_epoch":backend.host.session.stamp().session_epoch}))?;
     stream.set_read_timeout(None)?;
     serve_requests(&mut reader, backend, Arc::new(Mutex::new(stream)), MAX_LINE_BYTES)
@@ -393,6 +398,7 @@ impl Remote {
                 client: "nuzky-mcp".into(),
                 access: if allow_write { Access::Write } else { Access::ReadOnly },
                 current,
+                conversation: std::env::var(crate::bridge::CONVERSATION_VAR).ok(),
             },
         )?;
         let mut reader = BufReader::new(stream.try_clone()?);

@@ -50,6 +50,9 @@ fn answer(result: Result<Result<CallToolResult>, tokio::task::JoinError>) -> Cal
     }
 }
 
+/// Set by the AI panel for its bridge: the conversation the app began, which owns the jobs its turns start.
+pub const CONVERSATION_VAR: &str = "NUZKY_CONVERSATION";
+
 /// Why `--current` found nothing to attach to.
 #[cfg(unix)]
 const NOT_OPEN: &str = "APP_NOT_RUNNING: no project is open in Nuzky. Ask the user to open one, then call again";

@@ -3,11 +3,12 @@
 
 use crate::{AppState, CmdResult, connect, err};
 use nuzky_agent::{AgentEvent, AgentId, AgentInfo, McpServer, Turn, TurnRequest};
+use nuzky_session::host::Host;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// One conversation with an agent; a later message resumes its session.
@@ -27,6 +28,10 @@ pub struct AgentPanel {
     cancelled: Mutex<Option<String>>,
     /// Counts stops, so a message still starting when one comes is stopped as soon as it runs.
     stops: AtomicU64,
+    /// The owner the conversation's jobs run under, and the project's host they run in: they outlive
+    /// each turn, so the agent can ask the user and read them in its next turn. Weak, as the host
+    /// holds its project's lock.
+    jobs: Mutex<Option<(String, Weak<Host>)>>,
 }
 
 impl AgentPanel {
@@ -34,9 +39,33 @@ impl AgentPanel {
     /// also one whose message is still starting.
     pub fn stop(&self) {
         self.stops.fetch_add(1, Ordering::AcqRel);
-        if let Some((_, turn)) = self.active.lock().unwrap().as_ref() {
+        if let Some((_, turn)) = self.active.lock().unwrap().as_ref().filter(|(_, turn)| turn.running()) {
             turn.stop();
+            // Between turns Stop and edit is about another agent, so what the panel's agent left running stays.
+            self.stop_jobs();
         }
+    }
+
+    /// Stops the jobs the conversation started; its next turn starts them under a new owner.
+    fn stop_jobs(&self) {
+        if let Some((owner, host)) = self.jobs.lock().unwrap().take()
+            && let Some(host) = host.upgrade()
+        {
+            host.jobs.end_conversation(&owner);
+        }
+    }
+
+    fn job_owner(&self, host: &Arc<Host>) -> String {
+        let mut jobs = self.jobs.lock().unwrap();
+        if let Some((owner, on)) = jobs.as_ref()
+            && on.ptr_eq(&Arc::downgrade(host))
+        {
+            return owner.clone();
+        }
+        let owner = new_id();
+        host.jobs.begin_conversation(&owner);
+        *jobs = Some((owner.clone(), Arc::downgrade(host)));
+        owner
     }
 }
 
@@ -169,7 +198,7 @@ fn send(
         return Err("AGENT_BUSY: The agent is still answering. Wait for it, or stop it.".into());
     }
     let state = app.state::<AppState>();
-    let (project, path) = {
+    let (project, path, host) = {
         let current = state.session.lock().unwrap();
         let session = current.host.session.state().map_err(err)?;
         if let Some(run) = session.open_run {
@@ -178,7 +207,7 @@ fn send(
                 run.label
             ));
         }
-        (session.project, current.path.clone())
+        (session.project, current.path.clone(), current.host.clone())
     };
     let info = nuzky_agent::find(agent);
     let exe = info.path.ok_or_else(|| format!("NOT_INSTALLED: {} is not installed.", agent.name()))?;
@@ -186,7 +215,9 @@ fn send(
     // the window opened last made current, which may be another Nuzky window's.
     let bridge = connect::Command::this_app().map_err(err)?;
     let args = vec!["mcp".into(), "--project".into(), path.to_string_lossy().into_owned(), "--allow-write".into()];
-    let env = std::env::var("XDG_RUNTIME_DIR").map(|dir| vec![("XDG_RUNTIME_DIR".to_owned(), dir)]).unwrap_or_default();
+    let mut env =
+        std::env::var("XDG_RUNTIME_DIR").map(|dir| vec![("XDG_RUNTIME_DIR".to_owned(), dir)]).unwrap_or_default();
+    env.push((nuzky_mcp::bridge::CONVERSATION_VAR.to_owned(), panel.job_owner(&host)));
 
     let mut chats = panel.chats.lock().unwrap();
     if chats.get(&chat).is_some_and(|c| c.agent != agent) {
@@ -238,9 +269,11 @@ fn send(
 }
 
 /// Stops the agent: Nuzky ends the run first, so the editor unlocks at once whatever the agent does.
-/// A message still starting is stopped as soon as it runs.
+/// A message still starting is stopped as soon as it runs. Its jobs stop too, also between turns,
+/// which is how a new conversation ends the old one's.
 #[tauri::command]
 pub fn agent_stop(state: State<'_, AppState>, panel: State<'_, AgentPanel>, turn: String) -> CmdResult<()> {
+    panel.stop_jobs();
     {
         let active = panel.active.lock().unwrap();
         if !active.as_ref().is_some_and(|(id, started)| *id == turn && started.running()) {
@@ -256,6 +289,13 @@ pub fn agent_stop(state: State<'_, AppState>, panel: State<'_, AgentPanel>, turn
         Err(error) if !error.to_string().starts_with("INVALID_RUN") => Err(err(error)),
         _ => Ok(()),
     }
+}
+
+/// The conversation's jobs, for the panel to show between turns.
+#[tauri::command]
+pub fn agent_jobs(panel: State<'_, AgentPanel>) -> Vec<serde_json::Value> {
+    let jobs = panel.jobs.lock().unwrap();
+    jobs.as_ref().and_then(|(owner, host)| Some(host.upgrade()?.jobs.owned_by(owner))).unwrap_or_default()
 }
 
 #[cfg(test)]

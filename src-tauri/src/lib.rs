@@ -1163,6 +1163,7 @@ pub fn run() {
             agent_panel::agent_list,
             agent_panel::agent_send,
             agent_panel::agent_stop,
+            agent_panel::agent_jobs,
             transcripts::correct_words,
             reels::reel_bounds,
             reels::start_make_reels,

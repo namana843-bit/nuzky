@@ -52,6 +52,8 @@ impl Progress {
 struct Lifecycle {
     stopped_runs: HashSet<String>,
     disconnected_clients: HashSet<String>,
+    /// Owners whose jobs outlive their connections: the AI panel's conversation, which connects anew every turn.
+    conversations: HashSet<String>,
     closing: bool,
 }
 
@@ -187,8 +189,25 @@ impl Jobs {
         entries.values().map(|state| state.lock().unwrap()).filter(|s| s.status == "running").map(|s| s.kind).collect()
     }
 
+    /// The jobs of `owner`, oldest first: those running and those finished lately.
+    pub fn owned_by(&self, owner: &str) -> Vec<Value> {
+        let entries = self.entries.lock().unwrap();
+        let mut jobs: Vec<_> = entries
+            .values()
+            .map(|state| state.lock().unwrap())
+            .filter(|s| s.owner == owner)
+            .map(|s| (s.sequence, s.json()))
+            .collect();
+        jobs.sort_unstable_by_key(|(sequence, _)| *sequence);
+        jobs.into_iter().map(|(_, job)| job).collect()
+    }
+
+    /// A client disconnected: its jobs stop, unless it is part of a conversation.
     pub fn cancel_owner(&self, owner: &str) {
         let mut lifecycle = self.lifecycle.lock().unwrap();
+        if lifecycle.conversations.contains(owner) {
+            return;
+        }
         lifecycle.disconnected_clients.insert(owner.into());
         for state in self.entries.lock().unwrap().values() {
             let state = state.lock().unwrap();
@@ -196,6 +215,21 @@ impl Jobs {
                 state.cancel.store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    /// Lets the jobs of `owner` run on after it disconnects, until the conversation ends.
+    pub fn begin_conversation(&self, owner: &str) {
+        self.lifecycle.lock().unwrap().conversations.insert(owner.into());
+    }
+
+    pub fn in_conversation(&self, owner: &str) -> bool {
+        self.lifecycle.lock().unwrap().conversations.contains(owner)
+    }
+
+    /// Stops the conversation's jobs, and it starts no more.
+    pub fn end_conversation(&self, owner: &str) {
+        self.lifecycle.lock().unwrap().conversations.remove(owner);
+        self.cancel_owner(owner);
     }
 
     pub fn cancel_run(&self, run_id: &str) {

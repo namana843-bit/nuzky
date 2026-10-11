@@ -32,6 +32,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   choose,
   chooseAgent,
+  jobText,
   markUndone,
   loadAgents,
   makeThumbnail,
@@ -672,6 +673,9 @@ function Composer() {
   });
   const dropSelection = useAgent((s) => s.dropSelection);
   const dropPlayhead = useAgent((s) => s.dropPlayhead);
+  const jobs = useAgent((s) => s.jobs);
+  const running = jobs.filter((j) => j.status === "running");
+  const failed = jobs.find((j) => j.status === "failed");
   const agents = useAgent((s) => s.agents);
   const agent = useAgent((s) => s.agent);
   const hasItems = useAgent((s) => s.items.length > 0);
@@ -781,6 +785,28 @@ function Composer() {
             )}
           </div>
         )}
+        {!working && running.length > 0 ? (
+          <div className="mb-2 flex items-center gap-2 text-[12px] text-fg/85" role="status">
+            <Loader2 size={13} className="shrink-0 animate-spin text-accent" />
+            <span className="tabular min-w-0 flex-1 truncate">
+              {jobText(running[0])}
+              {running.length > 1 && <span className="text-muted"> · {running.length - 1} more</span>}
+            </span>
+            <Button className="h-6 px-2 text-[12px]" disabled={running.every((j) => j.cancel_requested)} title="Stop what the agent started. It can start it again when you ask." onClick={() => void stop()}>
+              Stop
+            </Button>
+          </div>
+        ) : (
+          !working &&
+          failed && (
+            <div className="mb-2 flex items-center gap-2 text-[12px] text-fg/85" role="status">
+              <AlertCircle size={13} className="shrink-0 text-danger" />
+              <span className="min-w-0 flex-1 truncate" title={jobText(failed)}>
+                {jobText(failed)}
+              </span>
+            </div>
+          )
+        )}
         <textarea
           ref={field}
           rows={2}
@@ -867,6 +893,7 @@ export function AiPanel({
 }) {
   const busy = useAgent((s) => s.status !== "idle");
   const empty = useAgent((s) => s.items.length === 0);
+  const left = useAgent((s) => s.jobs.some((j) => j.status === "running"));
   const { mode } = useDockLayout();
   useEffect(() => {
     if (useAgent.getState().agents === null) void loadAgents();
@@ -890,7 +917,7 @@ export function AiPanel({
         <AgentMenu />
         <span className="flex-1 self-stretch" onPointerDown={about === "project" ? move : undefined} />
         <IconButton
-          label={busy ? "New chat: wait for the answer, or stop it" : empty ? "New chat: there is nothing to clear yet" : "New chat"}
+          label={busy ? "New chat: wait for the answer, or stop it" : empty ? "New chat: there is nothing to clear yet" : left ? "New chat: stops what the agent is still doing" : "New chat"}
           disabled={busy || empty}
           onClick={newChat}
           className="h-7 w-7"
