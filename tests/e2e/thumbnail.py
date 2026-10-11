@@ -78,6 +78,11 @@ def job(r, prefix, timeout):
 def thumbnail(r):
     webdriver('POST', r.s.path + '/window/rect', {'width': 1440, 'height': 900})
     time.sleep(1)
+    # A copy of the clip to undo in the editor, with the playhead in it: the shorter video clamps the playhead.
+    r.focus_clip(r.track()[0]['id'])
+    r.key('d', ctrlKey=True)
+    copied = wait(lambda: len(r.track()) == 2, 5)
+    r.seek(18_000_000)
     # Opened while playing: the playback stops, and where it stops is no frame the user chose.
     r.s.run("window.__nuzky.store.getState().togglePlay()")
     wait(lambda: r.s.run("return window.__nuzky.store.getState().playing"), 5)
@@ -86,6 +91,11 @@ def thumbnail(r):
     time.sleep(1)
     r.check('nothing is made before a change, also when the editor opens during playback',
             cover(r) is None and not r.s.run("return window.__nuzky.store.getState().playing"))
+    r.key('z', ctrlKey=True)
+    undone = wait(lambda: len(r.track()) == 1, 5)
+    time.sleep(1)
+    r.check('Undo that shortens the video under the playhead saves no draft and keeps Redo',
+            copied and undone and cover(r) is None and r.s.run("return window.__nuzky.store.getState().snap.canRedo"))
     r.check('the cover editor names its view and offers Back to video and Export cover in the top bar', r.s.run("""
         const h = document.querySelector('header'); const buttons = [...h.querySelectorAll('button')].map((b) => b.textContent.trim());
         return h.textContent.includes('Cover') && buttons.includes('Back to video') && buttons.includes('Export cover');"""))
