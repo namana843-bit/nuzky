@@ -4,6 +4,7 @@ import { useAgent } from "../lib/agent";
 import { api, errorText } from "../lib/api";
 import { togglePanel, useDock } from "../lib/dock";
 import { openCover, useCover } from "../lib/cover";
+import { useReels } from "../lib/reels";
 import { useStyle } from "../lib/style";
 import { when } from "../lib/time";
 import { AI_EDITING, openExport, projectDuration, restoreVersion, stopAiRun, useAiLocked, useEditor, whenIdle } from "../lib/store";
@@ -103,8 +104,8 @@ export function JobIndicator() {
       {running.length > 1 && <span className="text-muted">+{running.length - 1}</span>}
     </>
   );
-  // A reframe shows its progress and Stop on the preview.
-  if (j.kind === "audio" || j.kind === "matte" || j.kind === "reframe")
+  // A reframe shows its progress and Stop on the preview, making reels beside their button.
+  if (j.kind === "audio" || j.kind === "matte" || j.kind === "reframe" || j.kind === "reels")
     return (
       <span className="bar flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium text-fg" role="status">
         {body}
@@ -245,6 +246,8 @@ export function TopBar() {
   const { undo, redo } = useEditor.getState();
   const aiRun = useEditor((s) => s.aiRun);
   const empty = !snap || projectDuration(snap.project) === 0;
+  // Choosing reels makes them, each a project to export on its own; the long video is not exported there.
+  const reels = useReels((s) => s.open);
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 px-1.5">
       <ProjectsButton />
@@ -272,9 +275,11 @@ export function TopBar() {
         </IconButton>
         <VersionsButton />
       </div>
-      <Button variant="primary" pill disabled={empty} disabledReason="Add a clip to the timeline to export" title="Export video (Ctrl+E)" onClick={openExport}>
-        <Download size={15} /> Export
-      </Button>
+      {!reels && (
+        <Button variant="primary" pill disabled={empty} disabledReason="Add a clip to the timeline to export" title="Export video (Ctrl+E)" onClick={openExport}>
+          <Download size={15} /> Export
+        </Button>
+      )}
     </header>
   );
 }

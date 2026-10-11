@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import { AlertCircle, AlertTriangle, RefreshCw, ScrollText, Scissors } from "lucide-react";
+import { AlertCircle, AlertTriangle, GalleryVerticalEnd, RefreshCw, ScrollText, Scissors } from "lucide-react";
 import { correctWord, cutWords, removePauses, removeRetakes, speechBlocker, startSpeech, tokenize, useSpeech, useTranscriptView, type Token } from "../../lib/speech";
+import { offersReels, openReels } from "../../lib/reels";
 import { useEditor } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Clip, Project, TranscriptView } from "../../lib/types";
@@ -58,6 +59,16 @@ function retakeParts(view: TranscriptView, pauses: number, pauseUs: number): str
   return parts.length ? parts.slice(0, -1).join(", ") + (parts.length > 1 ? " and " : "") + parts[parts.length - 1] : null;
 }
 
+/** Reels from a long video, for a recording long enough to hold several. */
+function ReelsButton({ project, className = "" }: { project: Project; className?: string }) {
+  if (!offersReels(project)) return null;
+  return (
+    <Button className={`h-7 px-2 text-[12px] ${className}`} title="Reels from a long video: your AI finds moments that work on their own, you pick and make them" onClick={openReels}>
+      <GalleryVerticalEnd size={14} /> Reels…
+    </Button>
+  );
+}
+
 /** Text-based editing: the timeline's speech as text; deleting words cuts the video. */
 export function TranscriptTab() {
   const project = useEditor((s) => s.snap!.project);
@@ -113,6 +124,7 @@ export function TranscriptTab() {
         )}
         {!running && <JobError job={last} />}
         {errorNote}
+        <ReelsButton project={project} className="self-start" />
       </div>
     );
 
@@ -121,6 +133,7 @@ export function TranscriptTab() {
       <div className="flex shrink-0 flex-col gap-3 border-b border-white/[.07] p-3.5">
         <div className="flex items-center gap-2">
           <span className="tabular flex-1 text-[12px] text-muted">{view.words.length} word{view.words.length === 1 ? "" : "s"}</span>
+          <ReelsButton project={project} />
           <SuggestZoomsButton state={zooms} blocker={cutBlocker ?? (busy ? "Wait for speech recognition to finish" : null)} />
           <IconButton label={blocker ?? (busy ? "Wait for speech recognition to finish" : "Transcribe again")} className="h-7 w-7" disabled={!!blocker || busy} onClick={() => startSpeech(null, true)}>
             <RefreshCw size={14} />

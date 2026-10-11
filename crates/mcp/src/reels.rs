@@ -102,6 +102,37 @@ fn cut(project: &Project, derived: &Derived, from: usize, to: usize) -> Result<t
     transcript::plan_cut(preview, &reel, edges)
 }
 
+/// Recomputes a candidate's words and cut without changing the project.
+pub fn bounds(project: &Project, derived: &Derived, id: &str, from: usize, to: usize) -> Result<ReelCandidate> {
+    let candidate =
+        project.reel_candidates.iter().find(|c| c.id == id).with_context(|| format!("UNKNOWN_REEL: {id}"))?;
+    ensure!(candidate.project_path.is_none(), "REEL_MADE: reel {id} is already made");
+    ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before trimming reels");
+    let words = &derived.words;
+    ensure!(
+        from <= to && to < words.len(),
+        "REEL_OUTSIDE_TRANSCRIPT: words {from}-{to} are not in the transcript of {} words",
+        words.len()
+    );
+    let (hook, duration_us) = hook_and_duration(project, derived, from, to)?;
+    Ok(ReelCandidate {
+        from,
+        to,
+        start_us: words[from].start_us,
+        end_us: words[to].end_us,
+        hook,
+        duration_us,
+        ..candidate.clone()
+    })
+}
+
+fn hook_and_duration(project: &Project, derived: &Derived, from: usize, to: usize) -> Result<(String, i64)> {
+    let words = &derived.words;
+    let end = (from..=to).find(|&i| ends_sentence(words, i)).unwrap_or(to);
+    let hook = words[from..=end].iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ");
+    Ok((hook.chars().take(MAX_REEL_HOOK_CHARS).collect(), cut(project, derived, from, to)?.preview.duration_us()))
+}
+
 /// Candidates for `proposals`, each inside the transcript, from the start of a sentence to the end of one, apart
 /// from each other, and at most `max_duration_us` long once made. Made reels do not count: their words may have
 /// moved since.
@@ -125,15 +156,13 @@ pub fn plan(
         );
         ensure!(from == 0 || ends_sentence(words, from - 1), "REEL_BOUNDARY: word {from} does not start a sentence");
         ensure!(ends_sentence(words, to), "REEL_BOUNDARY: word {to} {:?} does not end a sentence", words[to].text);
-        let duration_us = cut(project, derived, from, to)?.preview.duration_us();
+        let (hook, duration_us) = hook_and_duration(project, derived, from, to)?;
         ensure!(
             duration_us <= max_duration_us,
             "REEL_TOO_LONG: words {from}-{to} make a {:.1} s reel, longer than {:.1} s",
             duration_us as f64 / 1e6,
             max_duration_us as f64 / 1e6
         );
-        let end = (from..=to).find(|&i| ends_sentence(words, i)).unwrap_or(to);
-        let hook = words[from..=end].iter().map(|w| w.text.trim()).collect::<Vec<_>>().join(" ");
         candidates.push(ReelCandidate {
             id: new_id(),
             from,
@@ -141,7 +170,7 @@ pub fn plan(
             start_us: words[from].start_us,
             end_us: words[to].end_us,
             title: p.title.trim().to_owned(),
-            hook: hook.chars().take(MAX_REEL_HOOK_CHARS).collect(),
+            hook,
             why: p.why.trim().to_owned(),
             duration_us,
             score: p.score,
@@ -174,6 +203,7 @@ pub fn make(
     derived: &Derived,
     ids: &[String],
     framing: Framing,
+    step: &mut dyn FnMut(usize) -> Result<()>,
 ) -> Result<(Vec<MadeReel>, Vec<EditCmd>)> {
     ensure!(!ids.is_empty(), "INVALID_ARGUMENTS: give the ids of the reels to make");
     ensure!(derived.untranscribed.is_empty(), "TRANSCRIPT_MISSING: transcribe all heard assets before making reels");
@@ -210,7 +240,11 @@ pub fn make(
     let named: HashSet<&str> = project.reel_candidates.iter().filter_map(|c| c.project_path.as_deref()).collect();
     let mut made = Vec::new();
     let mut n = 1;
-    for (candidate, reel) in &planned {
+    for (i, (candidate, reel)) in planned.iter().enumerate() {
+        if let Err(error) = step(i) {
+            forget(&made, project);
+            return Err(error);
+        }
         let path = loop {
             let path = dir.join(format!("{stem}-reel-{n}.nuzky"));
             n += 1;
@@ -283,6 +317,56 @@ fn frame(reel: &mut Project, framing: Framing) -> Result<()> {
 mod tests {
     use super::*;
     use nuzky_engine::model::{Asset, Keyframe, Transform};
+
+    #[test]
+    fn reel_bounds_match_the_plan_and_allow_mid_sentence_words() {
+        let (mut project, mut sources) = transcript::tests::fixture();
+        for (i, word) in sources.get_mut("talk").unwrap().iter_mut().enumerate() {
+            word.start_us = 500_000 + i as i64 * 500_000;
+            word.end_us = word.start_us + 400_000;
+        }
+        let derived = Derived::new(&project, sources, vec![]);
+        let proposal = ReelProposal { from: 0, to: 2, title: "First".into(), why: "Why".into(), score: 0.5 };
+        project.reel_candidates = plan(&project, &derived, &[proposal], DEFAULT_MAX_DURATION_US).unwrap();
+        let original = &project.reel_candidates[0];
+        let same = bounds(&project, &derived, &original.id, 0, 2).unwrap();
+        assert_eq!((same.duration_us, same.hook), (original.duration_us, original.hook.clone()));
+        let trimmed = bounds(&project, &derived, &original.id, 1, 1).unwrap();
+        assert_eq!((trimmed.from, trimmed.to, trimmed.start_us, trimmed.end_us), (1, 1, 1_000_000, 1_400_000));
+        assert_eq!(trimmed.hook, "word1");
+        assert_eq!(trimmed.duration_us, cut(&project, &derived, 1, 1).unwrap().preview.duration_us());
+        assert_eq!(
+            (trimmed.title, trimmed.why, trimmed.score),
+            (original.title.clone(), original.why.clone(), original.score)
+        );
+        assert_eq!(project.reel_candidates[0].from, 0);
+    }
+
+    #[test]
+    fn stopping_make_after_the_first_reel_leaves_no_file_or_edit() {
+        let (mut project, sources) = transcript::tests::fixture();
+        let derived = Derived::new(&project, sources, vec![]);
+        let proposals: Vec<_> = [(0, 2), (3, 5)]
+            .into_iter()
+            .map(|(from, to)| ReelProposal { from, to, title: format!("Reel {from}"), why: String::new(), score: 0.5 })
+            .collect();
+        project.reel_candidates = plan(&project, &derived, &proposals, DEFAULT_MAX_DURATION_US).unwrap();
+        let before = serde_json::to_value(&project).unwrap();
+        let dir = std::env::temp_dir().join(format!("reels-stop-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ids = project.reel_candidates.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        let result = make(&dir.join("source.nuzky"), &project, &derived, &ids, Framing::Crop, &mut |i| {
+            if i == 1 {
+                assert!(dir.join("source-reel-1.nuzky").is_file());
+                bail!("CANCELLED: stopped");
+            }
+            Ok(())
+        });
+        assert!(result.unwrap_err().to_string().starts_with("CANCELLED"));
+        assert_eq!(serde_json::to_value(&project).unwrap(), before);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// B-roll before and after the take stays out of a reel, and cropping scales a moving picture too.
     #[test]

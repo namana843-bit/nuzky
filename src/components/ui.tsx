@@ -421,6 +421,8 @@ export function Checkbox({
   disabled,
   title,
   mixed = false,
+  hideLabel = false,
+  tabIndex,
 }: {
   label: string;
   checked: boolean;
@@ -429,6 +431,9 @@ export function Checkbox({
   title?: string;
   /** Some of the selected clips have it on: a dash, and checking turns it on for all of them. */
   mixed?: boolean;
+  /** The label only names it for screen readers, where the row around it says what it is. */
+  hideLabel?: boolean;
+  tabIndex?: number;
 }) {
   const lock = useLockReason();
   disabled = disabled || !!lock;
@@ -444,6 +449,7 @@ export function Checkbox({
           type="checkbox"
           checked={checked && !mixed}
           disabled={disabled}
+          tabIndex={tabIndex}
           onChange={(e) => onChange(e.target.checked)}
           className="peer absolute inset-0 m-0 h-full w-full cursor-[inherit] opacity-0"
         />
@@ -456,7 +462,7 @@ export function Checkbox({
           {mixed ? <Minus size={12} strokeWidth={3} /> : checked && <Check size={12} strokeWidth={3} />}
         </span>
       </span>
-      <span className="text-[12px] text-fg">{label}</span>
+      <span className={hideLabel ? "sr-only" : "text-[12px] text-fg"}>{label}</span>
     </label>
   );
 }
@@ -740,6 +746,17 @@ export function ProgressBar({ value, label, className = "" }: { value: number; l
         <div className="indeterminate h-full w-1/3 rounded-full bg-accent" />
       )}
     </div>
+  );
+}
+
+/** Three bars, as many lit as the confidence is high. */
+export function Bars({ lit }: { lit: number }) {
+  return (
+    <span aria-hidden className="flex h-3 shrink-0 items-end gap-[2px]">
+      {[5, 8, 11].map((h, i) => (
+        <span key={h} className={`w-[3px] rounded-[1px] ${i < lit ? "bg-fg/85" : "bg-white/20"}`} style={{ height: h }} />
+      ))}
+    </span>
   );
 }
 

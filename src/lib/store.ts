@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
-import type { Asset, Background, Clip, EditCmd, Filmstrip, JobEvent, Project, ProjectVersion, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
+import type { Asset, Background, Clip, Delivery, EditCmd, Filmstrip, JobEvent, Project, ProjectVersion, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
 import type { CaptionLook } from "./speech";
 
 export interface Toast {
@@ -55,6 +55,8 @@ interface EditorState {
   exportOpen: boolean;
   /** Open the export dialog on Recap, of this AI run or, with null, of everything cut since the import. */
   exportRecap: { runId: string | null } | null;
+  /** Open the export dialog on this preset, such as Reels & TikTok for a reel just made, without remembering it. */
+  exportPreset: Delivery | null;
   connectOpen: boolean;
   exportJobId: string | null;
   panelTab: PanelTab;
@@ -385,6 +387,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   importing: [],
   exportOpen: false,
   exportRecap: null,
+  exportPreset: null,
   connectOpen: false,
   exportJobId: null,
   panelTab: "media",

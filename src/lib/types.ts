@@ -627,7 +627,7 @@ export type FontFamilies = {
 
 export type JobEvent = {
   id: string,
-  kind: "audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe",
+  kind: "audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels",
   label: string,
   status: "running" | "done" | "failed" | "cancelled",
   progress: number,
@@ -900,11 +900,6 @@ export type ReelCandidate = {
 export type ReelFraming = "crop" | "blur";
 
 export type ReelStatus = "proposed" | "picked" | "rejected" | "made";
-
-export type ReelsMade = {
-  snapshot: Snapshot,
-  reels: Array<MadeReel>,
-};
 
 /**
  * Where Instagram Reels and TikTok draw nothing over a vertical video, in canvas pixels: clear of
