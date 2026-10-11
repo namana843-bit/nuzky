@@ -3,6 +3,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -70,6 +71,8 @@ pub struct Engine {
     pub transport: Arc<Mutex<Transport>>,
     /// Why the preview is unavailable; kept for a UI that subscribes after the event.
     pub error: Arc<Mutex<Option<String>>>,
+    /// Silences playback on this computer only; the project and the export keep their sound.
+    pub muted: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -97,12 +100,13 @@ impl Engine {
         let (tx, rx) = channel();
         let transport = Arc::new(Mutex::new(Transport::default()));
         let error = Arc::new(Mutex::new(None));
-        let (t, e) = (transport.clone(), error.clone());
+        let muted = Arc::new(AtomicBool::new(false));
+        let (t, e, m) = (transport.clone(), error.clone(), muted.clone());
         std::thread::Builder::new()
             .name("preview-engine".into())
-            .spawn(move || run(rx, events, server, project, cache_dir, t, e, renderer))
+            .spawn(move || run(rx, events, server, project, cache_dir, t, e, m, renderer))
             .expect("spawn preview engine");
-        Self { tx, transport, error }
+        Self { tx, transport, error, muted }
     }
 
     pub fn send(&self, msg: Msg) {
@@ -143,6 +147,7 @@ fn run<F: Frames>(
     cache_dir: PathBuf,
     transport: Arc<Mutex<Transport>>,
     error: Arc<Mutex<Option<String>>>,
+    muted: Arc<AtomicBool>,
     make_renderer: impl Fn() -> Result<F>,
 ) {
     let report = |message: Option<String>| {
@@ -205,7 +210,12 @@ fn run<F: Frames>(
                     Msg::Seek(t) => {
                         st.t_us = t.clamp(0, st.project.duration_us().max(0));
                         if st.audio.is_some() {
-                            st.audio = Some(AudioOut::start(st.shared_project.clone(), st.t_us, cache_dir.clone()));
+                            st.audio = Some(AudioOut::start(
+                                st.shared_project.clone(),
+                                st.t_us,
+                                cache_dir.clone(),
+                                muted.clone(),
+                            ));
                         }
                         st.dirty = true;
                         state_changed = true;
@@ -218,7 +228,8 @@ fn run<F: Frames>(
                         if st.t_us >= end - st.project.frame_duration_us() as i64 {
                             st.t_us = 0;
                         }
-                        st.audio = Some(AudioOut::start(st.shared_project.clone(), st.t_us, cache_dir.clone()));
+                        st.audio =
+                            Some(AudioOut::start(st.shared_project.clone(), st.t_us, cache_dir.clone(), muted.clone()));
                         state_changed = true;
                     }
                     Msg::Play => {}

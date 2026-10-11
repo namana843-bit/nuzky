@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play, SkipBack, SkipForward, Smartphone } from "lucide-react";
+import { Maximize, Minimize, Pause, Play, SkipBack, SkipForward, Smartphone, Volume2, VolumeX } from "lucide-react";
 import { api } from "../../lib/api";
 import { useCover } from "../../lib/cover";
+import { toggleFullPreview, toggleMuted, usePreview } from "../../lib/preview";
 import { pictureAspect, useReels } from "../../lib/reels";
 import { projectDuration, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import type { SafeArea } from "../../lib/types";
 import { CoverBar, CoverStage } from "../cover/CoverStage";
 import { CropGuide, ReelBar } from "../reels/ReelBar";
-import { IconButton } from "../ui";
+import { AiRunBar } from "../TopBar";
+import { IconButton, trapTab } from "../ui";
 import { LayerOverlay } from "./LayerOverlay";
 import { RatioMenu } from "./RatioMenu";
 import { ReframeStatus } from "./ReframeStatus";
@@ -101,7 +103,7 @@ function Timecode({ duration }: { duration: number }) {
   return (
     <span className="tabular truncate text-[13px]">
       <span className="font-medium text-fg">{formatTime(timeUs)}</span>
-      <span className="text-muted @max-[460px]:hidden"> / {formatTime(duration)}</span>
+      <span className="text-muted @max-[560px]:hidden"> / {formatTime(duration)}</span>
     </span>
   );
 }
@@ -119,11 +121,27 @@ export function Preview() {
   const crop = useReels((s) => s.framing === "crop");
   const reel = useReels((s) => s.current);
   const picture = useEditor((s) => (reels ? pictureAspect(s.snap?.project, reel) : 0));
+  const home = useEditor((s) => s.view === "home");
+  const { muted, full } = usePreview();
   const { togglePlay, seek } = useEditor.getState();
+  const sectionRef = useRef<HTMLElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
   const connected = useFrameStream(url, canvasRef);
+
+  useEffect(() => void api.setPreviewMuted(muted), [muted]);
+  // The home screen sits under the preview's full screen; leaving the editor leaves full screen first.
+  useEffect(() => {
+    if (home && usePreview.getState().full) void toggleFullPreview();
+  }, [home]);
+  // Keys and Tab stay in the full screen preview instead of reaching the editor hidden behind it.
+  useEffect(() => {
+    if (!full) return;
+    const back = document.activeElement as HTMLElement | null;
+    sectionRef.current?.focus();
+    return () => back?.focus();
+  }, [full]);
 
   useEffect(() => {
     const el = boxRef.current;
@@ -156,7 +174,19 @@ export function Preview() {
   const empty = duration === 0;
 
   return (
-    <section className="@container flex min-w-0 flex-1 flex-col rounded-xl bg-stage shadow-[inset_0_0_0_1px_rgb(255_255_255/.05)]" aria-label="Preview">
+    <section
+      ref={sectionRef}
+      tabIndex={full ? -1 : undefined}
+      onKeyDown={full ? trapTab : undefined}
+      className={`@container flex min-w-0 flex-col outline-none ${full ? "fixed inset-0 z-[70] bg-black" : "flex-1 rounded-xl bg-stage shadow-[inset_0_0_0_1px_rgb(255_255_255/.05)]"}`}
+      aria-label="Preview"
+    >
+      {/* The top bar is hidden; what the AI is doing and its Stop stay in view. */}
+      {full && (
+        <div className="flex justify-center pt-3 empty:hidden">
+          <AiRunBar />
+        </div>
+      )}
       {/* Clips the selection box of a layer scaled or rotated past the frame to the preview area. */}
       <div ref={boxRef} className="relative mx-4 mt-3 min-h-0 flex-1 overflow-hidden">
         {cover && box.w > 0 && <CoverStage format={cover} box={box} />}
@@ -192,7 +222,7 @@ export function Preview() {
         {cover ? <CoverBar format={cover} /> : reels ? <ReelBar /> : <div className="bar grid h-11 w-full max-w-[620px] grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-full pl-[18px] pr-1.5">
           <Timecode duration={duration} />
           <div className="flex items-center gap-2.5">
-            <IconButton round label="Go to start (Home)" onClick={() => seek(0)} disabled={empty}>
+            <IconButton round label="Go to start (Home)" onClick={() => seek(0)} disabled={empty} className="@max-[440px]:hidden">
               <SkipBack size={16} />
             </IconButton>
             <button
@@ -205,11 +235,14 @@ export function Preview() {
             >
               {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="translate-x-px" />}
             </button>
-            <IconButton round label="Go to end (End)" onClick={() => seek(duration)} disabled={empty}>
+            <IconButton round label="Go to end (End)" onClick={() => seek(duration)} disabled={empty} className="@max-[440px]:hidden">
               <SkipForward size={16} />
             </IconButton>
           </div>
           <div className="flex items-center justify-end gap-1">
+            <IconButton round label={muted ? "Unmute the preview (M)" : "Mute the preview (M)"} active={muted} onClick={toggleMuted}>
+              {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            </IconButton>
             <IconButton
               round
               label={area ? (showSafe ? "Hide the Reels and TikTok safe zone" : "Show the Reels and TikTok safe zone") : "The safe zone applies to vertical videos"}
@@ -220,6 +253,9 @@ export function Preview() {
               <Smartphone size={16} />
             </IconButton>
             {canvas && <RatioMenu />}
+            <IconButton round label={full ? "Exit full screen (F)" : "Full screen (F)"} onClick={() => void toggleFullPreview()}>
+              {full ? <Minimize size={16} /> : <Maximize size={16} />}
+            </IconButton>
           </div>
         </div>}
       </div>
