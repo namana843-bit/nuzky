@@ -98,6 +98,8 @@ export const api = {
     invoke<string>("start_recap", { out, runId, endCard, replaceExisting, expectedEpoch: epoch }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   speechModels: () => invoke<SpeechModel[]>("speech_models"),
+  /** Download starts the speech model download an agent waits for; false tells the agent the user said not now. */
+  answerSpeechModel: (id: string, download: boolean) => invoke<void>("answer_speech_model", { id, download }),
   /** Whether the face and person models covers need, or with "background" the person model of clip backgrounds,
    * can run here, are installed and what is left to download. */
   visionModels: (set?: "background") => invoke<VisionModels>("vision_models", { set }),

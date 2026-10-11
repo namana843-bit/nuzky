@@ -627,7 +627,7 @@ export type FontFamilies = {
 
 export type JobEvent = {
   id: string,
-  kind: "audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels",
+  kind: "audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels" | "speech-model",
   label: string,
   status: "running" | "done" | "failed" | "cancelled",
   progress: number,
@@ -1034,6 +1034,17 @@ export type SpeechModel = {
   label: string,
   sizeMb: number,
   downloaded: boolean,
+};
+
+/**
+ * What the dialog asks, sent as `speech-model-question`; null closes the dialog.
+ */
+export type SpeechModelQuestion = {
+  id: string,
+  /**
+   * What the download adds up to.
+   */
+  sizeMb: number,
 };
 
 /**

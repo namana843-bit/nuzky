@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { api, errorText, plainError } from "./api";
 import { clipOffset, keyframeTolerance, transformAt, upsertKeyframe } from "./keyframes";
 import { US } from "./time";
-import type { Asset, Background, Clip, Delivery, EditCmd, Filmstrip, JobEvent, Project, ProjectVersion, Snapshot, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
+import type { Asset, Background, Clip, Delivery, EditCmd, Filmstrip, JobEvent, Project, ProjectVersion, Snapshot, SpeechModelQuestion, TextStyle, TimeRange, Track, Transform, Transition, ZoomsApplied } from "./types";
 import type { CaptionLook } from "./speech";
 
 export interface Toast {
@@ -65,6 +65,8 @@ interface EditorState {
   view: "home" | "editor";
   /** The launcher over the editor: recent projects, new ones and search. */
   launcherOpen: boolean;
+  /** An agent needs the speech model and Nuzky asks whether to download it. */
+  speechModelQuestion: SpeechModelQuestion | null;
 
   /** `opened`: the snapshot of a project just opened, created or booted; others must belong to the open session. */
   setSnap: (snap: Snapshot, keepSelection?: boolean, opened?: boolean) => void;
@@ -394,6 +396,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   ratioOpen: false,
   view: "home",
   launcherOpen: false,
+  speechModelQuestion: null,
 
   setSnap: (snap, keepSelection = true, opened = false) => {
     const previous = get().snap;

@@ -33,7 +33,7 @@ pub struct JobEvent {
     #[cfg_attr(
         test,
         ts(
-            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels""#
+            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels" | "speech-model""#
         )
     )]
     pub kind: &'static str,
@@ -836,7 +836,7 @@ fn recognise(
         return Ok(false);
     }
     let mut estimated = false;
-    let models = (download_model(&request.model, cancel, rep)?, download_vad(cancel, rep)?);
+    let models = download_speech(&request.model, cancel, |value, phase| rep.progress(value, Some(phase)))?;
     let mut recognised = HashSet::new();
     for (i, asset) in assets.iter().enumerate() {
         check_cancelled(cancel)?;
@@ -862,23 +862,41 @@ fn recognise(
 
 use nuzky_analysis::VAD_MODEL;
 
-fn download_model(id: &str, cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathBuf> {
-    let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{id}.bin");
+/// Downloads speech model `id` and the voice activity detector when they are missing, each checked against its
+/// pinned SHA-256; skipping non-speech stops Whisper from inventing captions over music and silence.
+pub(crate) fn download_speech(
+    id: &str,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(f32, &'static str),
+) -> anyhow::Result<(PathBuf, PathBuf)> {
     let integrity = MODELS.iter().find(|(model, ..)| *model == id).context("Unknown speech model")?.3;
-    model_download::download(&url, &model_path(id), integrity, cancel, |value| {
-        rep.progress(value, Some("Downloading speech model"))
+    let url = huggingface(&format!("ggerganov/whisper.cpp/resolve/main/ggml-{id}.bin"));
+    let model = model_download::download(&url, &model_path(id), integrity, cancel, |value| {
+        progress(value, "Downloading speech model")
     })
-    .map_err(|error| download_failed(error, "speech model"))
+    .map_err(|error| download_failed(error, "speech model"))?;
+    let url = huggingface(&format!("ggml-org/whisper-vad/resolve/main/{VAD_MODEL}"));
+    let vad = model_download::download(&url, &models_dir().join(VAD_MODEL), VAD_INTEGRITY, cancel, |value| {
+        progress(value, "Downloading voice detector")
+    })
+    .map_err(|error| download_failed(error, "speech model"))?;
+    Ok((model, vad))
 }
 
-/// Voice activity detection model; skipping non-speech stops Whisper from inventing
-/// captions over music and silence.
-fn download_vad(cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathBuf> {
-    let url = format!("https://huggingface.co/ggml-org/whisper-vad/resolve/main/{VAD_MODEL}");
-    model_download::download(&url, &models_dir().join(VAD_MODEL), VAD_INTEGRITY, cancel, |value| {
-        rep.progress(value, Some("Downloading voice detector"))
-    })
-    .map_err(|error| download_failed(error, "speech model"))
+/// The size of what `download_speech` would download for `id`, in MB.
+pub(crate) fn missing_speech_mb(id: &str) -> u32 {
+    let missing =
+        |path: PathBuf, size| if std::fs::metadata(path).is_ok_and(|file| file.len() == size) { 0 } else { size };
+    let model = MODELS.iter().find(|(model, ..)| *model == id).map_or(0, |(.., integrity)| integrity.size);
+    let bytes = missing(model_path(id), model) + missing(models_dir().join(VAD_MODEL), VAD_INTEGRITY.size);
+    (bytes as f64 / 1_048_576.0).round() as u32
+}
+
+/// Tests serve the models locally through `NUZKY_MODEL_URL`; no other address replaces Hugging Face, and the
+/// checksums stay the pinned ones.
+fn huggingface(path: &str) -> String {
+    let test = std::env::var("NUZKY_MODEL_URL").ok().filter(|url| url.starts_with("http://127.0.0.1:"));
+    format!("{}/{path}", test.as_deref().unwrap_or("https://huggingface.co"))
 }
 
 /// A download that failed without saying why in a code (`CANCELLED`, `MODEL_INVALID`…) reads as one the person can
@@ -947,9 +965,7 @@ fn learn_pairs(
     rep: &mut Reporter,
 ) -> anyhow::Result<()> {
     use nuzky_mcp::style;
-    let model = transcript::best_model();
-    download_model(model, cancel, rep)?;
-    download_vad(cancel, rep)?;
+    download_speech(transcript::best_model(), cancel, |value, phase| rep.progress(value, Some(phase)))?;
     let transcripts = TranscriptStore::open()?;
     let store = style::Store::default();
     let mut learned = 0;
@@ -1041,9 +1057,7 @@ fn learn_timelines(
     rep: &mut Reporter,
 ) -> anyhow::Result<String> {
     use nuzky_mcp::style;
-    let model = transcript::best_model();
-    download_model(model, cancel, rep)?;
-    download_vad(cancel, rep)?;
+    download_speech(transcript::best_model(), cancel, |value, phase| rep.progress(value, Some(phase)))?;
     let transcripts = TranscriptStore::open()?;
     let store = style::Store::default();
     let mut kept = Vec::new();
