@@ -33,7 +33,7 @@ while read -r key path; do
   [ "$key" = worktree ] && [ -d "$path/target/debug/.fingerprint" ] || continue
   [ "$(cd "$path" && pwd -P)" = "$here" ] && continue
   # Across file systems macOS `cp -c` quietly copies every byte instead of cloning.
-  [ "$(stat "${stat_device[@]}" "$path")" = "$(stat "${stat_device[@]}" .)" ] || continue
+  [ "$(stat "${stat_device[@]}" "$path/target/debug/deps")" = "$(stat "${stat_device[@]}" .)" ] || continue
   rank="$([ "$(same_inputs "$path")" = "$ours" ] && echo 1 || echo 0)$(stat "${stat_time[@]}" "$path/target/debug/deps")"
   if [[ $rank > $best ]]; then best=$rank donor=$path; fi
 done < <(git worktree list --porcelain)
