@@ -22,8 +22,9 @@ const config: NextConfig = {
   turbopack: { root: repoRoot },
   outputFileTracingRoot: repoRoot,
   // 512 sits between the default 384 and the smallest device size, 640, where the editor tour's tiles on a
-  // phone and the hero reels on a 2× screen would otherwise load 640 px.
-  images: { formats: ["image/avif", "image/webp"], imageSizes: [32, 48, 64, 96, 128, 256, 384, 512] },
+  // phone and the hero reels on a 2× screen would otherwise load 640 px. The images stay WebP: Vercel's AVIF
+  // smeared grass, rocks and faces in the small clip tiles.
+  images: { imageSizes: [32, 48, 64, 96, 128, 256, 384, 512] },
   rewrites: async () => ({ beforeFiles: markdown, afterFiles: [], fallback: [] }),
 };
 
