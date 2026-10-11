@@ -319,6 +319,10 @@ impl OpenSession {
                                 );
                             }
                             let cut = !recap.cuts.is_empty();
+                            // Another project opened meanwhile has its own runs.
+                            if !Arc::ptr_eq(&host, &app.state::<AppState>().session.lock().unwrap().host) {
+                                return;
+                            }
                             app.emit(
                                 "run-summary",
                                 serde_json::json!({ "runId": run_id, "changes": changes, "cut": cut }),
