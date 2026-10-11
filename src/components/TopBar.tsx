@@ -83,7 +83,7 @@ function ProjectsButton() {
   );
 }
 
-/** Background work. Export shows first and reopens its dialog; captions and transcripts open their tab; a preview proxy can be stopped. */
+/** Background work. A speech model download shows first, with its Stop; export reopens its dialog; captions and transcripts open their tab; a preview proxy can be stopped. */
 export function JobIndicator() {
   const jobs = useEditor((s) => s.jobs);
   const running = Object.values(jobs).filter((j) => j.status === "running");

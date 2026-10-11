@@ -1017,7 +1017,6 @@ pub fn run() {
             unsafe {
                 libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr());
             }
-            // An agent's transcription asks the user for a missing speech model instead of failing.
             let handle = app.handle().clone();
             nuzky_mcp::transcript::ask_for_model_with(move |cancel, progress| {
                 speech_model::ask(&handle, cancel, progress)
