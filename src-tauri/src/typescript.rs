@@ -141,6 +141,8 @@ fn generate() -> String {
     types.visit::<crate::reels::ReelsMade>();
     types.visit::<nuzky_mcp::reels::Framing>();
     types.visit::<crate::connect::Connection>();
+    types.visit::<crate::connect::Access>();
+    types.visit::<crate::connect::Setup>();
     types.visit::<nuzky_mcp::style::StyleView>();
     types.visit::<nuzky_mcp::style::StyleAction>();
     types.visit::<crate::jobs::StylePair>();

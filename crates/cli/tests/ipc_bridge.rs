@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::{fs::PermissionsExt, net::UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,8 @@ use serde_json::{Value, json};
 
 struct App {
     listener: Option<Listener>,
+    /// Agent access, on unless a test turns it off.
+    access: Arc<AtomicBool>,
     host: Arc<Host>,
     dir: PathBuf,
     path: PathBuf,
@@ -55,8 +58,9 @@ impl App {
     fn open(dir: PathBuf, path: PathBuf, session: ProjectSession) -> Self {
         let host = Arc::new(Host::new(session, dir.join("cache")).unwrap());
         let socket = dir.join("nuzky").join(nuzky_mcp::ipc::socket_path(&path).unwrap().file_name().unwrap());
-        let listener = Some(Listener::at(host.clone(), socket.clone()).unwrap());
-        Self { listener, host, dir, path, socket, remove: true }
+        let access = Arc::new(AtomicBool::new(true));
+        let listener = Some(Listener::at(host.clone(), socket.clone(), access.clone()).unwrap());
+        Self { listener, access, host, dir, path, socket, remove: true }
     }
     /// Closes the project as quitting the app does, then opens it again.
     fn restart(mut self) -> Self {
@@ -272,7 +276,7 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
     app.listener.take();
     assert!(!app.socket.exists() && !token_path.exists());
     attached.error("get_state", json!({}), "APP_CLOSED");
-    app.listener = Some(Listener::at(app.host.clone(), app.socket.clone()).unwrap());
+    app.listener = Some(Listener::at(app.host.clone(), app.socket.clone(), app.access.clone()).unwrap());
     assert_ne!(std::fs::read_to_string(&token_path).unwrap(), token);
     assert!(app.hello(&token, 1)["error"].as_str().unwrap().starts_with("UNAUTHORIZED"));
     attached.error("get_state", json!({}), "APP_CLOSED");
@@ -280,30 +284,38 @@ fn real_bridge_shares_app_and_preserves_access_runs_images_and_disconnect() {
 }
 
 /// An agent configured once with `--current` attaches to whichever project the app has open, live,
-/// and refuses to start rather than edit a project headless when no app has one open.
+/// while Agent access is on. Off, its calls are refused but it keeps running, so turning access on
+/// or opening a project is enough; turning access off drops it and keeps its run. It never edits a
+/// project headless.
 #[test]
-fn current_attaches_to_the_open_project_and_refuses_without_an_app() {
+fn current_attaches_while_agent_access_is_on_and_never_headless() {
     let mut app = App::new();
     let current = app.dir.join("nuzky/current");
     assert_eq!(std::fs::read_to_string(&current).unwrap(), std::fs::canonicalize(&app.path).unwrap().to_string_lossy());
     assert_eq!(std::fs::metadata(&current).unwrap().permissions().mode() & 0o777, 0o600);
+    app.access.store(false, Ordering::Release);
     let mut bridge = Bridge::with(&app, &["--current", "--allow-write"]);
+    bridge.error("get_state", json!({}), "AGENT_ACCESS_OFF");
+    // Access covers `--current`; a server started on the project's path on purpose still attaches.
+    let mut by_path = Bridge::new(&app, false);
+    assert_eq!(by_path.call("get_state", json!({}))["name"], "Before");
+    by_path.finish();
+    app.access.store(true, Ordering::Release);
     assert_eq!(bridge.call("get_state", json!({}))["name"], "Before");
     let run = bridge.call("begin_run", json!({"label":"current"}));
     // The run is the app's own: the app's session shows it.
     assert_eq!(app.host.session.state().unwrap().open_run.unwrap().run_id, run["run_id"]);
-    bridge.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
-    bridge.finish();
+    app.access.store(false, Ordering::Release);
+    wait(|| app.host.session.state().unwrap().open_run.is_none());
+    bridge.error("get_state", json!({}), "AGENT_ACCESS_OFF");
+    app.access.store(true, Ordering::Release);
+    assert_eq!(bridge.call("get_state", json!({}))["open_run"], Value::Null);
     app.listener.take();
     assert!(!current.exists(), "closing the project removes its name");
-    let refused = Command::new(env!("CARGO_BIN_EXE_nuzky"))
-        .args(["mcp", "--current", "--allow-write"])
-        .env("XDG_RUNTIME_DIR", &app.dir)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("APP_NOT_RUNNING"), "{refused:?}");
+    bridge.error("get_state", json!({}), "APP_NOT_RUNNING");
+    app.listener = Some(Listener::at(app.host.clone(), app.socket.clone(), app.access.clone()).unwrap());
+    assert_eq!(bridge.call("get_state", json!({}))["name"], "Before");
+    bridge.finish();
 }
 
 /// Three agent runs and an edit in the app are versions that outlive the app. undo_to over stdio

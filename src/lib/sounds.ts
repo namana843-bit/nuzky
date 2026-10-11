@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { api, errorText } from "./api";
+import { copyText } from "./clipboard";
 import { aiLocked, currentEpoch, useEditor } from "./store";
 import type { Sound, SoundKind } from "./types";
 
@@ -120,29 +121,12 @@ export async function addSound(sound: Sound) {
   }
 }
 
-/** WebKitGTK may refuse the asynchronous clipboard; a selected text area always copies. */
-async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return;
-  } catch {
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.style.cssText = "position:fixed;opacity:0";
-    document.body.append(area);
-    area.select();
-    const copied = document.execCommand("copy");
-    area.remove();
-    if (!copied) throw new Error("The clipboard is not available. Export the video: its credits are saved beside it.");
-  }
-}
-
 export async function copyCredits() {
   const { toast } = useEditor.getState();
   try {
     const text = await api.soundCredits(currentEpoch());
     if (!text) return toast({ kind: "info", text: "No sound in the video needs credit." });
-    await copyText(text);
+    await copyText(text, "The clipboard is not available. Export the video: its credits are saved beside it.");
     toast({ kind: "success", text: "Credits copied. Paste them into the video's description." });
   } catch (e) {
     toast({ kind: "error", text: errorText(e) });

@@ -391,6 +391,31 @@ def press(key):
     d.close()
 
 
+def clipboard():
+    """The text the app put on the clipboard: on macOS the system's (a flow that copies puts the person's text back
+    afterwards), on Linux the one of gamescope's own X server, asked for as UTF-8 like any app would."""
+    if MACOS:
+        return subprocess.run(['pbpaste'], capture_output=True, text=True, check=True).stdout
+    from Xlib import X, display
+    d = display.Display()
+    try:
+        window = d.screen().root.create_window(0, 0, 1, 1, 0, X.CopyFromParent)
+        into = d.intern_atom('NUZKY_CLIPBOARD')
+        window.convert_selection(d.intern_atom('CLIPBOARD'), d.intern_atom('UTF8_STRING'), into, X.CurrentTime)
+        d.flush()
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            while d.pending_events():
+                event = d.next_event()
+                if event.type == X.SelectionNotify:
+                    found = event.property != X.NONE and window.get_full_property(into, X.AnyPropertyType)
+                    return found.value.decode() if found else ''
+            time.sleep(0.05)
+        return None
+    finally:
+        d.close()
+
+
 def pointer(kind, x, y, clicks=1):
     """macOS: the left mouse button `down` or `up` at a point of the page."""
     webdriver('POST', '/session/nuzky/nuzky/pointer', {'kind': kind, 'x': x, 'y': y, 'clicks': clicks})

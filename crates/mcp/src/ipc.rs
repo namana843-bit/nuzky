@@ -44,6 +44,7 @@ const ACCEPT_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_HELLO_BYTES: usize = 4096;
 const MAX_CONNECTIONS: usize = 8;
 pub const APP_CLOSED: &str = "APP_CLOSED: Nuzky was closed; restart the agent's MCP server";
+pub const ACCESS_OFF: &str = "AGENT_ACCESS_OFF: Agent access is off in Nuzky, so agents outside it cannot edit. Ask the user to turn it on (in Nuzky: AI, the agent menu, Connect an agent outside Nuzky), then call again";
 
 /// Where the app's private endpoints live.
 fn endpoint_directory() -> PathBuf {
@@ -111,6 +112,9 @@ struct Hello {
     token: String,
     client: String,
     access: Access,
+    /// Attached with `--current`, which the app's Agent access lets in or refuses.
+    #[serde(default)]
+    current: bool,
 }
 #[derive(Deserialize, Serialize)]
 struct Request {
@@ -124,21 +128,25 @@ struct Response {
     result: CallToolResult,
 }
 
+/// Each connection, with whether it attached with `--current`.
+type Connections = Arc<Mutex<HashMap<String, (UnixStream, Arc<AtomicBool>)>>>;
+
 pub struct Listener {
     path: PathBuf,
     project: PathBuf,
     stop: Arc<AtomicBool>,
-    connections: Arc<Mutex<HashMap<String, UnixStream>>>,
+    connections: Connections,
     worker: Option<JoinHandle<()>>,
 }
 
 impl Listener {
-    pub fn start(host: Arc<Host>) -> Result<Self> {
+    /// `agent_access`: whether clients attached with `--current` may connect; turning it off drops them.
+    pub fn start(host: Arc<Host>, agent_access: Arc<AtomicBool>) -> Result<Self> {
         let path = socket_path(&host.session.locked_path()?)?;
-        Self::at(host, path)
+        Self::at(host, path, agent_access)
     }
 
-    pub fn at(host: Arc<Host>, path: PathBuf) -> Result<Self> {
+    pub fn at(host: Arc<Host>, path: PathBuf, agent_access: Arc<AtomicBool>) -> Result<Self> {
         let project = host.session.locked_path()?;
         private_directory(path.parent().context("IPC_UNAVAILABLE: no socket directory")?)?;
         remove(&path)?;
@@ -174,6 +182,13 @@ impl Listener {
                 .spawn(move || {
                     std::thread::scope(|scope| {
                         while !stop.load(Ordering::Acquire) {
+                            if !agent_access.load(Ordering::Acquire) {
+                                for (stream, current) in connections.lock().unwrap().values() {
+                                    if current.load(Ordering::Acquire) {
+                                        let _ = stream.shutdown(Shutdown::Both);
+                                    }
+                                }
+                            }
                             match listener.accept() {
                                 Ok((mut stream, _)) => {
                                     // macOS hands the listener's non-blocking mode to accepted streams, so the
@@ -198,11 +213,13 @@ impl Listener {
                                             continue;
                                         }
                                     };
-                                    connections.lock().unwrap().insert(id.clone(), copy);
+                                    let current = Arc::new(AtomicBool::new(false));
+                                    connections.lock().unwrap().insert(id.clone(), (copy, current.clone()));
                                     let connections = connections.clone();
                                     let (host, project, token) = (host.clone(), project.clone(), token.clone());
+                                    let access = agent_access.clone();
                                     scope.spawn(move || {
-                                        if let Err(e) = connection(stream, host, &project, &token) {
+                                        if let Err(e) = connection(stream, host, &project, &token, &access, &current) {
                                             eprintln!("IPC_CLIENT: {e:#}");
                                         }
                                         connections.lock().unwrap().remove(&id);
@@ -217,7 +234,7 @@ impl Listener {
                                 }
                             }
                         }
-                        for stream in connections.lock().unwrap().values() {
+                        for (stream, _) in connections.lock().unwrap().values() {
                             let _ = stream.shutdown(Shutdown::Both);
                         }
                     });
@@ -231,7 +248,7 @@ impl Listener {
 impl Drop for Listener {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        for stream in self.connections.lock().unwrap().values() {
+        for (stream, _) in self.connections.lock().unwrap().values() {
             let _ = stream.shutdown(Shutdown::Both);
         }
         // The listener thread drains its scoped clients and retains the project lock off the UI thread.
@@ -253,7 +270,14 @@ impl Drop for Listener {
     }
 }
 
-fn connection(mut stream: UnixStream, host: Arc<Host>, project: &Path, token: &str) -> Result<()> {
+fn connection(
+    mut stream: UnixStream,
+    host: Arc<Host>,
+    project: &Path,
+    token: &str,
+    agent_access: &AtomicBool,
+    current: &AtomicBool,
+) -> Result<()> {
     security::peer(&stream)?;
     stream.set_write_timeout(Some(HELLO_TIMEOUT))?;
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -261,6 +285,9 @@ fn connection(mut stream: UnixStream, host: Arc<Host>, project: &Path, token: &s
         receive::<Hello>(&mut reader, MAX_HELLO_BYTES, Some(Instant::now() + HELLO_TIMEOUT)).and_then(|hello| {
             ensure!(hello.nuzky == PROTOCOL, "PROTOCOL_MISMATCH: expected nuzky {PROTOCOL}");
             ensure!(security::equal_token(&hello.token, token), "UNAUTHORIZED: invalid token");
+            // Marked before the check, so access turned off right after it still drops this client.
+            current.store(hello.current, Ordering::Release);
+            ensure!(!hello.current || agent_access.load(Ordering::Acquire), ACCESS_OFF);
             Ok(hello)
         });
     let hello = match hello {
@@ -330,11 +357,12 @@ pub struct Remote {
 }
 
 impl Remote {
-    pub fn connect(project: &Path, allow_write: bool) -> Result<Option<Self>> {
-        Self::at(&socket_path(project)?, allow_write)
+    /// `current`: attached with `--current`, so the app's Agent access decides.
+    pub fn connect(project: &Path, allow_write: bool, current: bool) -> Result<Option<Self>> {
+        Self::at(&socket_path(project)?, allow_write, current)
     }
 
-    fn at(path: &Path, allow_write: bool) -> Result<Option<Self>> {
+    fn at(path: &Path, allow_write: bool, current: bool) -> Result<Option<Self>> {
         let directory = path.parent().context("IPC_UNTRUSTED: missing endpoint directory")?;
         match fs::symlink_metadata(directory) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -364,6 +392,7 @@ impl Remote {
                 token,
                 client: "nuzky-mcp".into(),
                 access: if allow_write { Access::Write } else { Access::ReadOnly },
+                current,
             },
         )?;
         let mut reader = BufReader::new(stream.try_clone()?);
@@ -372,6 +401,7 @@ impl Remote {
             let error = hello["error"].as_str().unwrap_or("PROTOCOL_MISMATCH: missing hello response");
             ensure!(!error.starts_with("UNAUTHORIZED:"), "UNAUTHORIZED: endpoint rejected the token");
             ensure!(!error.starts_with("PROTOCOL_MISMATCH:"), "PROTOCOL_MISMATCH: endpoint rejected the protocol");
+            ensure!(!error.starts_with("AGENT_ACCESS_OFF:"), ACCESS_OFF);
             anyhow::bail!("IPC_UNTRUSTED: endpoint rejected connection");
         }
         ensure!(hello["session_epoch"].is_string(), "PROTOCOL_MISMATCH: missing session epoch");
@@ -398,6 +428,11 @@ impl Remote {
             sequence: AtomicU64::new(0),
             reader: Some(worker),
         }))
+    }
+
+    /// The app closed the connection: it closed the project, quit, or turned Agent access off.
+    pub fn closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
     }
 
     pub fn call(&self, tool: String, args: Value) -> Result<CallToolResult> {

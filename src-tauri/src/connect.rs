@@ -1,9 +1,12 @@
 //! Connect your agent: writes the `nuzky` MCP server into Claude Code's and Codex's own
 //! configuration, after a backup, and changes nothing else in those files. The entry runs this
-//! app's `mcp --current`, so the agent edits whichever project is open here, live.
+//! app's `mcp --current`, so the agent edits whichever project is open here, live, while Agent
+//! access is on. Other agents get the same server as text to paste.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -40,6 +43,50 @@ impl Agent {
     }
 }
 
+/// Whether agents attached with `--current` may edit: off unless the user turns it on, or asked for
+/// it at every launch.
+static ACCESS: LazyLock<Arc<AtomicBool>> = LazyLock::new(|| Arc::new(AtomicBool::new(at_launch())));
+
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "AgentAccess"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Access {
+    pub on: bool,
+    /// Turned on whenever Nuzky starts.
+    pub at_launch: bool,
+}
+
+/// What the app's agent listener reads.
+#[cfg(unix)]
+pub fn access_flag() -> Arc<AtomicBool> {
+    ACCESS.clone()
+}
+
+pub fn access() -> Access {
+    Access { on: ACCESS.load(Ordering::Acquire), at_launch: at_launch() }
+}
+
+pub fn set_access(on: bool, at_launch: bool) -> Result<Access> {
+    if at_launch != self::at_launch() {
+        replace(&access_path(), serde_json::json!({"atLaunch": at_launch}).to_string().as_bytes())?;
+    }
+    ACCESS.store(on, Ordering::Release);
+    Ok(access())
+}
+
+fn access_path() -> PathBuf {
+    crate::store::data_dir().join("agent-access.json")
+}
+
+fn at_launch() -> bool {
+    read(&access_path())
+        .ok()
+        .flatten()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .is_some_and(|saved| saved["atLaunch"] == true)
+}
+
 /// What the agent runs to reach Nuzky.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Command {
@@ -64,6 +111,40 @@ impl Command {
 /// AppImage's terminal it names that one; only an executable inside APPDIR is its own.
 fn app_image(exe: &Path, dir: Option<PathBuf>, image: Option<PathBuf>) -> Option<PathBuf> {
     image.filter(|_| dir.is_some_and(|dir| exe.starts_with(dir)))
+}
+
+/// An agent Nuzky cannot connect itself, which gets the server and a first message to paste.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(rename = "AgentSetup"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Setup {
+    Claude,
+    Cursor,
+    Other,
+}
+
+/// The `nuzky` server in the `mcpServers` form Claude, Cursor and most agents read, between where
+/// it goes and what to tell the agent first.
+pub fn setup(setup: Setup, command: &Command) -> Result<String> {
+    let server = serde_json::json!({"mcpServers": {NAME: {"command": command.program, "args": command.args}}});
+    let (place, agent) = match setup {
+        Setup::Claude => {
+            ("the Claude Desktop config (Settings, Developer, Edit Config), then restart Claude", "Claude")
+        }
+        Setup::Cursor => ("Cursor's MCP settings (~/.cursor/mcp.json)", "Cursor"),
+        Setup::Other => ("your agent's MCP settings", "the agent"),
+    };
+    Ok(format!(
+        "Nuzky's MCP server lets an agent edit the video open in Nuzky, live.\n\n\
+         1. Add it to {place}. If the file already has \"mcpServers\", add only the \"nuzky\" entry:\n\n{}\n\n\
+         2. Then tell {agent}:\n\n\
+         Nuzky is the video editor open on this computer, and its MCP server nuzky edits the project open in it. \
+         Start by reading the resource nuzky://guide and follow it. Change the video only through Nuzky's tools, \
+         never its project file. Open a run with begin_run before you change anything and close it with end_run: \
+         the whole run is one undo step for the user.\n",
+        serde_json::to_string_pretty(&server)?
+    ))
 }
 
 #[cfg_attr(test, derive(ts_rs::TS))]

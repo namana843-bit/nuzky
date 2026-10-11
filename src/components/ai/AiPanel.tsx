@@ -233,7 +233,7 @@ function AgentMenu() {
             }}
           >
             <Plug size={14} className="text-muted" />
-            Connect an agent in a terminal…
+            Connect an agent outside Nuzky…
           </MenuItem>
         </>
       )}

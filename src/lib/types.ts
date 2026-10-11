@@ -26,6 +26,14 @@ export type Adjust = {
   vignette: number,
 };
 
+export type AgentAccess = {
+  on: boolean,
+  /**
+   * Turned on whenever Nuzky starts.
+   */
+  atLaunch: boolean,
+};
+
 /**
  * An agent Nuzky can be connected to, and the state of its `nuzky` MCP entry.
  */
@@ -52,6 +60,11 @@ export type AgentConnection = {
 };
 
 export type AgentKind = "claudeCode" | "codex";
+
+/**
+ * An agent Nuzky cannot connect itself, which gets the server and a first message to paste.
+ */
+export type AgentSetup = "claude" | "cursor" | "other";
 
 export type Animation = {
   kind: AnimationKind,
