@@ -1,6 +1,6 @@
 [
   {
-    "name": "Behind head",
+    "name": "Big",
     "behind": true,
     "style": {
       "fontFamily": "Anton",
@@ -26,7 +26,7 @@
     }
   },
   {
-    "name": "Outline",
+    "name": "Outlined",
     "behind": false,
     "style": {
       "fontFamily": "Anton",

@@ -114,19 +114,39 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
 }
 
 /** Font, size, colour, outline and box of a text. `maxSize` is the largest font size the picture takes. */
-export function StyleSection({ style, setStyle, maxSize = 300 }: { style: TextStyle; setStyle: (patch: Partial<TextStyle>, key: string) => void; maxSize?: number }) {
+type SetStyle = (patch: Partial<TextStyle>, key: string) => void;
+
+export function StyleSection({ style, setStyle, maxSize = 300 }: { style: TextStyle; setStyle: SetStyle; maxSize?: number }) {
   return (
     <Section title="Style">
+      <MainStyle style={style} setStyle={setStyle} maxSize={maxSize} />
+      <MoreStyle style={style} setStyle={setStyle} />
+    </Section>
+  );
+}
+
+/** Font, size and colour: what a text needs most. */
+export function MainStyle({ style, setStyle, maxSize = 300 }: { style: TextStyle; setStyle: SetStyle; maxSize?: number }) {
+  return (
+    <>
       <FieldRow label="Font">
         <FontPicker value={style.fontFamily} onChange={(fontFamily) => setStyle({ fontFamily }, "font")} />
       </FieldRow>
       <Slider label="Size" value={style.fontSize} min={12} max={maxSize} step={1} format={(v) => String(Math.round(v))} onChange={(v) => setStyle({ fontSize: v }, "size")} />
       <ColorInput label="Color" value={style.color} onChange={(v) => setStyle({ color: v }, "color")} />
+    </>
+  );
+}
+
+/** Bold, the outline of the letters and the box behind them. */
+export function MoreStyle({ style, setStyle }: { style: TextStyle; setStyle: SetStyle }) {
+  return (
+    <>
       <Checkbox label="Bold" checked={style.bold} onChange={(v) => setStyle({ bold: v }, "bold")} />
       <Slider label="Outline" value={style.strokeWidth} min={0} max={20} step={0.5} format={(v) => v.toFixed(1)} onChange={(v) => setStyle({ strokeWidth: v }, "stroke")} />
       {style.strokeWidth > 0 && <ColorInput label="Outline color" value={style.strokeColor} onChange={(v) => setStyle({ strokeColor: v }, "strokeColor")} />}
       <Checkbox label="Background box" checked={style.background !== null} onChange={(v) => setStyle({ background: v ? "#000000b3" : null }, "bg")} />
       {style.background !== null && <ColorInput label="Box color" value={style.background ?? "#000000b3"} onChange={(v) => setStyle({ background: v }, "bgColor")} />}
-    </Section>
+    </>
   );
 }

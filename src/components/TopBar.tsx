@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { AlertCircle, Check, Download, FolderOpen, History, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
+import { AlertCircle, Check, ChevronLeft, Download, FolderOpen, History, Loader2, Redo2, Sparkles, Undo2 } from "lucide-react";
 import { useAgent } from "../lib/agent";
 import { api, errorText } from "../lib/api";
 import { togglePanel, useDock } from "../lib/dock";
-import { openCover, useCover } from "../lib/cover";
+import { closeCover, exportCover, openCover, useCover } from "../lib/cover";
 import { useReels } from "../lib/reels";
 import { useStyle } from "../lib/style";
 import { when } from "../lib/time";
@@ -256,19 +256,36 @@ export function TopBar() {
   const snap = useEditor((s) => s.snap);
   const { undo, redo } = useEditor.getState();
   const aiRun = useEditor((s) => s.aiRun);
+  const cover = useCover((s) => !!s.open);
   const empty = !snap || projectDuration(snap.project) === 0;
   // Choosing reels makes them, each a project to export on its own; the long video is not exported there.
   const reels = useReels((s) => s.open);
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 px-1.5">
-      <ProjectsButton />
-      <FeedbackButton />
-      <UpdateButton />
+      {/* The cover editor takes over the panes, so its way back is where the eye starts. */}
+      {cover ? (
+        <Button variant="bar" pill title="Back to the video (Esc)" onClick={closeCover}>
+          <ChevronLeft size={15} /> Back to video
+        </Button>
+      ) : (
+        <>
+          <ProjectsButton />
+          <FeedbackButton />
+          <UpdateButton />
+        </>
+      )}
       {/* The name sits in the middle of the space the two sides leave, so a long AI label never covers it.
           The save state hangs off its right edge, so "Saving…" and "Saved" never move the name. */}
       <div className="flex min-w-0 flex-1 justify-center">
         <div className="relative flex min-w-0 items-center">
-          <ProjectName />
+          {cover ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-[13px]">
+              <span className="shrink-0 font-semibold text-fg">Cover</span>
+              <span className="truncate text-muted">· {snap?.project.name}</span>
+            </span>
+          ) : (
+            <ProjectName />
+          )}
           <div className="absolute left-full ml-2 whitespace-nowrap">
             <SaveStatus />
           </div>
@@ -287,8 +304,15 @@ export function TopBar() {
         <VersionsButton />
       </div>
       {!reels && (
-        <Button variant="primary" pill disabled={empty} disabledReason="Add a clip to the timeline to export" title="Export video (Ctrl+E)" onClick={openExport}>
-          <Download size={15} /> Export
+        <Button
+          variant="primary"
+          pill
+          disabled={empty}
+          disabledReason="Add a clip to the timeline to export"
+          title={cover ? "Export cover (Ctrl+E)" : "Export video (Ctrl+E)"}
+          onClick={cover ? () => void exportCover() : openExport}
+        >
+          <Download size={15} /> {cover ? "Export cover" : "Export"}
         </Button>
       )}
     </header>

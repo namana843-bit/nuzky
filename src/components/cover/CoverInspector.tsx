@@ -1,21 +1,43 @@
 import { useState } from "react";
-import { AlertTriangle, Copy, Image as ImageIcon, RotateCcw, Trash2, Type } from "lucide-react";
-import { COVER_PRESETS, addText, coverFormat, deleteText, downloadModels, editCover, editText, presetText, startFrom, thumbnailOf, useCover } from "../../lib/cover";
+import { AlertTriangle, Copy, Download, Image as ImageIcon, Plus, RotateCcw, Trash2, Type } from "lucide-react";
+import { COVER_PRESETS, addText, coverFormat, deleteText, downloadModels, editCover, editText, presetText, selectText, thumbnailOf, useCover } from "../../lib/cover";
 import { DEFAULT_TRANSFORM, sameStyle } from "../../lib/presets";
 import { undoAction, useEditor } from "../../lib/store";
-import { formatTime } from "../../lib/time";
 import type { TextStyle, Thumbnail, ThumbnailFormat } from "../../lib/types";
-import { QUIET, InspectorHeader } from "../inspector/Header";
-import { StyleSection } from "../inspector/TextSection";
-import { AiLock, Button, Checkbox, ColorInput, IconButton, PresetTile, Section, Segmented, Slider, TabBar, TabPanel, TextSwatch, useLockReason } from "../ui";
+import { InspectorHeader } from "../inspector/Header";
+import { MainStyle, MoreStyle } from "../inspector/TextSection";
+import { AiLock, Button, ColorInput, Disclosure, IconButton, PresetTile, Section, Segmented, Slider, Switch, TextSwatch, useLockReason } from "../ui";
 import { COVERED_TOO_MUCH, useShownCover } from "./CoverStage";
 
-/** Why a setting that cuts the person out cannot be turned on, or null when it can. */
-function useMaskReason(): string | null {
+const CANNOT_CUT_OUT = "Cutting out the person doesn't work on this computer";
+
+/**
+ * A setting that needs the person cut out of the frame. Without the cover models it offers their download, which
+ * also turns it on: the cover shows it once the person is found.
+ */
+function PersonSwitch({ label, checked, onChange }: { label: string; checked: boolean; onChange: (on: boolean) => void }) {
   const models = useCover((s) => s.models);
-  if (models?.unavailable) return "Cutting out the person doesn't work on this computer";
-  if (models && !models.downloaded) return `Download the cover models first (${models.sizeMb} MB)`;
-  return null;
+  const download = !checked && !!models && !models.downloaded && !models.unavailable;
+  return (
+    <div className="flex min-h-6 items-center justify-between gap-2">
+      <span className="text-[13px] text-fg">{label}</span>
+      {download ? (
+        <Button
+          pill
+          className="h-6 shrink-0 gap-1 px-2.5 text-[12px]"
+          title={`${label} needs the cover models, downloaded once`}
+          onClick={() => {
+            onChange(true);
+            void downloadModels();
+          }}
+        >
+          <Download size={13} /> Download {models?.sizeMb} MB
+        </Button>
+      ) : (
+        <Switch label={label} checked={checked} onChange={onChange} disabledReason={!checked && models?.unavailable ? CANNOT_CUT_OUT : undefined} />
+      )}
+    </div>
+  );
 }
 
 /** The inspector in the cover editor: the selected text, or the cover's own settings. */
@@ -27,13 +49,16 @@ export function CoverInspector({ format }: { format: ThumbnailFormat }) {
   return <AiLock>{text && !shown.draft && typeof selected === "number" ? <TextInspector format={format} index={selected} /> : <CoverSettings format={format} cover={shown.cover} draft={shown.draft} />}</AiLock>;
 }
 
+/** What is behind the person: the frame as filmed or blurred, or a colour. Blurred and Color need the person cut out. */
+type Look = "filmed" | "blurred" | "color";
+
 function CoverSettings({ format, cover, draft }: { format: ThumbnailFormat; cover: Thumbnail; draft: boolean }) {
   const f = coverFormat(format);
-  const other = useEditor((s) => thumbnailOf(s.snap?.project, format === "cover_9x16" ? "youtube_16x9" : "cover_9x16"));
   const hidden = useCoverHidden();
-  const maskReason = useMaskReason();
   const models = useCover((s) => s.models);
-  const lock = useLockReason();
+  // Clicking the picture on the cover selects it, which opens its zoom and position.
+  const frameSelected = useCover((s) => s.selected === "frame");
+  const [zoom, setZoom] = useState(false);
   const title = format === "cover_9x16" ? "Cover" : "YouTube thumbnail";
   // A change of the draft makes the cover from it.
   const set = (patch: Partial<Thumbnail>, key: string) => editCover(format, (c) => ({ ...(c ?? cover), ...patch }), key);
@@ -45,33 +70,30 @@ function CoverSettings({ format, cover, draft }: { format: ThumbnailFormat; cove
     if (snap) useEditor.getState().toast({ kind: "info", text: `${title} removed`, action: undoAction(snap) });
   };
   const b = cover.background;
+  const look: Look = !b.picture ? "color" : b.blur > 0 || b.dim > 0 ? "blurred" : "filmed";
+  const missing = !!models && !models.downloaded && !models.unavailable;
+  const chooseLook = (id: Look) => {
+    if (id === look) return;
+    void background(id === "filmed" ? { picture: true, blur: 0, dim: 0 } : id === "blurred" ? { picture: true, blur: 1, dim: 0.2 } : { picture: false }, "look");
+    if (id !== "filmed" && missing) void downloadModels();
+  };
+  const zoomOpen = zoom || frameSelected;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="cover-inspector">
-      <InspectorHeader icon={ImageIcon} title={title} detail={draft ? `${f.width}×${f.height} · Not made yet` : `${f.width}×${f.height} · Frame ${formatTime(cover.timeUs)}`} />
+      <InspectorHeader icon={ImageIcon} title={title} detail={`${f.width}×${f.height}`} />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {draft && other && (
-          <div className="px-4 pb-1">
-            <Button className="w-full" onClick={() => void startFrom(format, other)}>
-              Start from the {other.format === "cover_9x16" ? "9:16 cover" : "YouTube thumbnail"}
-            </Button>
-          </div>
-        )}
-        <Section title="Text">
-          <div className="grid grid-cols-3 gap-2">
-            {COVER_PRESETS.map((p) => (
-              <PresetTile key={p.name} label={p.name} selected={false} title={`Add a text in the ${p.name} style`} onClick={() => void addText(format, p)}>
-                <PresetLook preset={p} />
-              </PresetTile>
-            ))}
-          </div>
+        <Section>
+          <Button className="w-full" onClick={() => void addText(format)}>
+            <Plus size={15} /> Add text
+          </Button>
           {cover.texts.length > 0 && (
             <ul className="-mx-2 flex flex-col" aria-label="Texts on the cover">
               {cover.texts.map((t, i) => (
                 <li key={i}>
                   <button
                     type="button"
-                    onClick={() => useCover.setState({ selected: i })}
+                    onClick={() => void selectText(format, i)}
                     className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] text-fg hover:bg-white/[.08]"
                     title="Select this text"
                   >
@@ -85,63 +107,53 @@ function CoverSettings({ format, cover, draft }: { format: ThumbnailFormat; cove
             </ul>
           )}
         </Section>
-        <Section title="Person">
-          {maskReason && !lock && !models?.unavailable && (
-            <div className="flex items-center justify-between gap-2 text-[12px] text-muted">
-              <span>Cutting out the person needs the cover models.</span>
-              <Button className="h-6 shrink-0 px-2 text-[12px]" onClick={() => void downloadModels()}>
-                Download {models?.sizeMb} MB
-              </Button>
-            </div>
-          )}
-          <Checkbox
-            label="Outline"
-            checked={!!cover.outline}
-            disabled={!cover.outline && !!maskReason}
-            title={!cover.outline && maskReason ? maskReason : undefined}
-            onChange={(on) => void set({ outline: on ? { color: "#ffffff", width: format === "youtube_16x9" ? 10 : 14 } : null }, "outline")}
-          />
-          {cover.outline && (
-            <>
-              <ColorInput label="Outline color" value={cover.outline.color} onChange={(color) => void set({ outline: { ...cover.outline!, color } }, "outlineColor")} />
-              <Slider label="Outline width" value={cover.outline.width} min={1} max={40} step={1} unit="px" format={(v) => String(Math.round(v))} onChange={(width) => void set({ outline: { ...cover.outline!, width } }, "outlineWidth")} />
-            </>
-          )}
-        </Section>
         <Section title="Background">
           <Segmented
             label="Background"
-            value={b.picture ? "picture" : "color"}
-            disabled={b.picture && !!maskReason}
-            disabledReason={maskReason ?? undefined}
-            onChange={(id) => void background({ picture: id === "picture" }, "picture")}
+            value={look}
+            disabled={look === "filmed" && !!models?.unavailable}
+            disabledReason={CANNOT_CUT_OUT}
+            onChange={chooseLook}
             options={[
-              { id: "picture", label: "Picture" },
+              { id: "filmed", label: "As filmed" },
+              { id: "blurred", label: "Blurred" },
               { id: "color", label: "Color" },
             ]}
           />
-          {b.picture ? (
+          {look === "filmed" && missing && <p className="text-[12px] text-muted">Blurred and Color download the cover models first ({models?.sizeMb} MB, once).</p>}
+          {look === "blurred" && (
             <>
-              <Slider label="Blur" value={b.blur * 100} min={0} max={100} step={1} unit="%" disabled={b.blur === 0 && !!maskReason} title={b.blur === 0 && maskReason ? maskReason : undefined} format={(v) => String(Math.round(v))} onChange={(v) => void background({ blur: v / 100 }, "blur")} />
-              <Slider label="Dim" value={b.dim * 100} min={0} max={100} step={1} unit="%" disabled={b.dim === 0 && !!maskReason} title={b.dim === 0 && maskReason ? maskReason : undefined} format={(v) => String(Math.round(v))} onChange={(v) => void background({ dim: v / 100 }, "dim")} />
+              {/* Never 0, so dragging it down does not turn the background back to as filmed under the pointer. */}
+              <Slider label="Blur" value={b.blur * 100} min={1} max={100} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => void background({ blur: v / 100 }, "blur")} />
+              <Slider label="Dim" value={b.dim * 100} min={0} max={100} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => void background({ dim: v / 100 }, "dim")} />
             </>
-          ) : (
-            <ColorInput label="Color" value={b.color} onChange={(color) => void background({ color }, "color")} />
+          )}
+          {look === "color" && <ColorInput label="Color" value={b.color} onChange={(color) => void background({ color }, "color")} />}
+          <PersonSwitch label="Line around person" checked={!!cover.outline} onChange={(on) => void set({ outline: on ? { color: "#ffffff", width: format === "youtube_16x9" ? 10 : 14 } : null }, "outline")} />
+          {cover.outline && (
+            <>
+              <ColorInput label="Line color" value={cover.outline.color} onChange={(color) => void set({ outline: { ...cover.outline!, color } }, "outlineColor")} />
+              <Slider label="Line width" value={cover.outline.width} min={1} max={40} step={1} unit="px" format={(v) => String(Math.round(v))} onChange={(width) => void set({ outline: { ...cover.outline!, width } }, "outlineWidth")} />
+            </>
           )}
         </Section>
-        <Section
-          title="Frame"
-          actions={
-            <IconButton label="Reset the frame" className={QUIET} onClick={() => void frame(DEFAULT_TRANSFORM, "reset")}>
-              <RotateCcw size={14} />
-            </IconButton>
-          }
+        <Disclosure
+          title="Picture"
+          summary="Zoom, position, rotation"
+          open={zoomOpen}
+          onToggle={() => {
+            setZoom(!zoomOpen);
+            if (zoomOpen && frameSelected) useCover.setState({ selected: null });
+          }}
         >
-          <Slider label="Scale" value={cover.frame.scale * 100} min={10} max={400} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => void frame({ scale: v / 100 }, "scale")} />
+          <Slider label="Zoom" value={cover.frame.scale * 100} min={10} max={400} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => void frame({ scale: v / 100 }, "scale")} />
           <Slider label="Position X" value={cover.frame.x * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => void frame({ x: v / 100 }, "x")} />
           <Slider label="Position Y" value={cover.frame.y * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => void frame({ y: v / 100 }, "y")} />
           <Slider label="Rotation" value={cover.frame.rotation} min={-180} max={180} step={1} unit="°" format={(v) => String(Math.round(v))} onChange={(v) => void frame({ rotation: v }, "rot")} />
-        </Section>
+          <Button variant="ghost" className="h-7 self-start px-2 text-[12px]" onClick={() => void frame(DEFAULT_TRANSFORM, "reset")}>
+            <RotateCcw size={13} /> Reset
+          </Button>
+        </Disclosure>
         {!draft && (
           <div className="px-4 py-3">
             <Button variant="ghost" className="h-7 px-2 text-[12px]" onClick={() => void removeCover()}>
@@ -160,10 +172,10 @@ function useCoverHidden(): number[] {
 }
 
 function TextInspector({ format, index }: { format: ThumbnailFormat; index: number }) {
-  const [tab, setTab] = useState<"text" | "transform">("text");
+  const [more, setMore] = useState(false);
+  const [position, setPosition] = useState(false);
   const text = useEditor((s) => thumbnailOf(s.snap?.project, format)?.texts[index]);
   const hidden = useCoverHidden()[index] ?? 0;
-  const maskReason = useMaskReason();
   if (!text) return null;
   const setStyle = (patch: Partial<TextStyle>, key: string) => void editText(format, index, (t) => ({ ...t, style: { ...t.style, ...patch } }), `style:${key}`);
   const setTransform = (patch: Partial<Thumbnail["frame"]>, key: string) => void editText(format, index, (t) => ({ ...t, transform: { ...t.transform, ...patch } }), `transform:${key}`);
@@ -187,62 +199,51 @@ function TextInspector({ format, index }: { format: ThumbnailFormat; index: numb
           </IconButton>
         </div>
       </div>
-      <TabBar group="cover-text" label="Text settings" tabs={[{ id: "text", label: "Text" }, { id: "transform", label: "Transform" }]} value={tab} onChange={setTab} />
-      <TabPanel group="cover-text" id={tab} className="min-h-0 flex-1 overflow-y-auto">
-        {tab === "text" ? (
-          <>
-            <Section title="Text">
-              <CoverTextField format={format} index={index} text={text.text} />
-              <div className="grid grid-cols-3 gap-2">
-                {COVER_PRESETS.map((p) => {
-                  const look = presetText(format, p).style;
-                  return (
-                    <PresetTile
-                      key={p.name}
-                      label={p.name}
-                      selected={sameStyle(look, text.style) && p.behind === text.behind}
-                      title={`Apply the ${p.name} style`}
-                      // A preset keeps the text's font and where it wraps, as text presets do.
-                      onClick={() => void editText(format, index, (x) => ({ ...x, behind: p.behind && !maskReason ? true : x.behind && p.behind, style: { ...look, fontFamily: x.style.fontFamily, maxWidth: x.style.maxWidth } }))}
-                    >
-                      <PresetLook preset={p} />
-                    </PresetTile>
-                  );
-                })}
-              </div>
-              <Checkbox
-                label="Behind person"
-                checked={text.behind}
-                disabled={!text.behind && !!maskReason}
-                title={!text.behind && maskReason ? maskReason : undefined}
-                onChange={(behind) => void editText(format, index, (x) => ({ ...x, behind }), "behind")}
-              />
-              {text.behind && hidden > COVERED_TOO_MUCH && (
-                <p className="flex items-start gap-1.5 text-[12px] text-fg" role="status">
-                  <AlertTriangle size={14} className="mt-px shrink-0 text-warn" />
-                  The person covers {Math.round(hidden * 100)} % of this text. Move it up or make it smaller.
-                </p>
-              )}
-            </Section>
-            <StyleSection style={text.style} setStyle={setStyle} maxSize={format === "cover_9x16" ? 400 : 300} />
-          </>
-        ) : (
-          <Section
-            title="Transform"
-            actions={
-              <IconButton label="Reset transform" className={QUIET} onClick={() => setTransform(DEFAULT_TRANSFORM, "reset")}>
-                <RotateCcw size={14} />
-              </IconButton>
-            }
-          >
-            <Slider label="Scale" value={t.scale * 100} min={10} max={400} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => setTransform({ scale: v / 100 }, "scale")} />
-            <Slider label="Position X" value={t.x * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => setTransform({ x: v / 100 }, "x")} />
-            <Slider label="Position Y" value={t.y * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => setTransform({ y: v / 100 }, "y")} />
-            <Slider label="Rotation" value={t.rotation} min={-180} max={180} step={1} unit="°" format={(v) => String(Math.round(v))} onChange={(v) => setTransform({ rotation: v }, "rot")} />
-            <Slider label="Opacity" value={t.opacity * 100} min={0} max={100} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => setTransform({ opacity: v / 100 }, "opacity")} />
-          </Section>
-        )}
-      </TabPanel>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <Section>
+          <CoverTextField format={format} index={index} text={text.text} />
+          <div className="grid grid-cols-3 gap-2">
+            {COVER_PRESETS.map((p) => {
+              const look = presetText(format, p).style;
+              return (
+                <PresetTile
+                  key={p.name}
+                  label={p.name}
+                  selected={sameStyle(look, text.style)}
+                  title={`Apply the ${p.name} look`}
+                  // A look keeps the text's font and where it wraps, as text presets do.
+                  onClick={() => void editText(format, index, (x) => ({ ...x, style: { ...look, fontFamily: x.style.fontFamily, maxWidth: x.style.maxWidth } }))}
+                >
+                  <PresetLook preset={p} />
+                </PresetTile>
+              );
+            })}
+          </div>
+          <PersonSwitch label="Behind person" checked={text.behind} onChange={(behind) => void editText(format, index, (x) => ({ ...x, behind }), "behind")} />
+          {text.behind && hidden > COVERED_TOO_MUCH && (
+            <p className="flex items-start gap-1.5 text-[12px] text-fg" role="status">
+              <AlertTriangle size={14} className="mt-px shrink-0 text-warn" />
+              The person covers {Math.round(hidden * 100)} % of this text. Move it up or make it smaller.
+            </p>
+          )}
+        </Section>
+        <Section>
+          <MainStyle style={text.style} setStyle={setStyle} maxSize={format === "cover_9x16" ? 400 : 300} />
+        </Section>
+        <Disclosure title="More style" summary="Bold, outline, box" open={more} onToggle={() => setMore(!more)}>
+          <MoreStyle style={text.style} setStyle={setStyle} />
+        </Disclosure>
+        <Disclosure title="Position" summary="Scale, rotation, opacity" open={position} onToggle={() => setPosition(!position)}>
+          <Slider label="Scale" value={t.scale * 100} min={10} max={400} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => setTransform({ scale: v / 100 }, "scale")} />
+          <Slider label="Position X" value={t.x * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => setTransform({ x: v / 100 }, "x")} />
+          <Slider label="Position Y" value={t.y * 100} min={-100} max={100} step={0.5} unit="%" format={(v) => v.toFixed(1)} onChange={(v) => setTransform({ y: v / 100 }, "y")} />
+          <Slider label="Rotation" value={t.rotation} min={-180} max={180} step={1} unit="°" format={(v) => String(Math.round(v))} onChange={(v) => setTransform({ rotation: v }, "rot")} />
+          <Slider label="Opacity" value={t.opacity * 100} min={0} max={100} step={1} unit="%" format={(v) => String(Math.round(v))} onChange={(v) => setTransform({ opacity: v / 100 }, "opacity")} />
+          <Button variant="ghost" className="h-7 self-start px-2 text-[12px]" onClick={() => setTransform(DEFAULT_TRANSFORM, "reset")}>
+            <RotateCcw size={13} /> Reset
+          </Button>
+        </Disclosure>
+      </div>
     </div>
   );
 }
@@ -272,19 +273,11 @@ function CoverTextField({ format, index, text }: { format: ThumbnailFormat; inde
   );
 }
 
-/** A cover look's tile: its "Aa", and for a look behind the person a head and shoulders over the lower half of it. */
+/** A cover look's tile: its "Aa" in the look, as large as the look is, over a grey its outline shows on. */
 function PresetLook({ preset }: { preset: (typeof COVER_PRESETS)[number] }) {
   return (
-    <span className="absolute inset-0 flex items-center justify-center overflow-hidden bg-line">
-      <span className={preset.behind ? "-translate-y-1.5" : undefined}>
-        <TextSwatch style={preset.style} label="Aa" size={preset.behind ? 22 : 17} />
-      </span>
-      {preset.behind && (
-        <svg aria-hidden viewBox="0 0 40 30" className="absolute bottom-0 left-1/2 h-[62%] -translate-x-1/2 text-[#5c5c63]">
-          <circle cx="20" cy="11" r="7.5" fill="currentColor" />
-          <path d="M3 30c0-8 7.5-12 17-12s17 4 17 12z" fill="currentColor" />
-        </svg>
-      )}
+    <span className="absolute inset-0 flex items-center justify-center overflow-hidden bg-[#5c5c63]">
+      <TextSwatch style={preset.style} label="Aa" size={Math.round(12 + preset.style.fontSize / 22)} />
     </span>
   );
 }

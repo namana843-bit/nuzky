@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronRight, Minus } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Minus } from "lucide-react";
 import { followPointer } from "../lib/drag";
 import { fontCss } from "../lib/fonts";
 import { AI_EDITING, useAiLocked } from "../lib/store";
@@ -375,14 +375,36 @@ export function Slider({
   );
 }
 
-export function Section({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
+/** Without a title, for a group the inspector's header already names. */
+export function Section({ title, children, actions }: { title?: string; children: ReactNode; actions?: ReactNode }) {
   return (
     <section className="flex flex-col gap-3 border-b border-white/[.07] px-4 py-4 last:border-b-0">
-      <div className="flex min-h-6 items-center justify-between gap-2">
-        <h3 className="text-[13px] font-semibold text-fg">{title}</h3>
-        {actions && <div className="flex items-center gap-0.5">{actions}</div>}
-      </div>
+      {title && (
+        <div className="flex min-h-6 items-center justify-between gap-2">
+          <h3 className="text-[13px] font-semibold text-fg">{title}</h3>
+          {actions && <div className="flex items-center gap-0.5">{actions}</div>}
+        </div>
+      )}
       {children}
+    </section>
+  );
+}
+
+/** A section folded to its title and a summary of what is inside, for settings that are seldom needed. */
+export function Disclosure({ title, summary, open, onToggle, children }: { title: string; summary: string; open: boolean; onToggle: () => void; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 border-b border-white/[.07] px-4 py-2 last:border-b-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="-mx-2 flex h-8 min-w-0 items-center gap-1.5 rounded-md px-2 text-left text-[13px] font-semibold text-fg transition-colors duration-[120ms] ease-out hover:bg-white/[.05]"
+      >
+        {open ? <ChevronDown size={14} className="shrink-0 text-muted" /> : <ChevronRight size={14} className="shrink-0 text-muted" />}
+        <span className="shrink-0">{title}</span>
+        {!open && <span className="truncate text-[12px] font-normal text-muted">{summary}</span>}
+      </button>
+      {open && <div className="flex flex-col gap-3 pb-2">{children}</div>}
     </section>
   );
 }
@@ -472,18 +494,18 @@ export function Checkbox({
 }
 
 /** An on/off setting that takes effect at once; `Space` or `Enter` flips it. */
-export function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  const lock = useLockReason();
+export function Switch({ label, checked, onChange, disabledReason }: { label: string; checked: boolean; onChange: (v: boolean) => void; disabledReason?: string }) {
+  const reason = useLockReason() ?? disabledReason;
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
-      title={lock ?? label}
-      {...disabledProps(!!lock, () => onChange(!checked))}
+      title={reason ?? label}
+      {...disabledProps(!!reason, () => onChange(!checked))}
       className={`relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors duration-[120ms] ease-out ${checked ? "bg-accent-strong" : "bg-white/[.16]"} ${
-        lock ? "cursor-not-allowed opacity-40" : ""
+        reason ? "cursor-not-allowed opacity-40" : ""
       }`}
     >
       <span
