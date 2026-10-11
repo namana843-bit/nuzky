@@ -11,7 +11,7 @@ use nuzky_session::{Expect, SessionState, host::Host};
 use std::sync::{Arc, atomic::Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::jobs::{Reporter, check_cancelled, panic_text, register, unregister};
+use crate::jobs::{Reporter, check_cancelled, crashed, register, unregister};
 use crate::{AppState, CmdResult};
 
 /// Writes the reels, calling `step` before each, then hands the edit that marks them made to `apply`; when it is
@@ -94,7 +94,7 @@ pub fn start_make_reels(
             let unlisted = listed.err().map(|error| format!("{error:#}"));
             Ok(Some(serde_json::json!({ "reels": made, "unlisted": unlisted }).to_string()))
         }))
-        .unwrap_or_else(|p| Err(anyhow::anyhow!("Making reels crashed: {}", panic_text(&p))));
+        .unwrap_or_else(|p| Err(crashed(&p)));
         rep.finish(result, cancel.load(Ordering::Relaxed));
         unregister(&worker, &job);
     });
