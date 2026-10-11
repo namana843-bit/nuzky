@@ -44,6 +44,8 @@ pub(crate) const TOOLS: &[Rules] = &[
     rules("inspect_frames", Always, false, true, true),
     // Only renders and mixes the timeline; preparing missing sound runs as a job.
     rules("activity", Always, false, true, true),
+    // Only draws the sound of the timeline and its files; preparing missing sound runs as a job.
+    rules("get_waveform", Always, false, true, true),
     // Retakes and emphasis only read stored words and sound and answer at once; thumbnail frames
     // only render the timeline.
     rules(
@@ -121,6 +123,7 @@ mod tests {
                 "get_transcript",
                 "inspect_frames",
                 "activity",
+                "get_waveform",
                 "segment_subject",
                 "inspect_thumbnail",
                 "suggest_options",
@@ -151,6 +154,7 @@ mod tests {
                 "get_transcript",
                 "inspect_frames",
                 "activity",
+                "get_waveform",
                 "segment_subject",
                 "inspect_thumbnail",
                 "apply_edits",
@@ -167,6 +171,7 @@ mod tests {
             set(&[
                 "analyze",
                 "activity",
+                "get_waveform",
                 "inspect_frames",
                 "segment_subject",
                 "inspect_thumbnail",

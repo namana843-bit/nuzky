@@ -193,7 +193,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 32);
+    assert_eq!(tools.len(), 33);
     let search = tools.iter().find(|t| t["name"] == "search_sounds").unwrap();
     assert_eq!(search["annotations"]["openWorldHint"], true);
     assert_eq!(search["annotations"]["readOnlyHint"], true);
@@ -697,17 +697,7 @@ fn emphasis_suggests_and_apply_zooms_punches_in_as_one_undo_over_stdio() {
         }
     }
     let wav = c.dir.join("speech.wav");
-    // 16-bit mono WAV: the RIFF header, the format chunk and the samples.
-    let mut bytes = b"RIFF".to_vec();
-    bytes.extend_from_slice(&(36 + samples.len() as u32 * 2).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    for field in [16u32, 1 | (1 << 16), 48_000, 96_000, 2 | (16 << 16)] {
-        bytes.extend_from_slice(&field.to_le_bytes());
-    }
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&(samples.len() as u32 * 2).to_le_bytes());
-    bytes.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
-    std::fs::write(&wav, bytes).unwrap();
+    std::fs::write(&wav, wav_bytes(&samples)).unwrap();
     let video = c.dir.join("talk.mp4");
     let status = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=360x640:r=30:d=12", "-i"])
@@ -939,6 +929,121 @@ fn retakes_of_three_czech_takes_over_stdio() {
     c.finish();
 }
 
+#[test]
+fn get_waveform_shows_what_a_cut_threw_away_over_stdio() {
+    use base64::Engine as _;
+    use nuzky_session::transcripts::{Record, TranscriptStore, VERSION};
+    let mut c = Client::start(true, None, Some(None));
+    let mut samples = vec![0i16; 4 * 48_000];
+    let mut words = Vec::new();
+    for (word, start) in [1_000_000i64, 1_600_000, 2_100_000, 3_000_000].into_iter().enumerate() {
+        let first = (start * 48 / 1000) as usize;
+        for (i, sample) in samples[first..first + 19_200].iter_mut().enumerate() {
+            *sample = (0.5 * (i as f64 * 440.0 / 48_000.0 * std::f64::consts::TAU).sin() * 32_767.0) as i16;
+        }
+        words.push(json!({"start_us":start,"end_us":start + 400_000,"text":format!(" w{word}"),"probability":0.9}));
+    }
+    let wav = c.dir.join("speech.wav");
+    std::fs::write(&wav, wav_bytes(&samples)).unwrap();
+    let video = c.dir.join("talk.mp4");
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=360x640:r=30:d=4", "-i"])
+        .arg(&wav)
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest"])
+        .arg(&video)
+        .status()
+        .expect("ffmpeg makes the test video");
+    assert!(status.success());
+    let run = c.call("begin_run", json!({"label":"place"}))["run_id"].clone();
+    let asset_id = c.call("import_media", json!({"run_id":run,"paths":[video]}))["asset_ids"][0].clone();
+    c.call("apply_edits", json!({"run_id":run,"request_id":"place","edits":[{"type":"addClip","assetId":asset_id}]}));
+    c.call("end_run", json!({"run_id":run,"action":"keep"}));
+    let asset: nuzky_engine::model::Asset =
+        serde_json::from_value(c.call("get_state", json!({}))["assets"][0].clone()).unwrap();
+    let store = TranscriptStore::at(c.dir.join("data/nuzky/transcripts")).unwrap();
+    store
+        .put(
+            &asset,
+            &Record {
+                version: VERSION,
+                fingerprint: store.fingerprint(&asset).unwrap(),
+                duration_us: asset.duration_us,
+                model: "fixture".into(),
+                language: "cs".into(),
+                words: serde_json::from_value(json!(words)).unwrap(),
+                segments: vec![],
+                alignment: None,
+            },
+        )
+        .unwrap();
+    let run = c.call("begin_run", json!({"label":"cut and change speed"}))["run_id"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":run,"request_id":"cut","edits":[
+        {"type":"rippleDeleteRanges","ranges":[{"startUs":1_200_000,"endUs":1_800_000}]}]}),
+    );
+    let clip = c.call("get_state", json!({}))["tracks"][0]["clips"][1]["id"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":run,"request_id":"split","edits":[
+        {"type":"splitClip","clipId":clip,"atUs":1_950_000}]}),
+    );
+    let clip = c.call("get_state", json!({}))["tracks"][0]["clips"][2]["id"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id":run,"request_id":"speed","edits":[
+        {"type":"updateClip","clipId":clip,"speed":2.0}]}),
+    );
+    c.call("end_run", json!({"run_id":run,"action":"keep"}));
+
+    let args = json!({"range_us":[500_000,2_000_000],"width":800});
+    let waiting: Value = serde_json::from_str(&c.error("get_waveform", args.clone())).unwrap();
+    let waiting = waiting["error"].as_str().unwrap();
+    assert!(waiting.starts_with("AUDIO_NOT_READY") && waiting.contains("talk.mp4"), "{waiting}");
+    let job_id = waiting.split("as job ").nth(1).and_then(|rest| rest.split(';').next()).unwrap();
+    let done = wait_job(&mut c, &json!({"job_id":job_id}), Duration::from_secs(60), |_| false);
+    assert_eq!(done["status"], "done", "{done}");
+    let result = c.rpc("tools/call", json!({"name":"get_waveform","arguments":args}));
+    assert_ne!(result["result"]["isError"], true, "{result}");
+    let content = &result["result"]["content"];
+    let info: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(info["cuts"], json!([{"t_us":1_200_000,"split_words":["w0","w1"]}]), "{info}");
+    assert_eq!(info["untranscribed"], json!([]));
+    assert_eq!(info["range_us"], json!([500_000, 2_000_000]));
+    assert_eq!(content[1]["mimeType"], "image/png");
+    let bytes = base64::prelude::BASE64_STANDARD.decode(content[1]["data"].as_str().unwrap()).unwrap();
+    let (frame, rgba) = decode_png(&bytes);
+    assert_eq!((frame.width, frame.height), (800, 216));
+
+    // 1.5 s heard plus the 0.6 s skipped source, shown once between the two cut lines.
+    let x = |offset_us: i64| (offset_us as f64 / 2_100_000.0 * f64::from(frame.width)).round() as u32;
+    let (left, right) = (x(700_000), x(1_300_000));
+    for expected in [left, right] {
+        assert!(
+            (expected - 2..=expected + 2)
+                .any(|x| (16..156).all(|y| pixel(&rgba, frame.width, x, y) == [0xff, 0x9f, 0x0a])),
+            "no solid cut line near x={expected}"
+        );
+    }
+    for y in [86 - 40, 86, 86 + 40] {
+        assert_eq!(pixel(&rgba, frame.width, left - 10, y), [0x29, 0x97, 0xff], "heard w0 at y={y}");
+        assert_eq!(pixel(&rgba, frame.width, left + 10, y), [0x6e, 0x6e, 0x75], "thrown w0 at y={y}");
+    }
+    assert!(
+        [[0x0c, 0x0c, 0x0e], [0x2c, 0x2c, 0x30]].contains(&pixel(&rgba, frame.width, left + 10, 20)),
+        "shade above the thrown waveform"
+    );
+    let silence = x(1_000_000);
+    assert_eq!(pixel(&rgba, frame.width, silence, 86), [0x6e, 0x6e, 0x75]);
+    assert!(
+        (16u32..156)
+            .filter(|y| y.abs_diff(86) > 2)
+            .all(|y| pixel(&rgba, frame.width, silence, y) != [0x6e, 0x6e, 0x75]),
+        "the discarded silence between w0 and w1 has a tall waveform"
+    );
+    c.finish();
+}
+
 /// 14 s of known pictures: three still patterns cut at 4 s and 8 s, moving footage from 12 s, and
 /// silence with a loud tone from 6 s to 7 s; music on its own track sounds from 12.5 s to 13.5 s.
 #[test]
@@ -1042,6 +1147,20 @@ fn activity_and_changes_find_what_happens_and_page_without_repeats_over_stdio() 
     assert!(stale.contains("STALE_REVISION"), "{stale}");
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
     c.finish();
+}
+
+/// 16-bit mono WAV at 48 kHz: the RIFF header, the format chunk and the samples.
+fn wav_bytes(samples: &[i16]) -> Vec<u8> {
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&(36 + samples.len() as u32 * 2).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    for field in [16u32, 1 | (1 << 16), 48_000, 96_000, 2 | (16 << 16)] {
+        bytes.extend_from_slice(&field.to_le_bytes());
+    }
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&(samples.len() as u32 * 2).to_le_bytes());
+    bytes.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+    bytes
 }
 
 /// Polls a job until `done` says it is finished or `timeout` passes; returns the last state.

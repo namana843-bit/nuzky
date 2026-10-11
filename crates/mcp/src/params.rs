@@ -168,6 +168,14 @@ pub struct Activity {
     /// Points of each curve, 8 to 200, default 60.
     pub points: Option<usize>,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Waveform {
+    /// Half-open timeline range, at most 60 s.
+    pub range_us: [i64; 2],
+    /// Picture width in pixels, 400 to 2400, default 1200.
+    pub width: Option<u32>,
+}
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AnalysisKind {

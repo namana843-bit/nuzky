@@ -89,7 +89,7 @@ pub fn contact_sheet(
 }
 
 // A tiny fixed numeric font keeps timestamp labels independent of system fonts.
-fn label(pixels: &mut [u8], stride: u32, x: u32, y: u32, text: &str, available: u32) {
+pub(crate) fn label(pixels: &mut [u8], stride: u32, x: u32, y: u32, text: &str, available: u32) {
     const DIGITS: [[u8; 5]; 11] = [
         [7, 5, 5, 5, 7],
         [2, 6, 2, 2, 7],

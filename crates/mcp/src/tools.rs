@@ -21,7 +21,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::{activity, media, params::*, reels, transcript};
+use crate::{activity, media, params::*, reels, transcript, waveform};
 
 const PREVIEW_CHARS: usize = 400;
 /// How long activity waits for its job before handing it over to poll.
@@ -153,6 +153,9 @@ impl Backend {
         }
         if name == "inspect_thumbnail" {
             return self.inspect_thumbnail(parse(arguments)?, &state);
+        }
+        if name == "get_waveform" {
+            return self.waveform(parse(arguments)?, &state);
         }
         let mut value = self.dispatch(name, arguments, &state)?;
         if name == "begin_run"
@@ -331,6 +334,27 @@ impl Backend {
         Ok(CallToolResult::success(vec![
             ContentBlock::text(info.to_string()),
             ContentBlock::image(BASE64_STANDARD.encode(bytes), "image/png"),
+        ]))
+    }
+
+    fn waveform(&self, args: Waveform, state: &SessionState) -> Result<CallToolResult> {
+        let width = args.width.unwrap_or(waveform::DEFAULT_WIDTH);
+        ensure!((400..=2400).contains(&width), "INVALID_ARGUMENTS: width must be 400..=2400");
+        let project = self.media_project(&state.project);
+        let range = activity::timeline_range(&project, Some(args.range_us))?;
+        ensure!(
+            range.1 - range.0 <= waveform::MAX_RANGE_US,
+            "INVALID_RANGE: range_us spans at most 60 s; look at a second or two around a cut"
+        );
+        media::check_media(&project)?;
+        let derived = transcript::derive(&project, &self.host.transcripts)?;
+        self.prepare_sound(&project, state, "get_waveform")?;
+        let (png, cuts) = waveform::draw(&project, &derived.sources, &self.host.cache_dir, range, width)?;
+        let info = json!({"revision": state.stamp.revision, "session_epoch": state.stamp.session_epoch,
+            "range_us": [range.0, range.1], "cuts": cuts, "untranscribed": derived.untranscribed});
+        Ok(CallToolResult::success(vec![
+            ContentBlock::text(info.to_string()),
+            ContentBlock::image(BASE64_STANDARD.encode(png), "image/png"),
         ]))
     }
 
@@ -543,7 +567,7 @@ impl Backend {
             let project = self.media_project(&state.project);
             let derived = transcript::derive(&project, &self.host.transcripts)?;
             if derived.untranscribed.is_empty() {
-                self.prepare_sound(&project, &derived, state)?;
+                self.prepare_sound(&project, state, "analyze")?;
             }
             let zooms = crate::zooms::suggest(&project, &derived, &self.host.cache_dir)?;
             return Ok(json!({"zooms": zooms, "time_basis": "timeline",
@@ -717,12 +741,13 @@ impl Backend {
 
     /// Without the app nothing prepares the sound of files whose words were stored earlier, and
     /// decoding a whole file inside a tool call could not be stopped, so it becomes a job.
-    fn prepare_sound(&self, project: &Project, derived: &transcript::Derived, state: &SessionState) -> Result<()> {
+    fn prepare_sound(&self, project: &Project, state: &SessionState, tool: &str) -> Result<()> {
         let cache = self.host.cache_dir.clone();
+        let heard = transcript::heard_assets(project);
         let missing: Vec<_> = project
             .assets
             .iter()
-            .filter(|a| derived.sources.contains_key(&a.id))
+            .filter(|a| heard.contains(&a.id))
             .filter(|a| nuzky_engine::audio::has_audio(a) && !nuzky_engine::audio::pcm_path(&cache, a).exists())
             .cloned()
             .collect();
@@ -744,7 +769,7 @@ impl Backend {
             },
         )?;
         anyhow::bail!(
-            "AUDIO_NOT_READY: preparing the sound of {names} as job {}; poll job until done, then analyze again",
+            "AUDIO_NOT_READY: preparing the sound of {names} as job {}; poll job until done, then call {tool} again",
             job["job_id"].as_str().unwrap_or_default()
         )
     }
