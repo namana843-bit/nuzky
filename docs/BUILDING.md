@@ -2,6 +2,10 @@
 
 Use current stable Rust (minimum 1.94, which `candle-core` needs for its NEON code on Apple Silicon), Node.js 22.12+ and the committed Cargo/npm lockfiles. Pull requests run lint, types, the app and website builds, clippy and `cargo test --workspace --locked` on `ubuntu-24.04` (`.github/workflows/checks.yml`): every pull request that is not a draft once the repository is public, and only pull requests with the `ci` label while it is private. A release tag runs the tests and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). No signing secrets are required. This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
 
+## Worktree dependency builds
+
+`scripts/seed-target.sh` seeds a new checkout's own `target/` from another worktree of this repository, preferring matching Cargo lockfiles and profiles. It uses copy-on-write clones (`cp --reflink=always` on Linux btrfs/XFS, `cp -c` on macOS APFS), holds Cargo's donor lock while copying and excludes every workspace-crate fingerprint. Each checkout still has its own target directory. Linux setup runs it automatically; on macOS run it after the exports below, and `scripts/check.sh` and `scripts/repro.py` also run it before building. Reuse requires the same toolchain, features and native build environment as the donor.
+
 ## Linux
 
 Ubuntu 24.04:
@@ -65,12 +69,16 @@ bash scripts/verify-linux-bundle.sh
 Install Xcode command-line tools (`xcode-select --install`), Rust and Node, then:
 
 ```sh
-brew install ffmpeg@8 pkg-config cmake
+brew install ffmpeg@8 ffmpeg-full pkg-config cmake flock
 export PKG_CONFIG_PATH="$(brew --prefix ffmpeg@8)/lib/pkgconfig"
-export PATH="$(brew --prefix ffmpeg@8)/bin:$PATH"
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+bash scripts/seed-target.sh
 npm ci
 npm run tauri dev
 ```
+
+These exports match the Darwin environment used by `scripts/check.sh` and `scripts/repro.py`: link against `ffmpeg@8`, use the selected Xcode SDK, and run FFmpeg fixtures with `ffmpeg-full` for `drawtext`. Keep them in the terminal for manual workspace builds and tests.
 
 Use the [versioned Homebrew formula](https://formulae.brew.sh/formula/ffmpeg@8) so a future `brew ffmpeg` upgrade does not silently change the FFmpeg major version. CI installs plain `ffmpeg`, FFmpeg 9.0 on 10 October 2026: the Homebrew metadata of the `macos-14` runner image predates `ffmpeg@8`. Current Homebrew has no bottles for macOS 14, so updating Homebrew on that runner would build FFmpeg and its dependencies from source. The engine tests in CI take `drawtext` from `ffmpeg-full`, as below. The [GitHub runner catalog](https://github.com/actions/runner-images) maps `macos-14` to arm64; CI also asserts `uname -m` is `arm64`.
 
