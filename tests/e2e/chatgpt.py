@@ -126,7 +126,7 @@ def require(ok, message):
 
 def setup(r):
     r.chatgpt = Server(r.work)
-    r.env.update(NUZKY_CHATGPT_ISSUER=r.chatgpt.url, NUZKY_TEST_KEYCHAIN=str(r.work / 'keychain.json'),
+    r.env.update(NUZKY_CHATGPT_ISSUER=r.chatgpt.url,
                  NUZKY_TEST_BROWSER=str(Path(__file__).with_name('fake_browser')),
                  NUZKY_FAKE_BROWSER_PAGE=str(r.work / 'browser.html'),
                  NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_CODEX=str(r.work / 'no-codex'))
