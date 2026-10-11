@@ -33,6 +33,8 @@ export function SpeechModelDialog() {
         answer(false);
       }}
       onKeyDown={(e) => {
+        // The editor's keys (Space plays, Delete removes) wait until it is answered.
+        e.stopPropagation();
         if (e.key === "Enter" && e.target === e.currentTarget) answer(true);
         trapTab(e);
       }}

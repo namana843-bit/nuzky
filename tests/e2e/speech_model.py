@@ -95,7 +95,8 @@ def speech_model(r):
         r.shot('dialog')
         press('space')
         time.sleep(0.5)
-        r.check('a Space typed while it opens starts nothing', dialog(r)['open'] and not speech_job(r) and not r.models.requests)
+        r.check('a Space typed while it opens starts nothing, neither the download nor playback', dialog(r)['open'] and not speech_job(r)
+                and not r.models.requests and not r.s.run("return window.__nuzky.store.getState().playing"))
         press('Escape')
         r.check('Escape closes the question', wait(lambda: not dialog(r)['open'] and dialog(r)['question'] is None, 3))
         reopened = []
