@@ -49,7 +49,9 @@ impl SigningKey {
             .output()
             .unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-        Self(signature::RsaKeyPair::from_pkcs8(&fs::read(path).unwrap()).unwrap())
+        let der = fs::read(path).unwrap();
+        // OpenSSL 4 writes PKCS#8 here; OpenSSL 3.0, as on Ubuntu 24.04, the bare RSAPrivateKey.
+        Self(signature::RsaKeyPair::from_pkcs8(&der).or_else(|_| signature::RsaKeyPair::from_der(&der)).unwrap())
     }
     fn jwks(&self) -> Value {
         let public: signature::RsaPublicKeyComponents<Vec<u8>> = self.0.public().into();
