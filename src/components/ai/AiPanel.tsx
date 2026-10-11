@@ -55,6 +55,8 @@ import { openRecap, undoAction, undoStep, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import { Button, IconButton } from "../ui";
 import { Markdown } from "./Markdown";
+import { ChatGptLogo } from "../ChatGptLogo";
+import { openChatGpt } from "../../lib/chatgpt";
 import { moveFloatBy, startMove } from "./AiDock";
 
 const INSTALL: Record<AgentId, string> = {
@@ -228,6 +230,15 @@ function AgentMenu() {
             </MenuItem>
           ))}
           <div className="mx-1.5 my-1 h-px bg-white/[.08]" />
+          <MenuItem
+            onClick={() => {
+              close();
+              openChatGpt();
+            }}
+          >
+            <ChatGptLogo size={14} className="text-muted" />
+            ChatGPT account…
+          </MenuItem>
           <MenuItem
             onClick={() => {
               close();

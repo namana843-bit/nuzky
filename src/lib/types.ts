@@ -213,6 +213,21 @@ export type CaptionWord = {
   key?: boolean,
 };
 
+export type ChatGptNotice = "ended" | "notRevoked";
+
+/**
+ * What the ChatGPT dialog shows. It never carries a token.
+ */
+export type ChatGptStatus = {
+  "state": "signedOut",
+  email: string | null,
+  notice: ChatGptNotice | null,
+} | {
+  "state": "signedIn",
+  email: string | null,
+  plan: boolean,
+};
+
 export type Clip = {
   id: string,
   startUs: number,

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine", "crates/cli", "src-tauri", "crates/analysis", "crates/session", "crates/mcp", "crates/agent", "crates/vision", "crates/interchange"]
+members = ["crates/engine", "crates/cli", "src-tauri", "crates/analysis", "crates/session", "crates/mcp", "crates/agent", "crates/vision", "crates/interchange", "crates/chatgpt"]
 
 [workspace.package]
 version = "0.1.0-alpha"
@@ -16,6 +16,7 @@ nuzky-agent = { path = "crates/agent" }
 nuzky-analysis = { path = "crates/analysis" }
 nuzky-vision = { path = "crates/vision" }
 nuzky-interchange = { path = "crates/interchange" }
+nuzky-chatgpt = { path = "crates/chatgpt" }
 schemars = "1.2.2"
 ts-rs = "12.0.1"
 nuzky-engine = { path = "crates/engine" }
