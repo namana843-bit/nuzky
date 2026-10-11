@@ -5,6 +5,7 @@
 use nuzky_engine::Project;
 use nuzky_engine::edit::MAIN_TRACK;
 use nuzky_engine::model::{Background, Clip, ClipContent, Crop, ReelStatus, Thumbnail, ThumbnailFormat, TrackKind};
+use nuzky_engine::recap::duration_text;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -91,6 +92,38 @@ fn removed(before: &[(i64, i64)], after: &[(i64, i64)]) -> Vec<(i64, i64)> {
     out
 }
 
+/// What a cut took out of the main track: the lengths, the source passages it removed from each file, and the
+/// files it dropped altogether.
+pub struct Cut {
+    pub before_us: i64,
+    pub after_us: i64,
+    pub passages: HashMap<String, Vec<(i64, i64)>>,
+    pub gone_assets: Vec<String>,
+}
+
+pub fn cut(before: &Project, after: &Project) -> Cut {
+    let (was, now) = (coverage(before), coverage(after));
+    let mut cut = Cut {
+        before_us: before.duration_us(),
+        after_us: after.duration_us(),
+        passages: HashMap::new(),
+        gone_assets: Vec::new(),
+    };
+    for (asset, ranges) in was {
+        match now.get(&asset) {
+            None => cut.gone_assets.push(asset),
+            Some(left) => {
+                let ranges = removed(&ranges, left);
+                if !ranges.is_empty() {
+                    cut.passages.insert(asset, ranges);
+                }
+            }
+        }
+    }
+    cut.gone_assets.sort();
+    cut
+}
+
 /// The clip of the earlier project that a clip of the later one comes from: the same clip, or
 /// the one playing most of the same source (a split piece gets a new id).
 fn origins<'a>(before: &'a Project, after: &'a Project) -> Vec<(&'a Clip, Option<&'a Clip>)> {
@@ -144,34 +177,28 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         |id: &str| after.asset(id).or_else(|| before.asset(id)).map_or("a file".to_owned(), |a| a.name.clone());
 
     // Length.
-    let (was, now) = (before.duration_us(), after.duration_us());
+    let cut = cut(before, after);
+    let (was, now) = (cut.before_us, cut.after_us);
     if (was - now).abs() >= 50_000 {
         let verb = if now < was { "Shortened" } else { "Lengthened" };
         out.push(RunChange {
-            text: format!("{verb} the video from {} to {}", secs(was), secs(now)),
+            text: format!("{verb} the video from {} to {}", duration_text(was), duration_text(now)),
             clip_ids: Vec::new(),
             at_us: None,
         });
     }
 
     // What was cut out of the main track, and takes that left it entirely.
-    let (cov_before, cov_after) = (coverage(before), coverage(after));
-    let mut gone_takes = Vec::new();
-    let mut cut: Vec<(i64, i64)> = Vec::new();
-    for (asset, ranges) in &cov_before {
-        match cov_after.get(asset) {
-            None => gone_takes.push(asset_name(asset)),
-            Some(left) => cut.extend(removed(ranges, left)),
-        }
-    }
-    if !cut.is_empty() {
-        let total: i64 = cut.iter().map(|(a, b)| b - a).sum();
+    let passages: Vec<_> = cut.passages.values().flatten().collect();
+    if !passages.is_empty() {
+        let total: i64 = passages.iter().map(|(a, b)| b - a).sum();
         out.push(RunChange {
-            text: format!("Cut out {}, {} in total", count(cut.len(), "passage", "passages"), secs(total)),
+            text: format!("Cut out {}, {} in total", count(passages.len(), "passage", "passages"), secs(total)),
             clip_ids: Vec::new(),
             at_us: None,
         });
     }
+    let mut gone_takes: Vec<_> = cut.gone_assets.iter().map(|id| asset_name(id)).collect();
     gone_takes.sort();
     for name in gone_takes {
         out.push(RunChange { text: format!("Removed {name} from the main track"), clip_ids: Vec::new(), at_us: None });
@@ -358,7 +385,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         out.push(line(format!("Zoomed in on {} ({factor})", count(clips.len(), "place", "places")), &clips));
     }
     // Clips split in two where nothing was cut or zoomed: a new piece of a clip, playing its own part of it.
-    if cut.is_empty() && zoomed.is_empty() {
+    if passages.is_empty() && zoomed.is_empty() {
         let pieces: Vec<&Clip> = pairs
             .iter()
             .filter(|(c, o)| o.is_some_and(|o| o.id != c.id))

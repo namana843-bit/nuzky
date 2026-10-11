@@ -224,7 +224,7 @@ function VersionsButton() {
           keyboard={menu.keyboard}
           items={menu.versions.map((version) => ({
             label: version.label,
-            icon: version.ai ? <Sparkles size={14} /> : undefined,
+            icon: version.runId ? <Sparkles size={14} /> : undefined,
             shortcut: when(version.atMs),
             checked: version.current,
             run: version.current ? undefined : () => void restoreVersion(version),

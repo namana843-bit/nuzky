@@ -774,9 +774,9 @@ export type ProjectVersion = {
    */
   atMs: number,
   /**
-   * Made by an AI agent's run.
+   * The AI agent's run that made it; none for the user's own steps.
    */
-  ai: boolean,
+  runId?: string | null,
   /**
    * The project is this version now; only the newest version with its contents says so.
    */
@@ -784,6 +784,45 @@ export type ProjectVersion = {
 };
 
 export type Quality = "high" | "recommended" | "small";
+
+export type RecapInfo = {
+  totals: RecapTotals,
+  /**
+   * The lengths and what went, written as the run summary writes them.
+   */
+  before: string,
+  after: string,
+  removed?: string | null,
+  /**
+   * Passages cut; a recap has nothing to show without one.
+   */
+  cuts: number,
+  /**
+   * How long the recap is with its end card.
+   */
+  durationUs: number,
+  /**
+   * Files a cut touches that have no transcript.
+   */
+  untranscribed: Array<string>,
+};
+
+/**
+ * What a recap counts, the same numbers the run summary gives.
+ */
+export type RecapTotals = {
+  beforeUs: number,
+  afterUs: number,
+  /**
+   * `None` while a file a cut touches has no transcript.
+   */
+  words: number | null,
+  retakes: number | null,
+  /**
+   * Cuts without a word.
+   */
+  pauses: number | null,
+};
 
 /**
  * A moment an agent proposed as a reel. It is the transcript's words `from` to `to`, inclusive, which played

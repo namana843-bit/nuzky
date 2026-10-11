@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleStop,
+  Clapperboard,
   Crosshair,
   Download,
   ExternalLink,
@@ -48,7 +49,7 @@ import {
 import { DOCK_LABELS, TOO_NARROW, useDock, useDockLayout, type DockMode } from "../../lib/dock";
 import { api } from "../../lib/api";
 import { downloadModels, useCover } from "../../lib/cover";
-import { undoAction, undoStep, useEditor } from "../../lib/store";
+import { openRecap, undoAction, undoStep, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import { Button, IconButton } from "../ui";
 import { Markdown } from "./Markdown";
@@ -373,6 +374,15 @@ function RunCard({ item, index }: { item: Extract<ChatItem, { kind: "run" }>; in
         </ul>
       ) : (
         !item.snap && <p className="text-[12px] text-muted">Nothing in the project changed.</p>
+      )}
+      {item.runId && item.cut && !item.undone && (
+        <Button
+          className="ml-6 h-7 self-start px-2.5 text-[12px]"
+          title="A short vertical video of how this run cut the video"
+          onClick={() => openRecap(item.runId)}
+        >
+          <Clapperboard size={13} /> Export recap…
+        </Button>
       )}
     </div>
   );

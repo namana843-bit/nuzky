@@ -202,7 +202,10 @@ impl Inner {
         fs::remove_file(storage::sidecar(&self.path, ".checkpoint.json")).context("Removing run checkpoint")?;
         let run = self.run.take().context("INVALID_RUN: no open run")?;
         self.requests.clear();
-        self.emit(SessionEvent::RunSummary(crate::summary::summarize(&run.before, &self.editor.project)));
+        self.emit(SessionEvent::RunSummary {
+            run_id: run.info.run_id,
+            changes: crate::summary::summarize(&run.before, &self.editor.project),
+        });
         self.emit(SessionEvent::Run(None));
         Ok(())
     }
