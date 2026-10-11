@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a problem with Nuzky.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This report is public. Never attach a private video or a project you do not want public. A short clip recorded for this report that shows the problem is fine.
+
+        Report security problems privately as [SECURITY.md](https://github.com/tomasmach/nuzky/blob/main/SECURITY.md) describes, using [Report a security problem](https://github.com/tomasmach/nuzky/security/advisories/new), not here.
+  - type: input
+    id: version
+    attributes:
+      label: Nuzky version
+      description: Find it at the bottom of the home screen's sidebar.
+      placeholder: 0.1.0-alpha
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and version
+      placeholder: macOS 15.3, Windows 11, Ubuntu 24.04
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Tell us what happened and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Nuzky and...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: Clip details
+      description: For a problem with a clip, tell us the phone, the app it was recorded in, and the file type if known.
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: >-
+        Report a bug… in Nuzky's Send feedback menu copied them for you; paste them here, or use Copy diagnostics in the same menu.
+        They hold the version, system, graphics and the last lines of Nuzky's log, without folder names, typed text or secrets.
+        Read them before sending. If asked for more, Open logs folder in the same menu shows the full log files.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed anything private from this report and attached no private video.
+          required: true

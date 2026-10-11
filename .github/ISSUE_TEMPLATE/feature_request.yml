@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest something Nuzky should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should Nuzky do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: How would it help?
+      description: Tell us how it would help and what you do today instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Nuzky version
+    validations:
+      required: false
