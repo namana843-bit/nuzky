@@ -126,6 +126,7 @@ fn generate() -> String {
     types.visit::<FontFamilies>();
     types.visit::<crate::jobs::JobEvent>();
     types.visit::<crate::jobs::ExportRequest>();
+    types.visit::<crate::recap::RecapInfo>();
     types.visit::<crate::jobs::SpeechModel>();
     types.visit::<crate::jobs::VisionModels>();
     types.visit::<crate::store::ProjectSummary>();

@@ -53,6 +53,8 @@ interface EditorState {
   /** Files being probed by an import, shown as placeholders until they arrive. */
   importing: { key: number; name: string; kind: Asset["kind"] }[];
   exportOpen: boolean;
+  /** Open the export dialog on Recap, of this AI run or, with null, of everything cut since the import. */
+  exportRecap: { runId: string | null } | null;
   connectOpen: boolean;
   exportJobId: string | null;
   panelTab: PanelTab;
@@ -382,6 +384,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   fileDrag: null,
   importing: [],
   exportOpen: false,
+  exportRecap: null,
   connectOpen: false,
   exportJobId: null,
   panelTab: "media",
@@ -885,6 +888,11 @@ export async function applyZooms(key: string, zooms: { from: number; to: number;
   const text = `Zoomed in on ${zooms.length} sentence${zooms.length === 1 ? "" : "s"}${kept}`;
   useEditor.getState().toast({ kind: "info", text, action: undoAction(done.snapshot) });
   return true;
+}
+
+/** The export dialog on Recap, showing how this AI run, or with null everything since the import, cut the video. */
+export function openRecap(runId: string | null) {
+  useEditor.setState({ exportOpen: true, exportRecap: { runId } });
 }
 
 export function openExport() {

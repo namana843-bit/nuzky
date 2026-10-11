@@ -821,7 +821,9 @@ fn user_autosave_debounces_and_events_follow_commits_with_origins() {
     s.end_run(&run, EndAction::Keep).unwrap();
     assert!(matches!(rx.recv().unwrap(), SessionEvent::Saved { revision: 3, error: None }));
     // What the run changed comes just before the run ends, so the UI can show it with the run.
-    assert!(matches!(rx.recv().unwrap(), SessionEvent::RunSummary(changes) if !changes.is_empty()));
+    assert!(
+        matches!(rx.recv().unwrap(), SessionEvent::RunSummary { run_id, changes } if run_id == run && !changes.is_empty())
+    );
     assert!(matches!(rx.recv().unwrap(), SessionEvent::Run(None)));
     s.undo_run(&run).unwrap();
     assert!(matches!(rx.recv().unwrap(), SessionEvent::Changed { revision: 4, origin: Origin::Undo }));
@@ -1156,4 +1158,51 @@ fn a_linked_versions_file_is_replaced_not_followed() {
     assert_eq!(fs::read(&other).unwrap(), before);
     assert!(fs::symlink_metadata(&file).unwrap().is_file());
     assert_eq!(labels(&f.open()), ["Rename project", "Opened"]);
+}
+
+#[test]
+fn recap_run_pair_keeps_the_beginning_and_end_of_several_batches() {
+    let f = Fixture::new();
+    let s = f.open();
+    s.edit(rename("Before"), None, Expect::default()).unwrap();
+    let before = s.state().unwrap().project;
+    let run = s.begin_run("Cut".into()).unwrap().run_id;
+    apply(&s, &run, "First batch");
+    apply(&s, &run, "Last batch");
+    let after = s.state().unwrap().project;
+    s.end_run(&run, EndAction::Keep).unwrap();
+    assert_eq!(s.run_pair(&run).unwrap(), (before.clone(), after.clone()));
+    s.edit(rename("Later user edit"), None, Expect::default()).unwrap();
+    assert_eq!(s.run_pair(&run).unwrap(), (before.clone(), after.clone()));
+    assert!(s.run_pair("missing").unwrap_err().to_string().starts_with("RUN_UNAVAILABLE:"));
+    drop(s);
+    let readonly = ProjectSession::open(&f.0, Mode::ReadOnly, None).unwrap();
+    assert_eq!(readonly.run_pair(&run).unwrap(), (before, after));
+}
+
+#[test]
+fn recap_kept_main_assets_includes_takes_that_left() {
+    let f = Fixture::new();
+    let s = f.open();
+    let asset: Asset = serde_json::from_value(serde_json::json!({
+        "id": "take", "name": "take", "path": "/take.mp4", "kind": "video",
+        "durationUs": 1_000_000, "width": 1080, "height": 1920, "fps": 30,
+        "hasAudio": true, "rotation": 0, "mirror": false
+    }))
+    .unwrap();
+    s.edit(
+        vec![
+            EditCmd::AddAssets { assets: vec![asset] },
+            EditCmd::AddClip { asset_id: "take".into(), start_us: None, track_id: None },
+        ],
+        None,
+        Expect::default(),
+    )
+    .unwrap();
+    s.edit(vec![EditCmd::RemoveAsset { asset_id: "take".into() }], None, Expect::default()).unwrap();
+    let ids = |assets: Vec<Asset>| assets.into_iter().map(|a| a.id).collect::<Vec<_>>();
+    assert_eq!(ids(s.kept_main_assets().unwrap()), ["take"]);
+    drop(s);
+    let readonly = ProjectSession::open(&f.0, Mode::ReadOnly, None).unwrap();
+    assert_eq!(ids(readonly.kept_main_assets().unwrap()), ["take"]);
 }

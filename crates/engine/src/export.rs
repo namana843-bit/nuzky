@@ -192,6 +192,22 @@ pub fn export(
     if credits.is_some() && !options.replace_credits && credits_out.symlink_metadata().is_ok() {
         bail!("OUTPUT_EXISTS: {} already exists; choose a new export path", credits_out.display());
     }
+    prepare_sound(project, cache_dir, cancel)?;
+    // A clip with a background needs its person outlines made first (`nuzky_vision::matte::prepare`).
+    crate::matte::check(cache_dir, project)?;
+    write_beside(out, options.replace_existing, cancel, |tmp| {
+        encode(project, cache_dir, tmp, options, cancel, &mut progress, duration)
+    })?;
+    match credits {
+        Some(text) => write_credits(&text, &credits_out, options.replace_credits).with_context(|| {
+            format!("The video is saved, but its credits could not be written to {}", credits_out.display())
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Decodes the sound of every file heard in `project` into the cache, cleaned where a clip of it cleans the voice.
+pub(crate) fn prepare_sound(project: &Project, cache_dir: &Path, cancel: &AtomicBool) -> Result<()> {
     // Each heard file, and whether a clip of it cleans the voice: the file then has the cleaned sound.
     let mut heard = std::collections::HashMap::<&str, bool>::new();
     for clip in heard_clips(project) {
@@ -207,9 +223,17 @@ pub fn export(
             ensure_pcm(cache_dir, asset, |_| check_cancel(cancel))?;
         }
     }
-    // A clip with a background needs its person outlines made first (`nuzky_vision::matte::prepare`).
-    crate::matte::check(cache_dir, project)?;
-    // Reserve beside the destination so rename stays on the same filesystem.
+    Ok(())
+}
+
+/// Writes `out` through a temporary `.nuzky-part-*` file beside it, so rename stays on the same filesystem and
+/// nothing half written ever has its name.
+pub(crate) fn write_beside(
+    out: &Path,
+    replace_existing: bool,
+    cancel: &AtomicBool,
+    write: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
     let tmp = loop {
         let path = out.with_file_name(format!(".nuzky-part-{}.mp4", uuid::Uuid::new_v4()));
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -218,21 +242,14 @@ pub fn export(
             Err(e) => return Err(e).context("Cannot reserve temporary export file"),
         }
     };
-    let result = encode(project, cache_dir, &tmp, options, cancel, &mut progress, duration)
-        .and_then(|()| publish(&tmp, out, options.replace_existing, cancel));
+    let result = write(&tmp).and_then(|()| publish(&tmp, out, replace_existing, cancel));
     if result.is_err() {
         // Report why the export failed, not a secondary cleanup problem.
         if let Err(e) = std::fs::remove_file(&tmp) {
             log::warn!("Cannot remove temporary export {}: {e}", tmp.display());
         }
     }
-    result?;
-    match credits {
-        Some(text) => write_credits(&text, &credits_out, options.replace_credits).with_context(|| {
-            format!("The video is saved, but its credits could not be written to {}", credits_out.display())
-        }),
-        None => Ok(()),
-    }
+    result
 }
 
 /// Media clips whose sound is in the export: on a heard track, above zero volume, inside the timeline.
@@ -248,7 +265,7 @@ pub fn heard_clips(project: &Project) -> impl Iterator<Item = &Clip> {
 }
 
 /// Through a temporary file beside it, like the video.
-fn write_credits(text: &str, out: &Path, replace_existing: bool) -> Result<()> {
+pub(crate) fn write_credits(text: &str, out: &Path, replace_existing: bool) -> Result<()> {
     let tmp = out.with_file_name(format!(".nuzky-part-{}.txt", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, text).with_context(|| format!("Cannot write {}", tmp.display()))?;
     let result = publish(&tmp, out, replace_existing, &AtomicBool::new(false));
@@ -258,7 +275,7 @@ fn write_credits(text: &str, out: &Path, replace_existing: bool) -> Result<()> {
     result
 }
 
-fn check_cancel(cancel: &AtomicBool) -> Result<()> {
+pub(crate) fn check_cancel(cancel: &AtomicBool) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
         bail!("CANCELLED: export cancelled");
     }
@@ -385,7 +402,7 @@ pub fn frame_time_us(index: u64, fps: u32) -> i64 {
 }
 
 /// Number of frames that start before `duration_us`.
-fn frame_count(duration_us: i64, fps: u32) -> u64 {
+pub(crate) fn frame_count(duration_us: i64, fps: u32) -> u64 {
     if duration_us <= 0 {
         return 0;
     }
@@ -438,118 +455,21 @@ fn encode(
         }
         None => Sound::Mix(Box::new(Mixer::new(cache_dir.to_path_buf()))),
     };
-
-    let mut octx = ff::format::output(out).with_context(|| format!("Cannot create {}", out.display()))?;
-    let global_header = octx.format().flags().contains(ff::format::Flags::GLOBAL_HEADER);
-    let mut venc = ff::codec::context::Context::new_with_codec(vcodec).encoder().video()?;
-    venc.set_width(w);
-    venc.set_height(h);
-    venc.set_format(Pixel::YUV420P);
-    venc.set_time_base((1, fps as i32));
-    venc.set_frame_rate(Some((fps as i32, 1)));
-    venc.set_colorspace(color::Space::BT709);
-    venc.set_color_range(color::Range::MPEG);
-    unsafe {
-        let ctx = venc.as_mut_ptr();
-        (*ctx).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
-        (*ctx).color_trc = ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
-    }
-    if global_header {
-        venc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
-    }
-    let mut vopts = ff::Dictionary::new();
-    if delivery.is_some() {
-        // A delivery preset keeps the app's speed: veryfast writes High, which the profile pins.
-        vopts.set("preset", "veryfast");
-        vopts.set("profile", "high");
-    } else {
-        vopts.set("preset", &options.preset);
-    }
-    vopts.set("crf", &options.crf.to_string());
-    let mut venc = venc.open_with(vopts).context("Opening the H.264 encoder failed")?;
-    let vindex = {
-        let mut st = octx.add_stream(vcodec)?;
-        st.set_parameters(&venc);
-        st.set_time_base((1, fps as i32));
-        st.index()
+    // A delivery preset keeps the app's speed: veryfast writes High, which the profile pins.
+    let x264 = match delivery {
+        Some(_) => [("preset", "veryfast"), ("profile", "high")],
+        None => [("preset", options.preset.as_str()), ("", "")],
     };
-
-    // The native AAC encoder; libfdk_aac is not GPL compatible.
-    let acodec = ff::encoder::find_by_name("aac").ok_or_else(|| anyhow!("No AAC encoder available"))?;
-    let mut aenc = ff::codec::context::Context::new_with_codec(acodec).encoder().audio()?;
-    aenc.set_rate(SAMPLE_RATE as i32);
-    aenc.set_channel_layout(ff::ChannelLayout::STEREO);
-    aenc.set_format(ff::format::Sample::F32(ff::format::sample::Type::Planar));
-    aenc.set_bit_rate(192_000);
-    aenc.set_time_base((1, SAMPLE_RATE as i32));
-    if global_header {
-        aenc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
-    }
-    let mut aenc = aenc.open_with(ff::Dictionary::new()).context("Opening the AAC encoder failed")?;
-    let aframe_size = (aenc.frame_size() as usize).max(1024);
-    let aindex = {
-        let mut st = octx.add_stream(acodec)?;
-        st.set_parameters(&aenc);
-        st.set_time_base((1, SAMPLE_RATE as i32));
-        st.index()
-    };
-
-    let mut header_opts = ff::Dictionary::new();
-    header_opts.set("movflags", "+faststart");
-    octx.write_header_with(header_opts)?;
-    let vtb = octx.stream(vindex).unwrap().time_base();
-    let atb = octx.stream(aindex).unwrap().time_base();
-
-    let mut scaler = scaling::Context::get(Pixel::RGBA, w, h, Pixel::YUV420P, w, h, scaling::Flags::BICUBIC)?;
-    set_sws_colorspace(&mut scaler, ff::ffi::SWS_CS_DEFAULT, true, ff::ffi::SWS_CS_ITU709, false);
-    let mut rgba = frame::Video::new(Pixel::RGBA, w, h);
-    let mut yuv = frame::Video::new(Pixel::YUV420P, w, h);
-    let mut audio_pos: i64 = 0;
-    let mut mix = vec![0f32; aframe_size * CHANNELS];
-
-    let drain = |enc: &mut ff::encoder::Encoder,
-                 index: usize,
-                 from: ff::Rational,
-                 to: ff::Rational,
-                 octx: &mut ff::format::context::Output|
-     -> Result<()> {
-        let mut packet = ff::Packet::empty();
-        while enc.receive_packet(&mut packet).is_ok() {
-            packet.set_stream(index);
-            if index == vindex {
-                packet.set_duration(1);
-            }
-            packet.rescale_ts(from, to);
-            packet.write_interleaved(octx)?;
-        }
-        Ok(())
-    };
-
+    let mut mp4 = Mp4Writer::create(out, vcodec, w, h, fps, options.crf, &x264)?;
     for i in 0..total_frames {
         if cancel.load(Ordering::Relaxed) {
             bail!("CANCELLED: export cancelled");
         }
-        let t = frame_time_us(i, fps);
-        let pixels = renderer.render(project, t, w, h, Wait::Exact, true)?;
-        let stride = rgba.stride(0);
-        let row = w as usize * 4;
-        let dst = rgba.data_mut(0);
-        for y in 0..h as usize {
-            dst[y * stride..y * stride + row].copy_from_slice(&pixels[y * row..(y + 1) * row]);
-        }
-        scaler.run(&rgba, &mut yuv)?;
-        yuv.set_pts(Some(i as i64));
-        venc.send_frame(&yuv)?;
-        drain(&mut venc, vindex, (1, fps as i32).into(), vtb, &mut octx)?;
-
+        let pixels = renderer.render(project, frame_time_us(i, fps), w, h, Wait::Exact, true)?;
+        mp4.frame(i, &pixels)?;
         // Keep audio up to the end of this video frame.
         let audio_until = crate::audio::us_to_samples(frame_time_us(i + 1, fps)).min(total_samples);
-        while audio_pos < audio_until {
-            sound.fill(project, audio_pos, &mut mix);
-            encode_audio(&mut aenc, audio_pos, &mix, aframe_size)?;
-            audio_pos += aframe_size as i64;
-            drain(&mut aenc, aindex, (1, SAMPLE_RATE as i32).into(), atb, &mut octx)?;
-        }
+        mp4.sound_until(audio_until, |pos, mix| sound.fill(project, pos, mix))?;
         progress(ExportProgress {
             phase: ExportPhase::Rendering,
             frame: i + 1,
@@ -557,13 +477,171 @@ fn encode(
             fraction: render_start + (1.0 - render_start) * (i + 1) as f32 / total_frames.max(1) as f32,
         });
     }
+    mp4.finish()
+}
 
-    venc.send_eof()?;
-    drain(&mut venc, vindex, (1, fps as i32).into(), vtb, &mut octx)?;
-    aenc.send_eof()?;
-    drain(&mut aenc, aindex, (1, SAMPLE_RATE as i32).into(), atb, &mut octx)?;
-    octx.write_trailer()?;
-    Ok(())
+/// An MP4 of H.264 video and AAC sound at 48 kHz stereo, written a frame at a time.
+pub(crate) struct Mp4Writer {
+    octx: ff::format::context::Output,
+    venc: ff::encoder::Video,
+    aenc: ff::encoder::Audio,
+    vindex: usize,
+    aindex: usize,
+    fps: u32,
+    w: u32,
+    h: u32,
+    scaler: scaling::Context,
+    rgba: frame::Video,
+    yuv: frame::Video,
+    aframe_size: usize,
+    /// The next audio sample to write.
+    audio_pos: i64,
+    mix: Vec<f32>,
+}
+
+impl Mp4Writer {
+    /// `x264` are encoder options; an empty name is skipped.
+    pub(crate) fn create(
+        out: &Path,
+        vcodec: ff::Codec,
+        w: u32,
+        h: u32,
+        fps: u32,
+        crf: u8,
+        x264: &[(&str, &str)],
+    ) -> Result<Self> {
+        let mut octx = ff::format::output(out).with_context(|| format!("Cannot create {}", out.display()))?;
+        let global_header = octx.format().flags().contains(ff::format::Flags::GLOBAL_HEADER);
+        let mut venc = ff::codec::context::Context::new_with_codec(vcodec).encoder().video()?;
+        venc.set_width(w);
+        venc.set_height(h);
+        venc.set_format(Pixel::YUV420P);
+        venc.set_time_base((1, fps as i32));
+        venc.set_frame_rate(Some((fps as i32, 1)));
+        venc.set_colorspace(color::Space::BT709);
+        venc.set_color_range(color::Range::MPEG);
+        unsafe {
+            let ctx = venc.as_mut_ptr();
+            (*ctx).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+            (*ctx).color_trc = ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709;
+        }
+        if global_header {
+            venc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
+        }
+        let mut vopts = ff::Dictionary::new();
+        for (name, value) in x264.iter().filter(|(name, _)| !name.is_empty()) {
+            vopts.set(name, value);
+        }
+        vopts.set("crf", &crf.to_string());
+        let venc = venc.open_with(vopts).context("Opening the H.264 encoder failed")?;
+        let vindex = {
+            let mut st = octx.add_stream(vcodec)?;
+            st.set_parameters(&venc);
+            st.set_time_base((1, fps as i32));
+            st.index()
+        };
+
+        // The native AAC encoder; libfdk_aac is not GPL compatible.
+        let acodec = ff::encoder::find_by_name("aac").ok_or_else(|| anyhow!("No AAC encoder available"))?;
+        let mut aenc = ff::codec::context::Context::new_with_codec(acodec).encoder().audio()?;
+        aenc.set_rate(SAMPLE_RATE as i32);
+        aenc.set_channel_layout(ff::ChannelLayout::STEREO);
+        aenc.set_format(ff::format::Sample::F32(ff::format::sample::Type::Planar));
+        aenc.set_bit_rate(192_000);
+        aenc.set_time_base((1, SAMPLE_RATE as i32));
+        if global_header {
+            aenc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
+        }
+        let aenc = aenc.open_with(ff::Dictionary::new()).context("Opening the AAC encoder failed")?;
+        let aframe_size = (aenc.frame_size() as usize).max(1024);
+        let aindex = {
+            let mut st = octx.add_stream(acodec)?;
+            st.set_parameters(&aenc);
+            st.set_time_base((1, SAMPLE_RATE as i32));
+            st.index()
+        };
+
+        let mut header_opts = ff::Dictionary::new();
+        header_opts.set("movflags", "+faststart");
+        octx.write_header_with(header_opts)?;
+
+        let mut scaler = scaling::Context::get(Pixel::RGBA, w, h, Pixel::YUV420P, w, h, scaling::Flags::BICUBIC)?;
+        set_sws_colorspace(&mut scaler, ff::ffi::SWS_CS_DEFAULT, true, ff::ffi::SWS_CS_ITU709, false);
+        Ok(Self {
+            octx,
+            venc,
+            aenc,
+            vindex,
+            aindex,
+            fps,
+            w,
+            h,
+            scaler,
+            rgba: frame::Video::new(Pixel::RGBA, w, h),
+            yuv: frame::Video::new(Pixel::YUV420P, w, h),
+            aframe_size,
+            audio_pos: 0,
+            mix: vec![0f32; aframe_size * CHANNELS],
+        })
+    }
+
+    /// Frame `index`: straight RGBA, `w` × `h`, rows without padding.
+    pub(crate) fn frame(&mut self, index: u64, pixels: &[u8]) -> Result<()> {
+        let stride = self.rgba.stride(0);
+        let row = self.w as usize * 4;
+        let dst = self.rgba.data_mut(0);
+        for y in 0..self.h as usize {
+            dst[y * stride..y * stride + row].copy_from_slice(&pixels[y * row..(y + 1) * row]);
+        }
+        self.scaler.run(&self.rgba, &mut self.yuv)?;
+        self.yuv.set_pts(Some(index as i64));
+        self.venc.send_frame(&self.yuv)?;
+        self.drain_video()
+    }
+
+    /// Writes sound up to sample `until` in whole AAC frames; `fill` mixes the frame starting at a sample, each
+    /// call continuing where the last ended.
+    pub(crate) fn sound_until(&mut self, until: i64, mut fill: impl FnMut(i64, &mut [f32])) -> Result<()> {
+        while self.audio_pos < until {
+            fill(self.audio_pos, &mut self.mix);
+            encode_audio(&mut self.aenc, self.audio_pos, &self.mix, self.aframe_size)?;
+            self.audio_pos += self.aframe_size as i64;
+            self.drain_audio()?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<()> {
+        self.venc.send_eof()?;
+        self.drain_video()?;
+        self.aenc.send_eof()?;
+        self.drain_audio()?;
+        self.octx.write_trailer()?;
+        Ok(())
+    }
+
+    fn drain_video(&mut self) -> Result<()> {
+        let to = self.octx.stream(self.vindex).unwrap().time_base();
+        let mut packet = ff::Packet::empty();
+        while self.venc.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(self.vindex);
+            packet.set_duration(1);
+            packet.rescale_ts((1, self.fps as i32), to);
+            packet.write_interleaved(&mut self.octx)?;
+        }
+        Ok(())
+    }
+
+    fn drain_audio(&mut self) -> Result<()> {
+        let to = self.octx.stream(self.aindex).unwrap().time_base();
+        let mut packet = ff::Packet::empty();
+        while self.aenc.receive_packet(&mut packet).is_ok() {
+            packet.set_stream(self.aindex);
+            packet.rescale_ts((1, SAMPLE_RATE as i32), to);
+            packet.write_interleaved(&mut self.octx)?;
+        }
+        Ok(())
+    }
 }
 
 /// Ceiling in dBTP the limiter holds the levelled mix under. The AAC encoder adds peaks of its

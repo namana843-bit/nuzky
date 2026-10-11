@@ -411,6 +411,56 @@ impl ProjectSession {
         inner.history.run_versions()
     }
 
+    /// The project just before an AI run and as the run left it, from the kept versions.
+    pub fn run_pair(&self, run_id: &str) -> Result<(Project, Project)> {
+        let versions = {
+            let inner = self.inner.lock().unwrap();
+            let disk =
+                (inner.mode == Mode::ReadOnly).then(|| History::load(&storage::sidecar(&inner.path, HISTORY_SUFFIX)));
+            let history = disk.as_ref().unwrap_or(&inner.history);
+            let first = history.versions.iter().position(|v| v.run_id.as_deref() == Some(run_id));
+            let last = history.versions.iter().rposition(|v| v.run_id.as_deref() == Some(run_id));
+            let before = first.and_then(|i| i.checked_sub(1));
+            match (before, last) {
+                (Some(before), Some(after)) => {
+                    (history.versions[before].json.clone(), history.versions[after].json.clone())
+                }
+                _ => anyhow::bail!("RUN_UNAVAILABLE: the run or its before-project is no longer kept"),
+            }
+        };
+        let read = |json: &str| serde_json::from_str(json).context("RUN_UNAVAILABLE: the run's project cannot be read");
+        Ok((read(&versions.0)?, read(&versions.1)?))
+    }
+
+    /// The files the main track plays in any kept version, in the order they first appear and as the newest of
+    /// those versions describes them, so a take dropped since the import, even from the library, is still known.
+    pub fn kept_main_assets(&self) -> Result<Vec<nuzky_engine::model::Asset>> {
+        let versions: Vec<_> = {
+            let inner = self.inner.lock().unwrap();
+            let disk =
+                (inner.mode == Mode::ReadOnly).then(|| History::load(&storage::sidecar(&inner.path, HISTORY_SUFFIX)));
+            let history = disk.as_ref().unwrap_or(&inner.history);
+            history.versions.iter().map(|v| v.json.clone()).collect()
+        };
+        let mut assets: Vec<nuzky_engine::model::Asset> = Vec::new();
+        for json in versions {
+            let project: Project =
+                serde_json::from_str(&json).context("HISTORY_CORRUPT: a kept project cannot be read")?;
+            for clip in project.tracks.iter().filter(|t| t.id == nuzky_engine::edit::MAIN_TRACK).flat_map(|t| &t.clips)
+            {
+                if let nuzky_engine::model::ClipContent::Media { asset_id, .. } = &clip.content
+                    && let Some(asset) = project.asset(asset_id)
+                {
+                    match assets.iter_mut().find(|a| a.id == asset.id) {
+                        Some(known) => *known = asset.clone(),
+                        None => assets.push(asset.clone()),
+                    }
+                }
+            }
+        }
+        Ok(assets)
+    }
+
     /// Restores a kept version as a new undo step. The project as it was stays a version too.
     pub fn undo_to(&self, target: Target) -> Result<Restored> {
         let mut inner = self.inner.lock().unwrap();

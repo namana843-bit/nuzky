@@ -7,6 +7,7 @@ mod engine;
 mod jobs;
 mod library;
 mod preview_server;
+mod recap;
 mod reels;
 mod sounds;
 mod store;
@@ -286,8 +287,48 @@ impl OpenSession {
                     SessionEvent::Saved { revision, error } => {
                         app.emit("saved", store::SavedEvent { revision, error }).ok();
                     }
-                    SessionEvent::RunSummary(changes) => {
-                        app.emit("run-summary", changes).ok();
+                    SessionEvent::RunSummary { run_id, changes } => {
+                        app.emit(
+                            "run-summary",
+                            serde_json::json!({ "runId": run_id, "changes": changes, "cut": false }),
+                        )
+                        .ok();
+                        // What the cut removed reads the history and the transcripts, so it follows a moment later,
+                        // never holding up the end of the run.
+                        let (host, app) = (current.host.clone(), app.clone());
+                        std::thread::spawn(move || {
+                            let recap = host
+                                .session
+                                .run_pair(&run_id)
+                                .and_then(|(before, after)| nuzky_mcp::recap::recap(before, after, &host.transcripts));
+                            let (recap, _) = match recap {
+                                Ok(recap) => recap,
+                                Err(error) => return log::warn!("Cannot count what run {run_id} cut: {error:#}"),
+                            };
+                            let mut changes = changes;
+                            if let Some(text) = nuzky_mcp::recap::line(&recap.totals()) {
+                                let after = |prefixes: &[&str]| {
+                                    changes.iter().position(|c| prefixes.iter().any(|p| c.text.starts_with(p)))
+                                };
+                                let at = after(&["Cut out "])
+                                    .or_else(|| after(&["Shortened the video ", "Lengthened the video "]))
+                                    .map_or(0, |i| i + 1);
+                                changes.insert(
+                                    at,
+                                    nuzky_session::summary::RunChange { text, clip_ids: Vec::new(), at_us: None },
+                                );
+                            }
+                            let cut = !recap.cuts.is_empty();
+                            // Another project opened meanwhile has its own runs.
+                            if !Arc::ptr_eq(&host, &app.state::<AppState>().session.lock().unwrap().host) {
+                                return;
+                            }
+                            app.emit(
+                                "run-summary",
+                                serde_json::json!({ "runId": run_id, "changes": changes, "cut": cut }),
+                            )
+                            .ok();
+                        });
                     }
                     SessionEvent::Run(run) => {
                         app.emit("run-changed", run.map(|run| run.label)).ok();
@@ -481,8 +522,9 @@ pub struct ProjectVersion {
     label: String,
     /// Unix time in milliseconds.
     at_ms: u64,
-    /// Made by an AI agent's run.
-    ai: bool,
+    /// The AI agent's run that made it; none for the user's own steps.
+    #[cfg_attr(test, ts(optional = nullable))]
+    run_id: Option<String>,
     /// The project is this version now; only the newest version with its contents says so.
     current: bool,
 }
@@ -503,7 +545,7 @@ fn list_versions(state: State<'_, AppState>, limit: usize) -> CmdResult<Vec<Proj
                 index: version.index,
                 label: version.label,
                 at_ms: version.at_ms,
-                ai: version.run_id.is_some(),
+                run_id: version.run_id,
                 current,
             }
         })
@@ -1042,6 +1084,8 @@ pub fn run() {
             library::restore_collection,
             library::set_collection,
             start_export,
+            recap::recap_info,
+            recap::start_recap,
             filmstrip,
             layer_bounds,
             cancel_job,

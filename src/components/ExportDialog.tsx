@@ -10,8 +10,8 @@ import { currentEpoch, projectDuration, useEditor } from "../lib/store";
 import { CoverExport } from "./cover/CoverExport";
 import { FormatShape } from "./home/Home";
 import { US, formatTime } from "../lib/time";
-import type { Canvas, Delivery, ExportRequest } from "../lib/types";
-import { Button, IconButton, Menu, type MenuEntry, ProgressBar, Segmented, trapTab } from "./ui";
+import type { Canvas, Delivery, ExportRequest, RecapInfo } from "../lib/types";
+import { Button, Checkbox, IconButton, Menu, type MenuEntry, ProgressBar, Segmented, trapTab } from "./ui";
 
 const RESOLUTIONS = [
   { id: 720, label: "720p" },
@@ -27,6 +27,8 @@ const QUALITIES: { id: ExportRequest["quality"]; label: string; bitsPerPixel: nu
 ];
 const AUDIO_BPS = 192_000;
 const STORAGE_KEY = "nuzky.export";
+/** "off" when the recap ends without its nuzky.app card. */
+const RECAP_END_CARD_KEY = "nuzky.recap.endCard";
 /**
  * What each preset fixes, as `Delivery` in the engine's export.rs, which refuses anything else with it. `fps: null`
  * keeps the frame rate free, starting from the project's: YouTube wants the rate the video was shot at.
@@ -101,8 +103,17 @@ export function ExportDialog() {
   const jobId = useEditor((s) => s.exportJobId);
   const job = useEditor((s) => (s.exportJobId ? s.jobs[s.exportJobId] : undefined));
   const [options, setOptions] = useState<ExportRequest | null>(null);
-  /** The video, or the cover: in the cover editor the dialog opens on the cover. */
-  const [what, setWhat] = useState<"video" | "cover">("video");
+  /** The video, the cover or a recap: in the cover editor the dialog opens on the cover. */
+  const [what, setWhat] = useState<"video" | "cover" | "recap">("video");
+  const askedRecap = useEditor((s) => s.exportRecap);
+  /** The AI run the recap shows, or null for everything cut since the import. */
+  const [recapRun, setRecapRun] = useState<string | null>(null);
+  const [recap, setRecap] = useState<{ info: RecapInfo | null; error: string | null }>({ info: null, error: null });
+  const [endCard, setEndCard] = useState(() => localStorage.getItem(RECAP_END_CARD_KEY) !== "off");
+  /** AI runs kept in the project's versions, newest first, for Shows. */
+  const [runs, setRuns] = useState<{ runId: string; label: string; atMs: number }[]>([]);
+  const [runMenu, setRunMenu] = useState<{ x: number; y: number; width: number; keyboard: boolean } | null>(null);
+  const runButton = useRef<HTMLButtonElement>(null);
   /** What the Cover side would write, for the line under the title. */
   const [coverFacts, setCoverFacts] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -123,6 +134,43 @@ export function ExportDialog() {
     if (open && canvas) setOptions(loadOptions(canvas));
     if (open) setWhat(useCover.getState().open ? "cover" : "video");
   }, [open]);
+
+  // A run card's Export recap opens the dialog on the recap of its run.
+  useEffect(() => {
+    if (!open || !askedRecap) return;
+    setWhat("recap");
+    setRecapRun(askedRecap.runId);
+    useEditor.setState({ exportRecap: null });
+  }, [open, askedRecap]);
+
+  useEffect(() => {
+    if (!open || what !== "recap") return;
+    let live = true;
+    setRecap({ info: null, error: null });
+    api.recapInfo(recapRun, currentEpoch()).then(
+      (info) => live && setRecap({ info, error: null }),
+      (e) => live && setRecap({ info: null, error: errorText(e) }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [open, what, recapRun]);
+
+  useEffect(() => {
+    if (!open || what !== "recap") return;
+    let live = true;
+    api.listVersions(200).then(
+      (versions) => {
+        const seen = new Set<string>();
+        const found = versions.flatMap((v) => (v.runId && !seen.has(v.runId) && seen.add(v.runId) ? [{ runId: v.runId, label: v.label, atMs: v.atMs }] : []));
+        if (live) setRuns(found.slice(0, 8));
+      },
+      () => live && setRuns([]),
+    );
+    return () => {
+      live = false;
+    };
+  }, [open, what]);
 
   const close = () => {
     setError(null);
@@ -148,8 +196,8 @@ export function ExportDialog() {
     if (!open) return;
     // Esc closes the dialog; while an export runs, Cancel export and Keep editing say what happens to it.
     const onKey = (e: KeyboardEvent) => {
-      // The preset menu closes on its own Esc, and the dialog stays.
-      if (e.key !== "Escape" || presetMenu) return;
+      // The preset and run menus close on their own Esc, and the dialog stays.
+      if (e.key !== "Escape" || presetMenu || runMenu) return;
       e.stopPropagation();
       if (!running || what === "cover") close();
     };
@@ -209,7 +257,9 @@ export function ExportDialog() {
     last.current = { path, replace, credits };
     try {
       startedAt.current = Date.now();
-      useEditor.setState({ exportJobId: await api.startExport(path, options, epoch, replace, credits) });
+      const job =
+        what === "recap" ? await api.startRecap(path, recapRun, endCard, epoch, replace) : await api.startExport(path, options, epoch, replace, credits);
+      useEditor.setState({ exportJobId: job });
     } catch (e) {
       const text = errorText(e);
       if (text.startsWith("DESTINATION_EXISTS")) setExists(path);
@@ -221,7 +271,7 @@ export function ExportDialog() {
   const pickAndRun = async () => {
     const epoch = currentEpoch();
     const safe = project.name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "Nuzky export";
-    let defaultPath = `${safe}.mp4`;
+    let defaultPath = what === "recap" ? `${safe} recap.mp4` : `${safe}.mp4`;
     try {
       defaultPath = await join(await videoDir(), defaultPath);
     } catch {
@@ -242,6 +292,25 @@ export function ExportDialog() {
   })();
   const failed = asking ? null : (error ?? jobFailed);
   const settingsLocked = running || job?.status === "done";
+  const info = recap.info;
+  const recapBlocked =
+    what !== "recap"
+      ? null
+      : !info
+        ? recap.error
+          ? "This recap cannot be made."
+          : "Counting what was cut…"
+        : info.cuts === 0
+          ? "Nothing was cut out, so a recap has nothing to show."
+          : null;
+  const exportBlocked = what === "recap" ? recapBlocked : blocked;
+  const runLabel = (r: { label: string; atMs: number }) =>
+    `${r.label} · ${new Date(r.atMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  const shownRun = runs.find((r) => r.runId === recapRun);
+  const runItems: MenuEntry[] = [
+    { label: "Everything cut since import", checked: recapRun === null, run: () => setRecapRun(null) },
+    ...group(runs.map((r) => ({ label: runLabel(r), checked: recapRun === r.runId, run: () => setRecapRun(r.runId) }))),
+  ];
 
   return (
     <div
@@ -260,10 +329,14 @@ export function ExportDialog() {
         <div className="mb-5 flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
             <h2 id="export-title" className="text-[17px] font-semibold leading-[22px] tracking-[-0.025em]">
-              {what === "video" ? "Export video" : "Export cover"}
+              {what === "video" ? "Export video" : what === "recap" ? "Export recap" : "Export cover"}
             </h2>
             <p className="tabular text-[12px] text-muted">
-              {what === "video" ? `MP4 · H.264 + AAC · ${formatLabel(project.canvas.width, project.canvas.height)} · ${formatTime(duration)}` : coverFacts}
+              {what === "video"
+                ? `MP4 · H.264 + AAC · ${formatLabel(project.canvas.width, project.canvas.height)} · ${formatTime(duration)}`
+                : what === "recap"
+                  ? "MP4 · H.264 + AAC · 9:16"
+                  : coverFacts}
             </p>
           </div>
           <IconButton label={running ? "Hide (export keeps running)" : "Close"} round className="-mr-2 -mt-1" onClick={close}>
@@ -280,6 +353,7 @@ export function ExportDialog() {
             options={[
               { id: "video", label: "Video" },
               { id: "cover", label: "Cover" },
+              { id: "recap", label: "Recap", title: "A short vertical video of how the video was cut" },
             ]}
           />
         </div>
@@ -289,6 +363,79 @@ export function ExportDialog() {
         ) : (
         <>
         <div className="flex flex-col gap-4">
+          {what === "recap" ? (
+            <fieldset disabled={settingsLocked} className="min-w-0 disabled:opacity-50">
+              <div className="grid grid-cols-[104px_minmax(0,1fr)] items-center gap-x-3.5 gap-y-3">
+                <span className="text-right text-[13px] text-muted">Shows</span>
+                <button
+                  ref={runButton}
+                  type="button"
+                  data-menu
+                  aria-haspopup="menu"
+                  aria-expanded={!!runMenu}
+                  aria-label={`Shows: ${shownRun ? runLabel(shownRun) : recapRun ? "An AI run" : "Everything cut since import"}`}
+                  onClick={(e) => {
+                    const box = e.currentTarget.getBoundingClientRect();
+                    setRunMenu(runMenu ? null : { x: box.left, y: box.bottom + 4, width: box.width, keyboard: e.detail === 0 });
+                  }}
+                  className="flex h-8 min-w-0 items-center gap-2 rounded-lg bg-white/[.09] px-2.5 text-left text-[13px] text-fg shadow-[inset_0_0_0_1px_rgb(255_255_255/.06),inset_0_1px_0_rgb(255_255_255/.06)] transition-colors duration-[120ms] ease-out enabled:hover:bg-white/[.13]"
+                >
+                  <span className="min-w-0 flex-1 truncate">{shownRun ? runLabel(shownRun) : recapRun ? "An AI run" : "Everything cut since import"}</span>
+                  <ChevronDown size={14} className="shrink-0 text-muted" />
+                </button>
+                {runMenu && (
+                  <Menu
+                    items={runItems}
+                    label="Shows"
+                    at={runMenu}
+                    keyboard={runMenu.keyboard}
+                    minWidth={runMenu.width}
+                    onClose={() => {
+                      setRunMenu(null);
+                      runButton.current?.focus();
+                    }}
+                  />
+                )}
+                <span className="text-right text-[13px] text-muted">Result</span>
+                <p className="tabular min-w-0 text-[13px] text-fg" aria-live="polite">
+                  {info?.cuts === 0 ? (
+                    <span className="text-muted">{recapRun ? "Nothing was cut in this run" : "Nothing was cut since the import"}</span>
+                  ) : info ? (
+                    <>
+                      <span className="text-muted">{info.before} →</span> {info.after}
+                      {info.removed && <span className="text-muted"> · {info.removed}</span>}
+                    </>
+                  ) : recap.error ? (
+                    <span className="text-muted">Unavailable</span>
+                  ) : (
+                    <span className="text-muted">Counting…</span>
+                  )}
+                </p>
+                {recap.error && (
+                  <p className="col-start-2 -mt-1 flex items-start gap-1.5 text-[12px] text-fg" role="alert">
+                    <AlertCircle size={14} className="mt-px shrink-0 text-danger" />
+                    {plainError(recap.error)}
+                  </p>
+                )}
+                {info && info.untranscribed.length > 0 && (
+                  <p className="col-start-2 -mt-1 flex items-start gap-1.5 text-[12px] text-fg">
+                    <AlertTriangle size={14} className="mt-px shrink-0 text-warn" />
+                    {info.untranscribed.join(", ")} {info.untranscribed.length === 1 ? "has" : "have"} no transcript, so the recap shows no words.
+                    Transcribe {info.untranscribed.length === 1 ? "it" : "them"} in the Transcript panel first to include them.
+                  </p>
+                )}
+                <span className="text-right text-[13px] text-muted">End card</span>
+                <Checkbox
+                  label="“Cut in Nuzky · nuzky.app”"
+                  checked={endCard}
+                  onChange={(on) => {
+                    setEndCard(on);
+                    localStorage.setItem(RECAP_END_CARD_KEY, on ? "on" : "off");
+                  }}
+                />
+              </div>
+            </fieldset>
+          ) : (
           <fieldset disabled={settingsLocked} className="min-w-0 disabled:opacity-50">
             <div className="grid grid-cols-[104px_minmax(0,1fr)] items-center gap-x-3.5 gap-y-3">
               <span className="text-right text-[13px] text-muted">Preset</span>
@@ -354,6 +501,7 @@ export function ExportDialog() {
               <Segmented label="Quality" value={options.quality} onChange={(quality) => setOption({ quality })} options={QUALITIES} />
             </div>
           </fieldset>
+          )}
 
           {job && running && (
             <div className="flex flex-col gap-2" role="status">
@@ -389,9 +537,19 @@ export function ExportDialog() {
         </div>
 
         <div className="mt-6 flex items-center justify-between gap-3 border-t border-white/[.08] pt-4">
-          <span className={`tabular min-w-0 text-[13px] text-muted ${settingsLocked ? "opacity-50" : ""}`} title="Estimate; scenes with a lot of motion come out larger">
-            about <span className="font-semibold text-fg">{formatBytes(estimateBytes(size.w, size.h, options.fps, options.quality, duration))}</span>
-          </span>
+          {what === "recap" ? (
+            <span className={`tabular min-w-0 text-[13px] text-muted ${settingsLocked ? "opacity-50" : ""}`}>
+              {info && (
+                <>
+                  <span className="font-semibold text-fg">{(info.durationUs / US).toFixed(1)} s</span> · 1080×1920
+                </>
+              )}
+            </span>
+          ) : (
+            <span className={`tabular min-w-0 text-[13px] text-muted ${settingsLocked ? "opacity-50" : ""}`} title="Estimate; scenes with a lot of motion come out larger">
+              about <span className="font-semibold text-fg">{formatBytes(estimateBytes(size.w, size.h, options.fps, options.quality, duration))}</span>
+            </span>
+          )}
           <div className="flex shrink-0 gap-2.5">
             {running ? (
               <>
@@ -430,11 +588,11 @@ export function ExportDialog() {
                   Close
                 </Button>
                 {failed && last.current ? (
-                  <Button pill variant="primary" data-autofocus disabled={!!blocked} disabledReason={blocked ?? undefined} onClick={() => run(last.current!.path, last.current!.replace, last.current!.credits)}>
+                  <Button pill variant="primary" data-autofocus disabled={!!exportBlocked} disabledReason={exportBlocked ?? undefined} onClick={() => run(last.current!.path, last.current!.replace, last.current!.credits)}>
                     Retry
                   </Button>
                 ) : (
-                  <Button pill variant="primary" data-autofocus disabled={!!blocked} disabledReason={blocked ?? undefined} onClick={pickAndRun}>
+                  <Button pill variant="primary" data-autofocus disabled={!!exportBlocked} disabledReason={exportBlocked ?? undefined} onClick={pickAndRun}>
                     Export…
                   </Button>
                 )}
