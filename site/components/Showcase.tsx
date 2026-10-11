@@ -10,6 +10,7 @@ import { usePlaying } from "@/lib/playing";
 // `side` places the tooltip where it covers nothing the tab is showing. Without it the
 // tooltip goes below the hotspot, or above it in the lower half. A phone has no room for hotspots
 // and shows `view`, the part of the editor the spot talks about, with the text in a card below.
+// Its 16:15 window fits the editor's 740 px height only up to `w` 789.
 type Spot = { x: number; y: number; title: string; text: string; side?: "left" | "right" | "above"; view: FitView };
 type Tab = { id: EditorFocus; label: string; icon: typeof Scissors; summary: string; spots: Spot[] };
 
@@ -21,9 +22,9 @@ const tabs: Tab[] = [
     icon: Scissors,
     summary: "A timeline, a live preview and an inspector, laid out the way you already know.",
     spots: [
-      { x: 500, y: 656, title: "Magnetic timeline", text: "Clips snap together and every cut lands on the exact frame, even in phone video.", view: { x: 440, y: 640, w: 360 } },
-      { x: 306, y: 280, title: "Your media", text: "Drop in video, sound and images. Phone footage opens the right way up.", view: { x: 156, y: 245, w: 320 } },
-      { x: 934, y: 292, title: "Inspector", text: "Scale, opacity, volume and speed, each with a value you can type.", view: { x: 1064, y: 270, w: 300 } },
+      { x: 500, y: 656, title: "Magnetic timeline", text: "Clips snap together and every cut lands on the exact frame, even in phone video.", view: { x: 482, y: 600, w: 331 } },
+      { x: 306, y: 280, title: "Your media", text: "Drop in video, sound and images. Phone footage opens the right way up.", view: { x: 150, y: 219, w: 312 } },
+      { x: 934, y: 292, title: "Inspector", text: "Scale, opacity, volume and speed, each with a value you can type.", view: { x: 1064, y: 226, w: 284 } },
     ],
   },
   {
@@ -32,9 +33,9 @@ const tabs: Tab[] = [
     icon: Captions,
     summary: "Whisper writes the captions on your computer and puts each line on the timeline as a clip.",
     spots: [
-      { x: 680, y: 344, title: "Captions in one click", text: "One click transcribes the speech. The spoken word lights up as it plays.", side: "above", view: { x: 620, y: 280, w: 380 } },
-      { x: 236, y: 573, title: "A clip per line", text: "Fix a word or move a line right on the timeline.", view: { x: 250, y: 650, w: 310 } },
-      { x: 934, y: 482, title: "Caption styles", text: "Bold, Clean or Pop, or make your own.", view: { x: 1064, y: 400, w: 300 } },
+      { x: 680, y: 344, title: "Captions in one click", text: "One click transcribes the speech. The spoken word lights up as it plays.", side: "above", view: { x: 620, y: 258, w: 360 } },
+      { x: 236, y: 573, title: "A clip per line", text: "Fix a word or move a line right on the timeline.", view: { x: 120, y: 640, w: 264 } },
+      { x: 934, y: 482, title: "Caption styles", text: "Bold, Clean or Pop, or make your own.", view: { x: 1064, y: 341, w: 280 } },
     ],
   },
   {
@@ -43,8 +44,8 @@ const tabs: Tab[] = [
     icon: Sparkles,
     summary: "Claude Code or Codex edits the open project while you watch. One undo takes the whole run back.",
     spots: [
-      { x: 854, y: 110, title: "Your agent, in the app", text: "Connect Claude Code or Codex in one click. Any other MCP client works too.", side: "left", view: { x: 1024, y: 250, w: 350 } },
-      { x: 854, y: 428, title: "One undo", text: "Every change the agent made goes back in one step.", side: "left", view: { x: 1024, y: 420, w: 350 } },
+      { x: 854, y: 110, title: "Your agent, in the app", text: "Connect Claude Code or Codex in one click. Any other MCP client works too.", side: "left", view: { x: 1024, y: 246, w: 330 } },
+      { x: 854, y: 428, title: "One undo", text: "Every change the agent made goes back in one step.", side: "left", view: { x: 1024, y: 406, w: 330 } },
     ],
   },
   {
@@ -53,8 +54,8 @@ const tabs: Tab[] = [
     icon: Upload,
     summary: "Export for Reels, TikTok or YouTube in one click. The file looks exactly like the preview.",
     spots: [
-      { x: 380, y: 300, title: "Same renderer", text: "The same renderer draws the preview and the export.", side: "left", view: { x: 600, y: 370, w: 900 } },
-      { x: 820, y: 360, title: "Made for Reels and TikTok", text: "1080 × 1920 at 30 fps, with the sound as loud as the rest of the feed.", side: "right", view: { x: 600, y: 370, w: 450 } },
+      { x: 380, y: 300, title: "Same renderer", text: "The same renderer draws the preview and the export.", side: "left", view: { x: 600, y: 333, w: 480 } },
+      { x: 820, y: 360, title: "Made for Reels and TikTok", text: "1080 × 1920 at 30 fps, with the sound as loud as the rest of the feed.", side: "right", view: { x: 600, y: 333, w: 480 } },
     ],
   },
 ];
@@ -79,7 +80,7 @@ function ExportDialog() {
     ["Save to", "Movies/morning-run.mp4"],
   ];
   return (
-    <div className="absolute inset-0 flex items-center justify-center rounded-[14px] bg-black/45 animate-[fade-up_200ms_ease-out]">
+    <div className="absolute inset-0 flex items-center justify-center rounded-[14px] bg-black/45 animate-[fade-up_200ms_ease-out] max-md:pb-12">
       <div className="flex w-[440px] flex-col gap-[18px] rounded-[20px] bg-[#232327] p-6 text-left shadow-[0_24px_60px_rgb(0_0_0/0.6)] ring-1 ring-white/10">
         <span className="text-[17px] font-semibold">Export</span>
         <div className="flex rounded-[9px] bg-white/[0.045] p-0.5">
@@ -164,7 +165,14 @@ export function Showcase() {
     const off = (c: HTMLElement) => Math.abs(c.offsetLeft - all[0].offsetLeft - row.scrollLeft);
     setSpot(all.reduce((best, c, i) => (off(c) < off(all[best]) ? i : best), 0));
   };
-  const takeOver = () => setManual(true);
+
+  // Where a finger landed on the cards. It takes the tour over once it moves sideways; up or down it
+  // only scrolls the page.
+  const touch = useRef({ x: 0, y: 0 });
+  const swipe = (t: React.Touch) => {
+    const dx = Math.abs(t.clientX - touch.current.x);
+    if (dx > 10 && dx > Math.abs(t.clientY - touch.current.y)) setManual(true);
+  };
 
   const current = tab.spots[spot];
 
@@ -274,10 +282,11 @@ export function Showcase() {
             key={`cards-${tab.id}`}
             ref={cards}
             onScroll={(e) => follow(e.currentTarget)}
-            onPointerDown={takeOver}
-            onWheel={takeOver}
-            onKeyDown={takeOver}
-            className="no-scrollbar relative -mx-5 flex snap-x snap-mandatory scroll-px-5 gap-2.5 self-stretch overflow-x-auto px-5 md:hidden"
+            onTouchStart={(e) => (touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
+            onTouchMove={(e) => swipe(e.touches[0])}
+            onWheel={(e) => Math.abs(e.deltaX) > Math.abs(e.deltaY) && setManual(true)}
+            onKeyDown={(e) => (e.key === "ArrowLeft" || e.key === "ArrowRight") && setManual(true)}
+            className="no-scrollbar relative -mx-5 flex snap-x snap-mandatory scroll-px-5 gap-2.5 self-stretch overflow-x-auto px-5 after:w-[calc(14%-0.625rem)] after:shrink-0 after:content-[''] md:hidden"
           >
             {tab.spots.map((s, i) => (
               <div key={s.title} className="surface flex w-[86%] shrink-0 snap-start flex-col gap-1.5 rounded-[20px] px-[18px] py-4 text-left">
@@ -287,7 +296,7 @@ export function Showcase() {
                     {i + 1} / {tab.spots.length}
                   </span>
                 </span>
-                <span className="text-[14px] leading-[1.45] text-fg/75">{s.text}</span>
+                <span className="min-h-[4.35em] text-[14px] leading-[1.45] text-fg/75">{s.text}</span>
               </div>
             ))}
           </div>

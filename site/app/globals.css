@@ -140,6 +140,12 @@
       transition: transform 450ms cubic-bezier(0.65, 0, 0.35, 1);
     }
   }
+  /* A small tablet in portrait would enlarge the editor half again; it shows more of it at close to its size. */
+  @media (37.5rem <= width < 48rem) {
+    .fit[data-view] > .fit-stage {
+      --view-zoom: 1.15;
+    }
+  }
 
   .heading-xl {
     text-wrap: balance;
