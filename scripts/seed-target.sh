@@ -13,10 +13,12 @@ cd "$(dirname "$0")/.."
 if [ "$(uname -s)" = Darwin ]; then
   clone=-c
   stat_time=(-f %m)
+  stat_device=(-f %d)
   hash=(shasum -a 256)
 else
   clone=--reflink=always
   stat_time=(-c %Y)
+  stat_device=(-c %d)
   hash=(sha256sum)
 fi
 
@@ -30,6 +32,8 @@ donor='' best=''
 while read -r key path; do
   [ "$key" = worktree ] && [ -d "$path/target/debug/.fingerprint" ] || continue
   [ "$(cd "$path" && pwd -P)" = "$here" ] && continue
+  # Across file systems macOS `cp -c` quietly copies every byte instead of cloning.
+  [ "$(stat "${stat_device[@]}" "$path")" = "$(stat "${stat_device[@]}" .)" ] || continue
   rank="$([ "$(same_inputs "$path")" = "$ours" ] && echo 1 || echo 0)$(stat "${stat_time[@]}" "$path/target/debug/deps")"
   if [[ $rank > $best ]]; then best=$rank donor=$path; fi
 done < <(git worktree list --porcelain)
@@ -54,7 +58,7 @@ own target/debug/.fingerprint | while IFS= read -r path; do rm -rf "$path"; done
 from=$donor/target/debug
 # Cargo holds this lock while it builds there, so nothing is copied half written.
 exec 7<"$from/.cargo-build-lock"
-flock -s -w 300 7
+flock -s -w 300 7 || { echo "cargo is still building in $donor; the first build starts from scratch." >&2; exit 0; }
 cp -a "$clone" "$from/build" "$from/deps" target/debug/
 workspace_pattern="^($(paste -sd'|' - <<<"$workspace"))-"
 for fingerprint in "$from/.fingerprint"/*; do
