@@ -91,6 +91,8 @@ export function JobIndicator() {
   const j =
     running.find((x) => x.kind === "export") ??
     running.find((x) => x.kind === "captions" || x.kind === "transcript") ??
+    // An agent waits for it, and its Stop is here.
+    running.find((x) => x.kind === "speech-model") ??
     // Ahead of the audio prepared beside it on import, so its Stop is there.
     running.find((x) => x.kind === "proxy") ??
     running[0];
@@ -116,6 +118,15 @@ export function JobIndicator() {
       <span className="bar flex h-8 items-center gap-1.5 rounded-full pl-3 pr-1 text-[12px] font-medium text-fg" role="status">
         {body}
         <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" title="Stop preparing the preview. It keeps playing the original file, which can stutter." onClick={() => void api.cancelJob(j.id)}>
+          Stop
+        </Button>
+      </span>
+    );
+  if (j.kind === "speech-model")
+    return (
+      <span className="bar flex h-8 items-center gap-1.5 rounded-full pl-3 pr-1 text-[12px] font-medium text-fg" role="status">
+        {body}
+        <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" aria-label="Stop downloading the speech model" title="Stop downloading the speech model. The AI goes on without a transcript." onClick={() => void api.cancelJob(j.id)}>
           Stop
         </Button>
       </span>

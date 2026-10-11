@@ -39,20 +39,39 @@ pub fn models(model: &str) -> Result<(PathBuf, PathBuf)> {
     };
     ensure!(
         path.is_file(),
-        "MODEL_MISSING: {}. Install a local Whisper model or pass its absolute path; no media is uploaded.",
+        "MODEL_MISSING: {} is not installed. {INSTALL_IN_APP} Or pass the absolute path of a local Whisper model; no media is uploaded.",
         path.display()
     );
     let vad = path.parent().context("Model has no parent directory")?.join(VAD_MODEL);
-    ensure!(vad.is_file(), "MODEL_MISSING: voice detector {}", vad.display());
+    ensure!(vad.is_file(), "MODEL_MISSING: voice detector {} is not installed. {INSTALL_IN_APP}", vad.display());
     Ok((path, vad))
 }
 
+const INSTALL_IN_APP: &str = "Tell the user to open Nuzky and transcribe a video once in the Transcript tab, which downloads the speech model, then call transcribe again without model.";
+
+/// The Whisper models the app downloads, most accurate first; it offers the first.
+pub const SPEECH_MODELS: [&str; 3] = ["large-v3-turbo-q5_0", "small", "base"];
+
+/// The most accurate installed model, else the one the app offers.
 pub fn best_model() -> &'static str {
-    if nuzky_analysis::models_dir().join("ggml-large-v3-turbo-q5_0.bin").is_file() {
-        "large-v3-turbo-q5_0"
-    } else {
-        "small"
-    }
+    let dir = nuzky_analysis::models_dir();
+    SPEECH_MODELS.into_iter().find(|id| dir.join(format!("ggml-{id}.bin")).is_file()).unwrap_or(SPEECH_MODELS[0])
+}
+
+type AskForModel = dyn Fn(&AtomicBool, &nuzky_session::jobs::Progress) -> Result<()> + Send + Sync;
+static ASK_FOR_MODEL: std::sync::OnceLock<Box<AskForModel>> = std::sync::OnceLock::new();
+
+/// How the app gets the speech model an agent's transcription needs: it asks the user and downloads it when they
+/// agree, blocking until it is installed, and fails with what the agent should do when they do not. Without it,
+/// as in a headless bridge where nobody can be asked, `transcribe` answers MODEL_MISSING.
+pub fn ask_for_model_with(
+    ask: impl Fn(&AtomicBool, &nuzky_session::jobs::Progress) -> Result<()> + Send + Sync + 'static,
+) {
+    let _ = ASK_FOR_MODEL.set(Box::new(ask));
+}
+
+pub(crate) fn ask_for_model() -> Option<&'static AskForModel> {
+    ASK_FOR_MODEL.get().map(|ask| &**ask)
 }
 
 /// What recognition is doing, for its job's progress.

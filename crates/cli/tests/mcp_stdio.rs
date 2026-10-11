@@ -492,6 +492,44 @@ fn retakes_answer_at_once_even_for_read_only_clients() {
     writer.finish();
 }
 
+#[test]
+fn headless_transcribe_without_models_points_to_transcript_tab_over_stdio() {
+    let mut c = Client::start(true, None, Some(None));
+    let video = c.dir.join("talk.mp4");
+    assert!(
+        Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=s=16x16:r=30:d=1"])
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+            ])
+            .arg(&video)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let run = c.call("begin_run", json!({"label": "Import speech"}))["run_id"].clone();
+    let assets = c.call("import_media", json!({"run_id": run, "paths": [video]}));
+    c.call(
+        "apply_edits",
+        json!({"run_id": run, "request_id": "place", "edits": [{"type": "addClip", "assetId": assets["asset_ids"][0]}]}),
+    );
+    c.call("end_run", json!({"run_id": run, "action": "keep"}));
+    let error = c.error("transcribe", json!({}));
+    assert!(error.contains("MODEL_MISSING") && error.contains("Transcript tab"), "{error}");
+    let models = c.dir.join("data/nuzky/models");
+    assert!(!models.exists() || std::fs::read_dir(models).unwrap().next().is_none());
+    c.finish();
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn caption_style_packages_over_stdio() {

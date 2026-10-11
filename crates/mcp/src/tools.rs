@@ -64,6 +64,8 @@ pub struct Backend {
     transcript_requests: Mutex<HashMap<(String, String), PreparedTranscriptEdit>>,
     import_requests: Mutex<HashMap<(String, String), PreparedImport>>,
     sound_requests: Mutex<HashMap<(String, String), (String, PreparedSound)>>,
+    /// Why this agent cannot have the speech model: the user said not now, stopped the download or it failed.
+    model_refused: Arc<Mutex<Option<String>>>,
 }
 
 /// The asset the sound became and the edits that add it.
@@ -94,6 +96,7 @@ impl Backend {
             transcript_requests: Mutex::default(),
             import_requests: Mutex::default(),
             sound_requests: Mutex::default(),
+            model_refused: Arc::default(),
         })
     }
 
@@ -792,8 +795,23 @@ impl Backend {
                 }
             }
         }
-        let name = args.model.unwrap_or_else(|| transcript::best_model().into());
-        let model_paths = if assets.is_empty() { None } else { Some(transcript::models(&name)?) };
+        let ask = args.model.is_none().then(transcript::ask_for_model).flatten();
+        let mut name = args.model.unwrap_or_else(|| transcript::best_model().into());
+        let (mut model_paths, mut asking) = (None, None);
+        if !assets.is_empty() {
+            match (transcript::models(&name), ask) {
+                (Ok(paths), _) => model_paths = Some(paths),
+                // The app asks the user inside the job, so the agent polls for the answer instead of retrying.
+                (Err(error), Some(ask)) if error.to_string().starts_with("MODEL_MISSING") => {
+                    if let Some(reason) = self.model_refused.lock().unwrap().clone() {
+                        anyhow::bail!(reason);
+                    }
+                    asking = Some(ask);
+                }
+                (Err(error), _) => return Err(error),
+            }
+        }
+        let refused = self.model_refused.clone();
         let language = args.language.unwrap_or_else(|| "auto".into());
         let store = self.host.transcripts.clone();
         let cache = self.host.cache_dir.clone();
@@ -803,6 +821,17 @@ impl Backend {
             "transcription",
             state.stamp.clone(),
             move |cancel, progress| {
+                if let Some(ask) = asking.take() {
+                    if let Err(error) = ask(&cancel, &progress) {
+                        // Declined, stopped or failed: this agent's next call says so at once instead of asking again.
+                        if error.to_string().starts_with("MODEL_") {
+                            *refused.lock().unwrap() = Some(format!("{error:#}"));
+                        }
+                        return Err(error);
+                    }
+                    name = transcript::best_model().into();
+                    model_paths = Some(transcript::models(&name)?);
+                }
                 let mut recognised = Vec::new();
                 let count = assets.len();
                 let mut recognised_files = std::collections::HashSet::new();
@@ -1754,6 +1783,7 @@ mod transcript_tests {
             transcript_requests: Mutex::default(),
             import_requests: Mutex::default(),
             sound_requests: Mutex::default(),
+            model_refused: Arc::default(),
         };
         (dir, backend, project)
     }

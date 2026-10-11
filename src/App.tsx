@@ -10,10 +10,11 @@ import { canRetrySpeech, retrySpeech, useSpeech } from "./lib/speech";
 import { reportBug } from "./lib/diagnostics";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, runWasDiscarded, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
 import { US, formatDuration } from "./lib/time";
-import type { JobEvent, ProjectSummary, Snapshot, Transport } from "./lib/types";
+import type { JobEvent, ProjectSummary, Snapshot, SpeechModelQuestion, Transport } from "./lib/types";
 import { ChatGptDialog } from "./components/ChatGptDialog";
 import { ConnectAgentDialog } from "./components/ConnectAgentDialog";
 import { ExportDialog } from "./components/ExportDialog";
+import { SpeechModelDialog } from "./components/SpeechModelDialog";
 import { Inspector } from "./components/inspector/Inspector";
 import { LeftPanel } from "./components/panel/LeftPanel";
 import { MEDIA_EXTENSIONS, dropResolver, importPaths, pickAndImport } from "./components/panel/assets";
@@ -201,6 +202,7 @@ function onJob(job: JobEvent) {
   if (job.kind === "transcript" && job.status === "done") toast({ kind: "success", text: `Transcript ready: ${job.output ?? "words"}` });
   if (job.kind === "transcript" && job.status === "failed") toast({ kind: "error", text: `Transcript failed: ${plainError(job.message ?? "")}`, action: retry });
   if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}` });
+  if (job.kind === "speech-model" && job.status === "failed") toast({ kind: "error", text: plainError(job.message ?? "") });
   if (job.kind === "proxy" && job.status === "failed")
     toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}. The preview plays the original file, which can stutter.` });
   if (job.kind === "matte" && job.status === "failed")
@@ -236,6 +238,7 @@ function useBackendEvents() {
       }),
     );
     offs.push(listen<JobEvent>("job", (e) => onJob(e.payload)));
+    offs.push(listen<SpeechModelQuestion | null>("speech-model-question", (e) => useEditor.setState({ speechModelQuestion: e.payload })));
     const offStyle = listenStyle();
     void loadStyle();
     offs.push(listen("transcripts-changed", () => useSpeech.setState((s) => ({ stored: s.stored + 1 }))));
@@ -591,6 +594,7 @@ export default function App() {
       <ChatGptDialog />
       {learnOpen && <LearnDialog />}
       <SwitchDialog />
+      <SpeechModelDialog />
       {/* On the home screen they sit at the grid's left edge, clear of the sidebar; in the editor, clear of a panel docked left. */}
       <Toasts bottom={home ? 18 : panes.timeline + 18} left={home ? 268 : dock.open && dock.mode === "left" ? dock.width + 24 : 18} />
       <DisabledHint />
