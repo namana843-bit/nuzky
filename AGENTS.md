@@ -72,6 +72,7 @@ The most common defect is a change that works only on the path you tried.
 - The pre-push hook (`.githooks/pre-push`, turned on by `git config core.hooksPath .githooks`) scans for secrets and blocks video and audio files. The one exception is the CC0 sound effects built into Nuzky: `assets/sounds/*.ogg` files listed in its `manifest.json`, made by `scripts/build-sounds.py` from sources pinned by SHA-256. Do not bypass it with `--no-verify`. Test media are generated and do not belong in git, because they could be someone's private videos.
 - Release: the same version in `src-tauri/tauri.conf.json`, `Cargo.toml` and `package.json`, then the tag `v<version>`. The tag runs the build and tests on Linux, macOS and Windows and prepares a draft release. Only a person publishes it, after checking it on each system as `docs/BUILDING.md` describes.
 - Clean up only after yourself. Several sessions share `tmp-test/`.
+- After your pull request is merged, and after the `scripts/check.sh` run on the merge commit when there is one, delete what your checkout built: `target/`, every `target-*`, `tmp-test/`, `node_modules/`, `site/node_modules/` and `site/.next/`. Do the same in a checkout you made only to run the gate. Do it without asking, once your own processes there have stopped. A finished worktree keeps its build, often more than 10 GB of its own, and the leftover builds fill the disk. Leave the worktree and the branch; the maintainer removes those.
 
 ## Taste
 
