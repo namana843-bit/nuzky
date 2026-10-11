@@ -453,7 +453,8 @@ impl Gpu {
             ..Default::default()
         }))
         .context("No GPU adapter found")?;
-        let adapter_name = adapter.get_info().name;
+        let info = adapter.get_info();
+        let adapter_name = format!("{} ({})", info.name, info.backend);
         let (device, queue) = pollster::block_on(
             adapter.request_device(&wgpu::DeviceDescriptor { label: Some("nuzky"), ..Default::default() }),
         )

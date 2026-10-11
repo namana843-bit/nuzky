@@ -1,10 +1,13 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { WindowErrorBoundary } from "./components/WindowError";
 import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <WindowErrorBoundary>
+      <App />
+    </WindowErrorBoundary>
   </StrictMode>,
 );

@@ -6,15 +6,15 @@
 
 <p align="center">
   A free, open-source video editor for your computer, in the spirit of CapCut.<br>
-  <a href="https://nuzky.app">nuzky.app</a> · <a href="#build-and-run">Build it</a> · <a href="CONTRIBUTING.md">Contribute</a>
+  <a href="https://nuzky.app">nuzky.app</a> · <a href="#install">Download</a> · <a href="#build-and-run">Build it</a> · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 <img src="assets/readme/editor.webp" width="100%" alt="An illustration of the Nuzky editor from nuzky.app: imported clips on the left, a vertical video with captions in the middle, clip settings on the right and the timeline below">
-<p align="center"><sub>The editor as drawn on nuzky.app. The prototype differs in places.</sub></p>
+<p align="center"><sub>The editor as drawn on nuzky.app. The alpha differs in places.</sub></p>
 
 Cut a talking video by deleting words from its transcript, caption it with speech recognition that runs on your own machine, and let an AI agent do the tedious parts while you watch. Nuzky is licensed under GPLv3 and has a native Rust engine.
 
-**Nuzky is a prototype.** Editing, playback, captions and export work on Linux. macOS and Windows builds compile but have not been tested, and there is no published release yet, so for now you build it from source.
+**Nuzky is in alpha.** It is early, so expect rough edges. Nuzky never changes or deletes your original videos. Linux is where it is tested most. Builds for macOS and Windows are new, and the AI panel is off on Windows.
 
 ## What you can do
 
@@ -28,6 +28,28 @@ Cut a talking video by deleting words from its transcript, caption it with speec
 - Teach Nuzky a creator's style from raw recordings and their finished cuts, or from timelines they cut in another editor and exported as OpenTimelineIO (.otio), on Your style in the app or with `nuzky style learn`. It writes an `EDIT.md` that agents follow, takes the creator's own rules in plain words, and lets them talk the style through with the AI.
 
 Nuzky itself sends nothing you edit anywhere. It goes online only to download models with a pinned checksum and, at most once a day, to read the latest version number from GitHub; you can turn that check off on the home screen. An AI agent you connect runs under your own account and sends what it reads to its provider.
+
+## What the alpha doesn't do yet
+
+- AI editing doesn't work on Windows, and speech recognition there runs on the CPU, so captions take longer than on Linux and macOS.
+- Intel Macs, Linux on ARM and Windows on ARM aren't supported.
+- Export makes MP4 only. There is no template library and no phone app.
+
+## Install
+
+Download the installer for your system from [Releases](https://github.com/tomasmach/nuzky/releases). Nuzky has no Apple or Microsoft signing certificate yet, so your system warns you the first time you open it.
+
+- **macOS 14 or newer on Apple Silicon**: open the `.dmg` and drag Nuzky to Applications. When macOS says it can't open Nuzky, close the message, open System Settings → Privacy & Security, click Open Anyway next to Nuzky and confirm.
+- **Windows 10 or 11, x64**: run the `-setup.exe`. When SmartScreen says "Windows protected your PC", click More info, then Run anyway. The installer downloads Microsoft WebView2 if it is missing.
+- **Linux, x86_64**: on Ubuntu 24.04 or newer, `sudo apt install ./Nuzky_*.deb`. On other distributions with glibc 2.39 or newer, make the `.AppImage` executable with `chmod +x` and run it.
+
+The first captions or transcript download the speech model once. Nuzky tells you when a newer version is out; it doesn't update itself.
+
+## Report a bug
+
+In Nuzky, open Send feedback (the speech bubble next to Projects, or at the bottom of the home screen's sidebar) and choose Report a bug…. It opens the bug report form on GitHub with your version and system filled in and copies the diagnostics for you to paste into it: the version, system, graphics and the end of Nuzky's log, without folder names, typed text or secrets. Nothing is sent until you submit the form. Copy diagnostics and Open logs folder in the same menu give you the same information again. After a crash, the next start offers Report a bug… as well.
+
+Say what you did and what happened, and please don't attach a private video. No GitHub account? Write to [@mach_builds](https://x.com/mach_builds) on X. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## Build and run
 

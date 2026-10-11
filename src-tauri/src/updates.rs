@@ -87,24 +87,21 @@ pub enum FeedbackKind {
     Message,
 }
 
-fn feedback_url(kind: FeedbackKind, version: &str, os: &str, arch: &str) -> String {
-    let (label, questions) = match kind {
-        FeedbackKind::Bug => {
-            ("bug", "**What happened?**\n\n\n**What did you expect?**\n\n\n**Steps to reproduce**\n1. \n")
-        }
-        FeedbackKind::Idea => {
-            ("enhancement", "**What would you like Nuzky to do?**\n\n\n**How would it help you?**\n\n")
-        }
+fn feedback_url(kind: FeedbackKind, version: &str, system: &str) -> String {
+    // The forms in .github/ISSUE_TEMPLATE take these fields from the address by their ids.
+    let fields: &[(&str, &str)] = match kind {
+        FeedbackKind::Bug => &[("template", "bug_report.yml"), ("version", version), ("system", system)],
+        FeedbackKind::Idea => &[("template", "feature_request.yml"), ("version", version)],
         FeedbackKind::Message => return X_PROFILE.into(),
     };
-    let body = format!("{questions}\n---\nNuzky {version} · {os} · {arch}");
     let mut url = tauri::Url::parse("https://github.com/tomasmach/nuzky/issues/new").unwrap();
-    url.query_pairs_mut().append_pair("labels", label).append_pair("body", &body);
+    url.query_pairs_mut().extend_pairs(fields);
     url.into()
 }
 
-fn feedback_os() -> String {
-    match std::env::consts::OS {
+/// The system as a person reading a bug report wants it, with its version where the system says it.
+pub(crate) fn system() -> String {
+    let name = match std::env::consts::OS {
         "linux" => {
             let pretty = std::fs::read_to_string("/etc/os-release").ok().and_then(|release| {
                 release.lines().find_map(|line| {
@@ -113,24 +110,41 @@ fn feedback_os() -> String {
             });
             pretty.map_or_else(|| "Linux".into(), |name| format!("Linux ({name})"))
         }
-        "macos" => "macOS".into(),
+        "macos" => std::fs::read_to_string("/System/Library/CoreServices/SystemVersion.plist")
+            .ok()
+            .and_then(|plist| {
+                let after = plist.split("<key>ProductVersion</key>").nth(1)?;
+                let version = after.split("<string>").nth(1)?.split("</string>").next()?;
+                Some(format!("macOS {}", version.trim()))
+            })
+            .unwrap_or_else(|| "macOS".into()),
         "windows" => "Windows".into(),
         os => os.into(),
-    }
+    };
+    format!("{name} · {}", std::env::consts::ARCH)
 }
 
-/// Opens a prefilled issue or the X profile in the browser; the person reads and submits the issue there.
-#[tauri::command]
-pub fn open_feedback(app: AppHandle, kind: FeedbackKind) -> CmdResult<()> {
-    let url = feedback_url(kind, &app.package_info().version.to_string(), &feedback_os(), std::env::consts::ARCH);
+/// Opens a web page or a folder. In debug builds with `NUZKY_OPENED_URLS` set it only writes down what it would open,
+/// so the UI flows open nothing.
+pub(crate) fn open(app: &AppHandle, target: &str) -> CmdResult<()> {
     if cfg!(debug_assertions)
         && let Some(path) = std::env::var_os("NUZKY_OPENED_URLS")
     {
         use std::io::Write;
         let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(err)?;
-        return writeln!(file, "{url}").map_err(err);
+        return writeln!(file, "{target}").map_err(err);
     }
-    app.opener().open_url(url, None::<&str>).map_err(err)
+    if target.starts_with("https://") {
+        app.opener().open_url(target, None::<&str>).map_err(err)
+    } else {
+        app.opener().open_path(target, None::<&str>).map_err(err)
+    }
+}
+
+/// Opens a prefilled issue form or the X profile in the browser; the person reads and submits the issue there.
+#[tauri::command]
+pub fn open_feedback(app: AppHandle, kind: FeedbackKind) -> CmdResult<()> {
+    open(&app, &feedback_url(kind, &app.package_info().version.to_string(), &system()))
 }
 
 #[cfg(test)]
@@ -138,18 +152,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn feedback_links_include_labels_and_system_details() {
-        for (kind, label) in [(FeedbackKind::Bug, "bug"), (FeedbackKind::Idea, "enhancement")] {
-            let url = tauri::Url::parse(&feedback_url(kind, "0.2.0", "Linux (Fedora Linux 44)", "x86_64")).unwrap();
+    fn feedback_links_open_the_issue_forms_with_version_and_system() {
+        let fields = |kind| {
+            let url = tauri::Url::parse(&feedback_url(kind, "0.2.0", "Linux (Fedora Linux 44) · x86_64")).unwrap();
             assert_eq!(url.origin().ascii_serialization(), "https://github.com");
             assert_eq!(url.path(), "/tomasmach/nuzky/issues/new");
-            let pairs: Vec<_> = url.query_pairs().collect();
-            assert_eq!(pairs.len(), 2);
-            assert_eq!(pairs[0], ("labels".into(), label.into()));
-            assert_eq!(pairs[1].0, "body");
-            assert!(pairs[1].1.ends_with("\n---\nNuzky 0.2.0 · Linux (Fedora Linux 44) · x86_64"));
+            url.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect::<Vec<_>>()
+        };
+        let pair = |k: &str, v: &str| (k.to_owned(), v.to_owned());
+        assert_eq!(
+            fields(FeedbackKind::Bug),
+            [
+                pair("template", "bug_report.yml"),
+                pair("version", "0.2.0"),
+                pair("system", "Linux (Fedora Linux 44) · x86_64")
+            ]
+        );
+        assert_eq!(fields(FeedbackKind::Idea), [pair("template", "feature_request.yml"), pair("version", "0.2.0")]);
+        assert_eq!(feedback_url(FeedbackKind::Message, "0.2.0", "macOS 15.3 · aarch64"), X_PROFILE);
+        for (form, ids) in [
+            (include_str!("../../.github/ISSUE_TEMPLATE/bug_report.yml"), ["version", "system"].as_slice()),
+            (include_str!("../../.github/ISSUE_TEMPLATE/feature_request.yml"), ["version"].as_slice()),
+        ] {
+            for id in ids {
+                assert!(form.contains(&format!("id: {id}\n")), "the form has no field {id}");
+            }
         }
-        assert_eq!(feedback_url(FeedbackKind::Message, "0.2.0", "macOS", "aarch64"), X_PROFILE);
     }
 
     fn check(json: &str, current: &str) -> Option<String> {

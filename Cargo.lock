@@ -3450,6 +3450,7 @@ dependencies = [
  "cpal",
  "dirs 6.0.0",
  "env_logger",
+ "jiff",
  "libc",
  "log",
  "nuzky-agent",
@@ -3560,6 +3561,7 @@ version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
+ "log",
  "nuzky-engine",
  "serde",
  "serde_json",

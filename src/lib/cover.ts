@@ -335,7 +335,7 @@ export function onCoverJob(job: JobEvent) {
   if (job.id === s.exportJob && !useEditor.getState().exportOpen) {
     const { toast } = useEditor.getState();
     if (job.status === "done") toast({ kind: "success", text: "Cover exported", action: job.output ? { label: "Show in folder", run: () => void revealItemInDir(job.output!) } : undefined });
-    if (job.status === "failed") toast({ kind: "error", text: `Cover export failed: ${job.message}`, action: { label: "Details", run: () => useEditor.setState({ exportOpen: true }) } });
+    if (job.status === "failed") toast({ kind: "error", text: `Cover export failed: ${plainError(job.message ?? "")}`, action: { label: "Details", run: () => useEditor.setState({ exportOpen: true }) } });
     if (job.status !== "failed") useCover.setState({ exportJob: null });
   }
   if (job.id === s.modelsJob || job.id === s.pickJob || job.id === s.maskJob) void loadModels();

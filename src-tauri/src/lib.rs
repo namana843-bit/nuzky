@@ -3,6 +3,7 @@ mod audio_out;
 mod caption_styles;
 mod connect;
 mod cover;
+mod diagnostics;
 mod engine;
 mod jobs;
 mod library;
@@ -118,6 +119,8 @@ pub struct Boot {
     version: String,
     /// False when `NUZKY_NO_UPDATE_CHECK=1`: Nuzky then never asks whether a newer version exists.
     update_checks: bool,
+    /// The Nuzky that ran before this one ended without quitting.
+    crashed: bool,
 }
 
 #[derive(Serialize)]
@@ -461,6 +464,7 @@ fn boot(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boot> {
         startup_notice: state.startup_notice.clone(),
         version: app.package_info().version.to_string(),
         update_checks: updates::enabled(),
+        crashed: diagnostics::crashed_before(),
     })
 }
 
@@ -993,10 +997,7 @@ fn lowercase_first(text: &str) -> String {
 }
 
 pub fn run() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-    )
-    .init();
+    diagnostics::init();
     let (builder, context) = (tauri::Builder::default(), tauri::generate_context!());
     #[cfg(all(target_os = "macos", debug_assertions))]
     let (builder, context) = test_bridge::prepare(builder, context);
@@ -1146,6 +1147,9 @@ pub fn run() {
             updates::check_for_update,
             updates::open_release_page,
             updates::open_feedback,
+            diagnostics::diagnostics,
+            diagnostics::open_logs,
+            diagnostics::log_ui_error,
         ])
         .build(context)
         .expect("error while building Nuzky")
@@ -1187,7 +1191,8 @@ pub fn run() {
             tauri::RunEvent::Exit => {
                 // The panel's agent runs in its own process group, so it would outlive the app.
                 app.state::<agent_panel::AgentPanel>().stop();
-                app.state::<AppState>().quit()
+                app.state::<AppState>().quit();
+                diagnostics::quit();
             }
             _ => {}
         });

@@ -18,7 +18,7 @@ use nuzky_vision::models::{self, Model};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use crate::jobs::{Reporter, check_cancelled, panic_text, register, unregister};
+use crate::jobs::{Reporter, check_cancelled, crashed, register, unregister};
 use crate::{AppState, CmdResult, err};
 
 /// The renderer of the covers the editor shows. It decodes the original files, as the export does;
@@ -253,7 +253,7 @@ fn spawn(
     let spawned = std::thread::Builder::new().name(kind.into()).spawn(move || {
         let mut rep = Reporter::new(&worker, &job, "cover", label);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&cancel, &mut rep)))
-            .unwrap_or_else(|p| Err(anyhow::anyhow!("The cover job crashed: {}", panic_text(&p))));
+            .unwrap_or_else(|p| Err(crashed(&p)));
         rep.finish(result, cancel.load(Ordering::Relaxed));
         unregister(&worker, &job);
     });
