@@ -15,7 +15,6 @@ const output = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim
 const { version } = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
 const config = { bundle: {} };
 let bundles;
-// Where the source of the FFmpeg in the installer is, for build-info.
 let ffmpegSource;
 // ONNX Runtime ships beside the app and is opened only when covers run (crates/vision/src/runtime.rs).
 const ort = await fetchOnnxRuntime();
