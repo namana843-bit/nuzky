@@ -4,7 +4,8 @@
 It takes the same arguments, refuses to run unless Nuzky passed every flag that keeps the agent to
 Nuzky's tools, and answers in Claude Code's stream-json or Codex's JSON lines. It is a real MCP client
 of the bridge from --mcp-config or -c, so its edits go through Nuzky like a real agent's. The message picks what it does:
-  "cut"      reads the project and its activity, cuts 1-3 s out, adds two captions and answers
+  "cut"      reads the project and its activity, says a message before and after opening its run, cuts 1-3 s out,
+             adds two captions and answers
   "retakes"  transcribes, retries a declined model three times, or cuts the first two words in one run
   "options"  offers two takes with suggest_options
   "work as reels"  (Find reels) proposes four reels of at least 15 s from the transcript
@@ -306,6 +307,7 @@ elif 'cut' in message:
     call('activity', {})
     say('Vystřihnu pauzu na začátku a přidám titulky.')
     run = call('begin_run', {'label': 'Tighten the start'})['run_id']
+    say('Začínám.')
     time.sleep(1.5)
     call('apply_edits', {'run_id': run, 'request_id': 'cut', 'edits': [
         {'type': 'rippleDeleteRanges', 'ranges': [{'startUs': 1_000_000, 'endUs': 3_000_000}]}]})

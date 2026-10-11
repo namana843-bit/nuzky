@@ -60,6 +60,9 @@ def alive(pid):
         return False
 
 
+MESSAGES = "return window.__nuzky.agent.getState().items.filter((i) => i.kind === 'agent').map((i) => i.text)"
+
+
 def idle(r):
     return wait(lambda: agent(r)['status'] == 'idle', 20)
 
@@ -91,6 +94,8 @@ def ai_panel_codex(r):
     r.check('a card lists the cut and the captions',
             'Cut out 1 passage, 2.0 s in total' in text and 'Added 2 captions' in text, text)
     r.check("Codex's whole answer shows", 'Hotovo.' in text, text)
+    r.check('a message after a call the panel does not show is a message of its own',
+            r.s.run(MESSAGES)[:2] == ['Vystřihnu pauzu na začátku a přidám titulky.', 'Začínám.'], r.s.run(MESSAGES))
     saved = json.loads(r.saved_project().read_text())
     main = next(t['clips'] for t in saved['tracks'] if t['id'] == 'main')
     captions = [c for t in saved['tracks'] if t['name'] == 'Captions' for c in t['clips']]
@@ -179,6 +184,9 @@ def ai_panel(r):
     r.check('a card lists exactly what changed, from the project itself',
             'Shortened the video from' in text and 'Cut out 1 passage, 2.0 s in total' in text and 'Added 2 captions' in text, text)
     r.check("the agent's answer streams in", 'Hotovo.' in text, text)
+    r.check('a message after a call the panel does not show (here begin_run) is a message of its own, not glued to the last one',
+            r.s.run(MESSAGES)[:2] == ['Vystřihnu pauzu na začátku a přidám titulky.', 'Začínám.'] and 'titulky.Začínám' not in text,
+            r.s.run(MESSAGES))
     r.s.run("[...document.querySelectorAll('aside[aria-label=AI] button')].filter((b) => /^\\d+ steps?$/.test(b.textContent.trim())).forEach((b) => b.click())")
     r.check('unfolded steps name the scan and the frames it checked',
             wait(lambda: 'Scanning picture and sound' in panel(r)['text'] and 'Checking frames' in panel(r)['text'] and '00:00 · 00:01' in panel(r)['text'], 5), panel(r)['text'])
