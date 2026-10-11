@@ -233,12 +233,19 @@ export async function makeReels() {
   const { words } = useReels.getState().transcript;
   const ids = (snap?.project.reelCandidates ?? []).filter((c) => c.status === "picked" && !moved(c, words)).map((c) => c.id);
   if (ids.length === 0 || aiLocked() || useReels.getState().job) return;
-  // Picks and trims made just before are part of what is made.
-  await measuring;
+  const epoch = currentEpoch();
+  // Picks and trims made just before are part of what is made, also one made while waiting.
+  let waited: Promise<void>;
+  do {
+    waited = measuring;
+    await waited;
+  } while (waited !== measuring);
   await whenIdle();
+  // Another project opened meanwhile; its reels were not asked for.
+  if (currentEpoch() !== epoch) return;
   useReels.setState({ failed: null });
   try {
-    const id = await api.startMakeReels(ids, useReels.getState().framing, currentEpoch());
+    const id = await api.startMakeReels(ids, useReels.getState().framing, epoch);
     useReels.setState({ job: id });
     // A job can end before its id comes back; its last event is already in.
     const ended = useEditor.getState().jobs[id];
