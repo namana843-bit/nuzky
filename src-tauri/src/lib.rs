@@ -686,6 +686,19 @@ async fn waveform(app: AppHandle, asset_id: String, from: usize, to: usize) -> C
 }
 
 #[tauri::command]
+async fn match_gain(app: AppHandle, clip_id: String) -> CmdResult<Option<f64>> {
+    let state = app.state::<AppState>();
+    let project = state.project()?;
+    let cache = state.cache_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let clip = project.tracks.iter().flat_map(|t| &t.clips).find(|c| c.id == clip_id)?;
+        nuzky_engine::audio::match_gain_db(&cache, &project, clip)
+    })
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
 fn play(state: State<'_, AppState>) {
     state.engine.send(Msg::Play);
 }
@@ -1089,6 +1102,7 @@ pub fn run() {
             import_media,
             thumbnail,
             waveform,
+            match_gain,
             play,
             pause,
             seek,

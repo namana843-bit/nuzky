@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use nnnoiseless::DenoiseState;
 
-use crate::audio::{PCM_VERSION, Pcm, ensure_pcm, pcm_path};
+use crate::audio::{PCM_VERSION, Pcm, ensure_pcm, lock_cache, pcm_path, remove_older_versions, with_blocks};
 use crate::model::{Asset, CHANNELS, SAMPLE_RATE};
 
 /// Raised whenever the processing changes its output, so voices cleaned before are cleaned again.
@@ -53,9 +53,9 @@ pub fn voice_pcm_path(cache_dir: &Path, asset: &Asset) -> PathBuf {
     path_for(cache_dir, &pcm_path(cache_dir, asset))
 }
 
-/// The cleaned cache made from the raw cache at `raw`.
-pub fn path_for(cache_dir: &Path, raw: &Path) -> PathBuf {
-    let stem = raw.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+/// The cleaned cache made from the cache at `source`: the raw one, or the one without reverb.
+pub fn path_for(cache_dir: &Path, source: &Path) -> PathBuf {
+    let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     cache_dir.join("voice").join(format!("{stem}.{VERSION}.f32"))
 }
 
@@ -69,25 +69,24 @@ pub fn ensure_voice_pcm(
 ) -> Result<PathBuf> {
     let raw_share = if pcm_path(cache_dir, asset).exists() { 0.0 } else { RAW_SHARE };
     let raw = ensure_pcm(cache_dir, asset, |p| progress(p * raw_share))?;
-    let path = path_for(cache_dir, &raw);
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    let mut lock_path = path.as_os_str().to_os_string();
-    lock_path.push(".lock");
-    let lock = File::options().read(true).write(true).create(true).truncate(false).open(lock_path)?;
-    // Waiting for another caller still asks `progress`, so a cancelled export stops at once.
-    loop {
-        match lock.try_lock() {
-            Ok(()) => break,
-            Err(std::fs::TryLockError::WouldBlock) => {
-                progress(raw_share)?;
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
-        }
-    }
+    ensure_cleaned(cache_dir, asset, &raw, |p| progress(raw_share + p * (1.0 - raw_share)))
+}
+
+/// Cleans the voice in the cache at `source` of `asset` unless that is done already; concurrent callers
+/// wait for one of them, still asking `progress`, so a cancelled export stops at once.
+pub fn ensure_cleaned(
+    cache_dir: &Path,
+    asset: &Asset,
+    source: &Path,
+    mut progress: impl FnMut(f32) -> Result<()>,
+) -> Result<PathBuf> {
+    let path = path_for(cache_dir, source);
+    let _lock = lock_cache(&path, &mut |_| progress(0.0))?;
     if !path.exists() {
-        clean_file(&raw, &path, |p| progress(raw_share + p * (1.0 - raw_share)))?;
-        remove_older_versions(&path, asset);
+        clean_file(source, &path, progress)?;
+        let [cleaned, blocks] = with_blocks(format!("{PCM_VERSION}.{VERSION}"));
+        let [echo, echo_blocks] = with_blocks(format!("{PCM_VERSION}.{}.{VERSION}", crate::dereverb::VERSION));
+        remove_older_versions(&path, asset, &[cleaned, blocks, echo, echo_blocks]);
     }
     Ok(path)
 }
@@ -108,22 +107,6 @@ fn clean_file(raw: &Path, out: &Path, progress: impl FnMut(f32) -> Result<()>) -
         std::fs::remove_file(&tmp).ok();
     }
     result
-}
-
-/// Removes this asset's cleaned caches made by older versions, which nothing reads any more.
-fn remove_older_versions(path: &Path, asset: &Asset) {
-    let (Some(dir), prefix, current) =
-        (path.parent(), format!("{}.", asset.id), format!(".{PCM_VERSION}.{VERSION}.f32"))
-    else {
-        return;
-    };
-    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let cache = name.strip_suffix(".lock").unwrap_or(&name);
-        if name.starts_with(&prefix) && cache.ends_with(".f32") && !cache.ends_with(&current) {
-            std::fs::remove_file(entry.path()).ok();
-        }
-    }
 }
 
 /// Cleans interleaved stereo `input`, handing the result to `out` in order. The output has exactly

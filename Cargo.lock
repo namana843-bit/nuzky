@@ -3696,6 +3696,7 @@ dependencies = [
  "nnnoiseless",
  "png 0.18.1",
  "pollster",
+ "realfft",
  "schemars 1.2.2",
  "serde",
  "serde_json",

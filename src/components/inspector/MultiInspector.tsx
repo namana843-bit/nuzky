@@ -8,7 +8,7 @@ import { FontPicker } from "../FontPicker";
 import { Button, IconButton, Section, Slider } from "../ui";
 import { InspectorHeader, QUIET } from "./Header";
 import { BackgroundSection } from "./BackgroundSection";
-import { CleanVoiceRow, DuckingRow } from "./MediaSections";
+import { DuckingRow, VoiceSection } from "./MediaSections";
 import { FieldRow } from "./TextSection";
 
 type Found = { clip: Clip; track: Track };
@@ -136,7 +136,6 @@ function VolumeRow({ found, coalesce }: { found: Found[]; coalesce: string }) {
         format={(v) => String(Math.round(v))}
         onChange={(v) => editClips(ids, (c) => ({ type: "updateClip", clipId: c.id, volume: v / 100 }), `${coalesce}:volume`)}
       />
-      <CleanVoiceRow clips={found.map((f) => f.clip)} />
       <DuckingRow clips={found.map((f) => f.clip)} coalesce={coalesce} />
     </Section>
   );
@@ -187,6 +186,7 @@ export function MultiInspector({ ids }: { ids: string[] }) {
         {all("adjust") && <BackgroundSection clips={found.map((f) => f.clip)} />}
         {all("adjust") && <AdjustRows found={found} coalesce={coalesce} />}
         {all("sound") && <VolumeRow found={found} coalesce={coalesce} />}
+        {all("sound") && <VoiceSection clips={found.map((f) => f.clip)} coalesce={coalesce} />}
       </div>
     </>
   );

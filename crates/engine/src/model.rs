@@ -562,6 +562,20 @@ pub enum ClipContent {
         /// until the cleaned sound is prepared; export always has the cleaned sound.
         #[serde(default)]
         clean_voice: bool,
+        /// Reduce echo: how much of the room's reverb comes out of the sound, 0 to 1; 0 turns it off.
+        /// The sound without reverb is made once per file in the background, as for Clean voice, and
+        /// played mixed with the original by this share.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        dereverb: f32,
+        /// Match loudness: the clip plays at -16 LUFS (`level::MATCH_LUFS`), measured over its whole file as the
+        /// clip's other voice settings make it sound, so every take of a video is as loud. Volume
+        /// still applies on top.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        normalize: bool,
+        /// Even out volume: how far the quiet and loud passages of the file come together, 0 to 1; 0
+        /// turns it off.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        leveler: f32,
         /// Rounded corners, a border and a shadow around the picture, as for a picture in picture.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shape: Option<Shape>,
@@ -966,7 +980,10 @@ mod tests {
         let old = r#"{"type":"media","assetId":"a","sourceInUs":0,"volume":1.0,"transform":{"x":0.0,"y":0.0,"scale":1.0,"rotation":0.0,"opacity":1.0},"speed":1.0,"adjust":{"exposure":0.0,"tint":0.0,"highlights":0.0,"shadows":0.0,"fade":0.0,"brightness":0.0,"contrast":0.0,"saturation":0.0,"temperature":0.0,"vignette":0.0},"fadeInUs":0,"fadeOutUs":0,"cleanVoice":false}"#;
         let content: ClipContent = serde_json::from_str(old).unwrap();
         assert_eq!(serde_json::to_string(&content).unwrap(), old);
-        let ClipContent::Media { mut transform, .. } = content else { panic!() };
+        let saved = serde_json::to_value(&content).unwrap();
+        assert!(["dereverb", "normalize", "leveler"].iter().all(|key| saved.get(key).is_none()));
+        let ClipContent::Media { mut transform, dereverb, normalize, leveler, .. } = content else { panic!() };
+        assert_eq!((dereverb, normalize, leveler), (0.0, false, 0.0));
         transform.crop = Some(Crop { left: 0.25, ..Crop::default() });
         let shape = Some(Shape { radius: 1.0, border_width: 8.0, border_color: "#ff0000".into(), shadow: 0.5 });
         let json = serde_json::json!({"transform": transform, "shape": shape});

@@ -189,6 +189,68 @@ fn built_in_sounds_are_listed_and_added_with_their_credit() {
 }
 
 #[test]
+fn clip_sound_settings_apply_and_reject_silent_media_over_stdio() {
+    let mut c = Client::start(true, None, Some(None));
+    place_still(&mut c);
+    let image = c.call("get_state", json!({}))["tracks"][0]["clips"][0]["id"].clone();
+    let run = c.call("begin_run", json!({"label": "Sound settings"}))["run_id"].clone();
+    let sound = c.call("add_sound", json!({"run_id": run, "id": "nuzky:whoosh", "at_us": 0}))["clip_id"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id": run, "request_id": "sound", "edits": [
+            {"type": "updateClip", "clipId": sound, "dereverb": 0.8, "normalize": true, "leveler": 0.5}
+        ]}),
+    );
+    let before = c.call("get_state", json!({}));
+    for (i, settings) in [
+        json!({"dereverb": 0.8, "normalize": true, "leveler": 0.5}),
+        json!({"cleanVoice": true}),
+        json!({"dereverb": 0.8}),
+        json!({"normalize": true}),
+        json!({"leveler": 0.5}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut edit = json!({"type": "updateClip", "clipId": image, "volume": 0.3});
+        edit.as_object_mut().unwrap().extend(settings.as_object().unwrap().clone());
+        let error =
+            c.error("apply_edits", json!({"run_id": run, "request_id": format!("silent-{i}"), "edits": [edit]}));
+        assert!(error.contains("no sound"), "{error}");
+        assert_eq!(c.call("get_state", json!({})), before);
+    }
+    c.call("apply_edits", json!({"run_id": run, "request_id": "off", "edits": [
+        {"type": "updateClip", "clipId": image, "cleanVoice": false, "dereverb": 0.0, "normalize": false, "leveler": 0.0}
+    ]}));
+    c.call("end_run", json!({"run_id": run, "action": "keep"}));
+    let disk: Project = serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap();
+    let clip = disk.tracks.iter().flat_map(|t| &t.clips).find(|clip| json!(clip.id) == sound).unwrap();
+    assert!(matches!(
+        clip.content,
+        nuzky_engine::model::ClipContent::Media { dereverb: 0.8, normalize: true, leveler: 0.5, .. }
+    ));
+    let run = c.call("begin_run", json!({"label": "Clamp strengths"}))["run_id"].clone();
+    c.call(
+        "apply_edits",
+        json!({"run_id": run, "request_id": "clamp", "edits": [
+            {"type": "updateClip", "clipId": sound, "dereverb": 2.0, "leveler": -1.0}
+        ]}),
+    );
+    let state = c.call("get_state", json!({}));
+    let clip = state["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|t| t["clips"].as_array().unwrap())
+        .find(|clip| clip["id"] == sound)
+        .unwrap();
+    assert_eq!(clip["content"]["dereverb"], 1.0);
+    assert!(clip["content"].get("leveler").is_none());
+    c.call("end_run", json!({"run_id": run, "action": "keep"}));
+    c.finish();
+}
+
+#[test]
 fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
@@ -316,10 +378,11 @@ fn readonly_resources_prompts_and_clear_errors() {
             && guide.contains(r#""duckDb":12"#)
             && guide.contains(r#""keepPitch":false"#)
     );
-    // Ducking and Keep pitch are fields an agent finds in the schema and sets with updateClip.
     let schema = c.rpc("resources/read", json!({"uri":"nuzky://schema"}));
     let schema = schema["result"]["contents"][0]["text"].as_str().unwrap();
-    assert!(schema.contains("\"duckDb\"") && schema.contains("\"keepPitch\""));
+    for field in ["duckDb", "keepPitch", "dereverb", "normalize", "leveler"] {
+        assert!(schema.contains(&format!("\"{field}\"")), "{field}");
+    }
     let prompt = c.rpc("prompts/get", json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}));
     assert!(prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("Make a reel"));
     // One prompt starts the whole rough cut; the user's wishes come with it.

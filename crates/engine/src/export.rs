@@ -9,12 +9,11 @@ use ff::software::scaling;
 use ff::util::{color, format::Pixel, frame};
 use ffmpeg_next as ff;
 
-use crate::audio::{Mixer, ensure_pcm, has_audio};
+use crate::audio::{Chain, Mixer, chains, has_audio};
 use crate::loudness::{Limiter, Meter, db_to_gain};
 use crate::media::{init, set_sws_colorspace};
 use crate::model::{CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, TrackKind};
 use crate::render::{Pending, Renderer, Wait};
-use crate::voice::ensure_voice_pcm;
 
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, serde::Deserialize)]
@@ -206,21 +205,25 @@ pub fn export(
     }
 }
 
-/// Decodes the sound of every file heard in `project` into the cache, cleaned where a clip of it cleans the voice.
+/// Prepares the sound of every file heard in `project` as its clips play it: decoded into the cache, cleaned
+/// and without reverb where a clip asks for it, and measured for Match loudness and Even out volume.
 pub(crate) fn prepare_sound(project: &Project, cache_dir: &Path, cancel: &AtomicBool) -> Result<()> {
-    // Each heard file, and whether a clip of it cleans the voice: the file then has the cleaned sound.
-    let mut heard = std::collections::HashMap::<&str, bool>::new();
+    let mut heard = std::collections::HashMap::<&str, (std::collections::HashSet<Chain>, bool)>::new();
     for clip in heard_clips(project) {
-        if let ClipContent::Media { asset_id, clean_voice, .. } = &clip.content {
-            *heard.entry(asset_id.as_str()).or_default() |= *clean_voice;
+        if let ClipContent::Media { asset_id, .. } = &clip.content {
+            let (chains, levels) = chains(clip);
+            let entry = heard.entry(asset_id.as_str()).or_default();
+            entry.0.extend(chains);
+            entry.1 |= levels;
         }
     }
     for asset in project.assets.iter().filter(|a| has_audio(a)) {
-        let Some(&clean_voice) = heard.get(asset.id.as_str()) else { continue };
-        if clean_voice {
-            ensure_voice_pcm(cache_dir, asset, |_| check_cancel(cancel))?;
-        } else {
-            ensure_pcm(cache_dir, asset, |_| check_cancel(cancel))?;
+        let Some((chains, levels)) = heard.get(asset.id.as_str()) else { continue };
+        for chain in chains {
+            let path = chain.ensure(cache_dir, asset, |_| check_cancel(cancel))?;
+            if *levels {
+                crate::level::ensure_blocks(&path, |_| check_cancel(cancel))?;
+            }
         }
     }
     Ok(())

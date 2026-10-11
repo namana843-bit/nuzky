@@ -17,6 +17,8 @@ cosmic-text = "0.19.0"
 memmap2 = "0.9"
 # RNNoise in Rust (BSD-3-Clause) for Clean voice; the default features only add its command-line tool.
 nnnoiseless = { version = "0.5.2", default-features = false }
+# Real FFT (MIT OR Apache-2.0) for Reduce echo; nnnoiseless already builds it.
+realfft = "3.5.0"
 uuid = { version = "1", features = ["v4", "serde"] }
 png = "0.18.1"
 

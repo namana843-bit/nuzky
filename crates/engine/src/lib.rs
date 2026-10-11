@@ -3,10 +3,12 @@
 
 pub mod audio;
 pub mod credits;
+pub mod dereverb;
 pub mod edit;
 pub mod effects;
 pub mod export;
 pub mod gpu;
+pub mod level;
 pub mod loudness;
 pub mod matte;
 pub mod media;

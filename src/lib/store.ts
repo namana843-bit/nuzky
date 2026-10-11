@@ -814,9 +814,12 @@ export const FADE_STEP_US = US / 10;
 /** The longest sound fade at each end of a clip: half its length, at most 10 s, on a whole step. */
 export const maxFadeUs = (durationUs: number) => Math.min(10 * US, Math.floor(durationUs / 2 / FADE_STEP_US) * FADE_STEP_US);
 
-/** Turns Clean voice on or off for the media clips in `ids`, as one undo step. */
-export function setCleanVoice(ids: string[], on: boolean) {
-  return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, cleanVoice: on } : null));
+/** The settings of the inspector's Voice section. */
+export type VoiceChange = { cleanVoice?: boolean; dereverb?: number; normalize?: boolean; leveler?: number };
+
+/** Changes Voice settings of the media clips in `ids`, as one undo step. */
+export function setVoice(ids: string[], change: VoiceChange, coalesce?: string) {
+  return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, ...change } : null), coalesce);
 }
 
 /** Sets what shows behind the person on video and image clips, as one undo step. */
@@ -840,12 +843,24 @@ export function useMatteJob(paths: string[]) {
   );
 }
 
-/** How far the cleaned voice of these files is prepared (0 to 1) while that runs, else null. */
+/** The jobs that prepare the sound of the Voice section, by the prefix of their id. */
+const VOICE_JOBS = [
+  ["voice", "Cleaning voice"],
+  ["dereverb", "Reducing echo"],
+  ["level", "Measuring loudness"],
+] as const;
+
+/** The first Voice preparation running for these files, with how far it is (0 to 1), else null. */
 export function useVoicePreparation(assetIds: string[]) {
-  return useEditor((s) => {
-    const running = assetIds.map((id) => s.jobs[`voice:${id}`]).filter((j) => j?.status === "running");
-    return running.length > 0 ? Math.min(...running.map((j) => j.progress)) : null;
-  });
+  return useEditor(
+    useShallow((s) => {
+      for (const [kind, label] of VOICE_JOBS) {
+        const running = assetIds.map((id) => s.jobs[`${kind}:${id}`]).filter((j) => j?.status === "running");
+        if (running.length > 0) return { label, progress: Math.min(...running.map((j) => j.progress)) };
+      }
+      return null;
+    }),
+  );
 }
 
 /**

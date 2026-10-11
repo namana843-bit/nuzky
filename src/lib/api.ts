@@ -31,6 +31,8 @@ export const api = {
   thumbnail: (assetId: string) => invoke<string | null>("thumbnail", { assetId }),
   /** Waveform peaks `from..to`; while the sound is still being prepared, only the part decoded so far and `complete: false`. */
   waveform: (assetId: string, from: number, to: number) => invoke<{ peaks: number[]; complete: boolean } | null>("waveform", { assetId, from, to }),
+  /** The gain Match loudness gives the clip in dB, or null until its file's loudness is measured. */
+  matchGain: (clipId: string) => invoke<number | null>("match_gain", { clipId }),
   play: () => invoke<void>("play"),
   pause: () => invoke<void>("pause"),
   seek: (tUs: number) => invoke<void>("seek", { tUs: Math.round(tUs) }),

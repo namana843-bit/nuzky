@@ -344,6 +344,9 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
             fade_out_us,
             adjust,
             clean_voice,
+            dereverb,
+            normalize,
+            leveler,
             shape,
             duck_db,
             background,
@@ -376,8 +379,19 @@ fn validate_clip(project: &Project, clip: &Clip, kind: TrackKind) -> Result<()> 
                 clip.id
             );
             ensure!(
-                !clean_voice || nuzky_engine::audio::has_audio(asset),
-                "INVALID_PROJECT: clip {} cleans the voice of media without sound",
+                dereverb.is_finite() && (0.0..=1.0).contains(dereverb),
+                "INVALID_PROJECT: clip {} echo reduction",
+                clip.id
+            );
+            ensure!(
+                leveler.is_finite() && (0.0..=1.0).contains(leveler),
+                "INVALID_PROJECT: clip {} volume levelling",
+                clip.id
+            );
+            ensure!(
+                !(*clean_voice || *dereverb > 0.0 || *normalize || *leveler > 0.0)
+                    || nuzky_engine::audio::has_audio(asset),
+                "INVALID_PROJECT: clip {} changes media without sound",
                 clip.id
             );
             ensure!(
@@ -845,15 +859,38 @@ mod tests {
             });
             project.apply(EditCmd::AddClip { asset_id: id.into(), start_us: None, track_id: None }).unwrap();
         }
-        let clean = |project: &mut Project, index: usize| {
-            let ClipContent::Media { clean_voice, .. } = &mut project.tracks[0].clips[index].content else { panic!() };
-            *clean_voice = true;
-        };
-        let mut sound = project.clone();
-        clean(&mut sound, 1);
-        validate(&sound).unwrap();
-        clean(&mut project, 0);
-        let error = validate(&project).unwrap_err().to_string();
-        assert!(error.starts_with("INVALID_PROJECT:") && error.contains("without sound"), "{error}");
+        validate(&project).unwrap();
+        for field in ["cleanVoice", "dereverb", "normalize", "leveler"] {
+            for index in [0, 1] {
+                let mut changed = serde_json::to_value(&project).unwrap();
+                changed["tracks"][0]["clips"][index]["content"][field] =
+                    if field == "cleanVoice" || field == "normalize" { true.into() } else { 0.5.into() };
+                let changed: Project = serde_json::from_value(changed).unwrap();
+                if index == 1 {
+                    validate(&changed).unwrap();
+                } else {
+                    let error = validate(&changed).unwrap_err().to_string();
+                    assert!(
+                        error.starts_with("INVALID_PROJECT:") && error.contains("without sound"),
+                        "{field}: {error}"
+                    );
+                }
+            }
+        }
+        for value in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
+            for echo in [true, false] {
+                let mut changed = project.clone();
+                let ClipContent::Media { dereverb, leveler, .. } = &mut changed.tracks[0].clips[1].content else {
+                    panic!()
+                };
+                if echo {
+                    *dereverb = value;
+                } else {
+                    *leveler = value;
+                }
+                let error = validate(&changed).unwrap_err().to_string();
+                assert!(error.starts_with("INVALID_PROJECT: clip "), "{error}");
+            }
+        }
     }
 }
