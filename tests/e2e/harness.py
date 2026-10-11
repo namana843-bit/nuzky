@@ -149,6 +149,9 @@ class Run:
                         XDG_RUNTIME_DIR=runtime, DBUS_SESSION_BUS_ADDRESS='disabled:', GDK_BACKEND='x11',
                         # Flows never ask GitHub for a new version; tests/e2e/updates.py serves its own.
                         NUZKY_NO_UPDATE_CHECK='1',
+                        # Nor does the app read the ChatGPT sign-in from the user's keychain or reach OpenAI; on macOS
+                        # a separate home does not separate the keychain. tests/e2e/chatgpt.py serves its own issuer.
+                        NUZKY_CHATGPT_ISSUER='http://127.0.0.1:9', NUZKY_TEST_KEYCHAIN=str(self.work / 'keychain.json'),
                         PYTHONDONTWRITEBYTECODE='1')
         self.checks, self.shots, self.s, self.app = [], [], None, None
         if MACOS:
