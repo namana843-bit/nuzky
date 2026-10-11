@@ -67,6 +67,13 @@ def idle(r):
     return wait(lambda: agent(r)['status'] == 'idle', 20)
 
 
+def setup_jobs(r):
+    setup(r)
+    # A copy of the fake, so the flow can take the agent away.
+    shutil.copy(FAKE, r.work / 'claude')
+    r.env['NUZKY_AGENT_CLAUDE'] = str(r.work / 'claude')
+
+
 def setup_codex(r):
     setup(r)
     r.env.update(NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_CODEX=str(FAKE.with_name('fake_codex')))
@@ -151,7 +158,7 @@ def ai_panel_codex(r):
 
 
 @flow('ai_panel_jobs', "A job of the panel's agent outlasts the turn it ends to ask: it shows with Stop while the user "
-      'decides, the next turn reads its result or cancels it, and Stop or a new chat stops it', before=setup)
+      'decides, the next turn reads its result or cancels it, and Stop or a new chat stops it', before=setup_jobs)
 def ai_panel_jobs(r):
     r.s.run('document.body.focus()')
     r.key('j', ctrlKey=True)
@@ -215,6 +222,16 @@ def ai_panel_jobs(r):
     r.check('a new chat leaves nothing of the old one running in the panel', wait(lambda: not r.s.run(stop), 5), r.s.run(status))
     send(r, 'Wait and continue')
     r.check('and stops the job the old one started', wait(lambda: f'Job {fourth}: cancelled' in said(), 30), said())
+
+    ask()
+    # The agent goes away while its answer starts, so no turn starts.
+    (fake / 'vanish').touch()
+    send(r, 'Wait and continue')
+    r.check('when the answer cannot start, the panel still shows the export with Stop',
+            wait(lambda: 'error' in agent(r)['kinds'], 10) and wait(lambda: 'Exporting' in r.s.run(status) and r.s.run(stop), 5),
+            {'status': r.s.run(status), 'agent': agent(r)})
+    click(r, 'Stop')
+    r.check('and Stop stops it', wait(lambda: 'Exporting' not in r.s.run(status) and not r.s.run(stop), 5), r.s.run(status))
     left = sorted(p.name for p in fake.iterdir() if p.name.startswith(('export-', '.nuzky-part')))
     r.check('the stopped exports left no file behind', left == [exported[0].name] if exported else False, left)
     r.check('no error toast along the way', not r.errors(), r.errors())

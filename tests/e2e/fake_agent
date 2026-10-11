@@ -18,12 +18,17 @@ of the bridge from --mcp-config or -c, so its edits go through Nuzky like a real
   "signin"   is not signed in;  "limit" has hit its usage limit
   anything else is echoed back.
 Each start is logged to $NUZKY_FAKE_AGENT_LOG/runs.jsonl (argv, pid, session); sessions live there too.
+With $NUZKY_FAKE_AGENT_LOG/vanish, `--version` takes this executable's execute bit away, so the turn cannot start.
 """
 import json, os, signal, subprocess, sys, threading, queue, time, tomllib, uuid
 from pathlib import Path
 
 CODEX = Path(sys.argv[0]).name == 'fake_codex'
 if len(sys.argv) > 1 and sys.argv[1] == '--version':
+    if (Path(os.environ.get('NUZKY_FAKE_AGENT_LOG', '/tmp/fake-agent')) / 'vanish').exists():
+        # Found, then gone before it starts, slower than the panel's polling.
+        time.sleep(1.5)
+        os.chmod(sys.argv[0], 0o644)
     print('codex-cli 0.162.1' if CODEX else '2.1.292 (Claude Code)')
     sys.exit(0)
 
