@@ -200,13 +200,13 @@ def ai_panel(r):
         press('Return')
         copied = wait(lambda: clipboard() == 'Cut the pause at the start and add captions', 5)
         got = clipboard()
-        label = r.s.run("return document.activeElement?.getAttribute('aria-label')")
+        shown = r.s.run("return !!document.querySelector('aside[aria-label=AI] button[aria-label=Copied]')")
         r.shot('message-copied')
     finally:
         if theirs is not None:
             subprocess.run(['pbcopy'], input=theirs, text=True, check=True)
     r.check('Copy beside my message puts exactly what I sent on the clipboard and says it is copied',
-            found and copied and label == 'Copied', {'button': found, 'clipboard': got, 'label': label})
+            found and copied and shown, {'button': found, 'clipboard': got, 'copied shown': shown})
     click(r, 'Added 2 captions')
     r.check('a line of the card selects the clips it is about', wait(lambda: len(r.s.run('return window.__nuzky.store.getState().selection')) == 2, 5))
     click(r, 'Undo')

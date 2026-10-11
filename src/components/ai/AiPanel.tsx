@@ -542,7 +542,7 @@ function UserMessage({ text, context }: { text: string; context: string | null }
     );
   return (
     <div className="group flex max-w-[88%] flex-col items-end gap-1 self-end">
-      <div className="flex items-end gap-1">
+      <div className="flex max-w-full items-end gap-1">
         <IconButton
           label={copied ? "Copied" : "Copy message"}
           onClick={() => void copy()}
@@ -550,7 +550,7 @@ function UserMessage({ text, context }: { text: string; context: string | null }
         >
           {copied ? <Check size={13} className="text-ok" /> : <Copy size={13} />}
         </IconButton>
-        <div className="whitespace-pre-wrap break-words rounded-[14px] rounded-br-[4px] bg-raised px-3 py-2 leading-[19px] text-fg">{text}</div>
+        <div className="min-w-0 whitespace-pre-wrap break-words rounded-[14px] rounded-br-[4px] bg-raised px-3 py-2 leading-[19px] text-fg">{text}</div>
       </div>
       {context && <div className="tabular text-[11px] text-muted">{context}</div>}
     </div>
