@@ -32,7 +32,13 @@ pub(super) fn line(reader: &mut BufReader<UnixStream>, limit: usize, deadline: O
         if let Some(deadline) = deadline {
             let remaining =
                 deadline.checked_duration_since(Instant::now()).context("IPC_UNTRUSTED: hello deadline exceeded")?;
-            reader.get_ref().set_read_timeout(Some(remaining))?;
+            // macOS refuses socket options once the peer has hung up; what it sent is still readable and reading
+            // cannot block then, so the deadline is not needed.
+            if let Err(error) = reader.get_ref().set_read_timeout(Some(remaining))
+                && error.raw_os_error() != Some(libc::EINVAL)
+            {
+                return Err(error.into());
+            }
         }
         let buffered = reader.fill_buf().context("IPC_UNTRUSTED: reading IPC message")?;
         ensure!(!buffered.is_empty(), "IPC_CLOSED: peer disconnected");
@@ -103,6 +109,15 @@ mod tests {
         assert!(line(&mut BufReader::new(reader), 4096, Some(began + Duration::from_millis(80))).is_err());
         assert!(began.elapsed() < Duration::from_millis(250));
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn a_reply_reads_after_the_peer_hung_up() {
+        let (reader, mut sender) = UnixStream::pair().unwrap();
+        sender.write_all(b"{\"ok\":false}\n").unwrap();
+        drop(sender);
+        let line = line(&mut BufReader::new(reader), 4096, Some(Instant::now() + Duration::from_secs(1))).unwrap();
+        assert_eq!(line.bytes, b"{\"ok\":false}\n");
     }
 
     #[test]
