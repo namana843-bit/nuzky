@@ -7,6 +7,7 @@ mod engine;
 mod jobs;
 mod library;
 mod preview_server;
+mod recap;
 mod reels;
 mod sounds;
 mod store;
@@ -286,8 +287,39 @@ impl OpenSession {
                     SessionEvent::Saved { revision, error } => {
                         app.emit("saved", store::SavedEvent { revision, error }).ok();
                     }
-                    SessionEvent::RunSummary(changes) => {
-                        app.emit("run-summary", changes).ok();
+                    SessionEvent::RunSummary { run_id, mut changes } => {
+                        let host = current.host.clone();
+                        drop(current);
+                        let recap = host
+                            .session
+                            .run_pair(&run_id)
+                            .and_then(|(before, after)| nuzky_mcp::recap::recap(before, after, &host.transcripts));
+                        match recap {
+                            Ok(recap) => {
+                                if let Some(text) = nuzky_mcp::recap::line(&recap.totals()) {
+                                    let at = changes
+                                        .iter()
+                                        .position(|c| c.text.starts_with("Cut out "))
+                                        .or_else(|| {
+                                            changes.iter().position(|c| {
+                                                c.text.starts_with("Shortened the video ")
+                                                    || c.text.starts_with("Lengthened the video ")
+                                            })
+                                        })
+                                        .map_or(0, |i| i + 1);
+                                    changes.insert(
+                                        at,
+                                        nuzky_session::summary::RunChange { text, clip_ids: Vec::new(), at_us: None },
+                                    );
+                                }
+                            }
+                            Err(error) => log::warn!("Cannot build recap for run {run_id}: {error:#}"),
+                        }
+                        let current = state.session.lock().unwrap();
+                        if stopped.load(Ordering::Acquire) || !Arc::ptr_eq(&host, &current.host) {
+                            break;
+                        }
+                        app.emit("run-summary", serde_json::json!({ "runId": run_id, "changes": changes })).ok();
                     }
                     SessionEvent::Run(run) => {
                         app.emit("run-changed", run.map(|run| run.label)).ok();
@@ -1042,6 +1074,8 @@ pub fn run() {
             library::restore_collection,
             library::set_collection,
             start_export,
+            recap::recap_info,
+            recap::start_recap,
             filmstrip,
             layer_bounds,
             cancel_job,

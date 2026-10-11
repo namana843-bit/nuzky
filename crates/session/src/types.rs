@@ -102,7 +102,10 @@ pub enum SessionEvent {
     },
     Run(Option<RunInfo>),
     /// What the run that is ending changed, sent just before `Run(None)`.
-    RunSummary(Vec<crate::summary::RunChange>),
+    RunSummary {
+        run_id: String,
+        changes: Vec<crate::summary::RunChange>,
+    },
     Saved {
         revision: u64,
         error: Option<String>,

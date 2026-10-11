@@ -8,6 +8,7 @@ mod limits;
 mod media;
 pub mod model_download;
 mod params;
+pub mod recap;
 pub mod reels;
 mod rules;
 pub mod sounds;

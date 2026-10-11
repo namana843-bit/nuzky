@@ -91,6 +91,45 @@ fn removed(before: &[(i64, i64)], after: &[(i64, i64)]) -> Vec<(i64, i64)> {
     out
 }
 
+pub struct Cut {
+    pub before_us: i64,
+    pub after_us: i64,
+    pub passages: HashMap<String, Vec<(i64, i64)>>,
+    pub gone_assets: Vec<String>,
+}
+
+pub fn cut(before: &Project, after: &Project) -> Cut {
+    let (was, now) = (coverage(before), coverage(after));
+    let mut cut = Cut {
+        before_us: before.duration_us(),
+        after_us: after.duration_us(),
+        passages: HashMap::new(),
+        gone_assets: Vec::new(),
+    };
+    for (asset, ranges) in was {
+        match now.get(&asset) {
+            None => cut.gone_assets.push(asset),
+            Some(left) => {
+                let ranges = removed(&ranges, left);
+                if !ranges.is_empty() {
+                    cut.passages.insert(asset, ranges);
+                }
+            }
+        }
+    }
+    cut.gone_assets.sort();
+    cut
+}
+
+pub fn duration_text(us: i64) -> String {
+    if us < 60_000_000 {
+        secs(us)
+    } else {
+        let seconds = us / 1_000_000;
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
+
 /// The clip of the earlier project that a clip of the later one comes from: the same clip, or
 /// the one playing most of the same source (a split piece gets a new id).
 fn origins<'a>(before: &'a Project, after: &'a Project) -> Vec<(&'a Clip, Option<&'a Clip>)> {
@@ -143,35 +182,26 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
     let asset_name =
         |id: &str| after.asset(id).or_else(|| before.asset(id)).map_or("a file".to_owned(), |a| a.name.clone());
 
-    // Length.
-    let (was, now) = (before.duration_us(), after.duration_us());
+    let cut = cut(before, after);
+    let (was, now) = (cut.before_us, cut.after_us);
     if (was - now).abs() >= 50_000 {
         let verb = if now < was { "Shortened" } else { "Lengthened" };
         out.push(RunChange {
-            text: format!("{verb} the video from {} to {}", secs(was), secs(now)),
+            text: format!("{verb} the video from {} to {}", duration_text(was), duration_text(now)),
             clip_ids: Vec::new(),
             at_us: None,
         });
     }
-
-    // What was cut out of the main track, and takes that left it entirely.
-    let (cov_before, cov_after) = (coverage(before), coverage(after));
-    let mut gone_takes = Vec::new();
-    let mut cut: Vec<(i64, i64)> = Vec::new();
-    for (asset, ranges) in &cov_before {
-        match cov_after.get(asset) {
-            None => gone_takes.push(asset_name(asset)),
-            Some(left) => cut.extend(removed(ranges, left)),
-        }
-    }
-    if !cut.is_empty() {
-        let total: i64 = cut.iter().map(|(a, b)| b - a).sum();
+    let passages: Vec<_> = cut.passages.values().flatten().collect();
+    if !passages.is_empty() {
+        let total: i64 = passages.iter().map(|(a, b)| b - a).sum();
         out.push(RunChange {
-            text: format!("Cut out {}, {} in total", count(cut.len(), "passage", "passages"), secs(total)),
+            text: format!("Cut out {}, {} in total", count(passages.len(), "passage", "passages"), secs(total)),
             clip_ids: Vec::new(),
             at_us: None,
         });
     }
+    let mut gone_takes: Vec<_> = cut.gone_assets.iter().map(|id| asset_name(id)).collect();
     gone_takes.sort();
     for name in gone_takes {
         out.push(RunChange { text: format!("Removed {name} from the main track"), clip_ids: Vec::new(), at_us: None });
@@ -184,7 +214,6 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         .flat_map(|t| t.clips.iter().map(move |c| (c.id.as_str(), (t.id.as_str(), t.kind, t.is_captions()))))
         .collect();
 
-    // Media placed on the timeline that was not there before (split pieces are not new).
     let added: Vec<&Clip> = pairs.iter().filter(|(c, o)| o.is_none() && source(c).is_some()).map(|(c, _)| *c).collect();
     let mut by_asset: Vec<(String, Vec<&Clip>)> = Vec::new();
     for clip in added {
@@ -203,7 +232,6 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         out.push(line(format!("Added {name}{place}"), clips));
     }
 
-    // Captions and titles.
     let text_clips = |p: &'_ Project, captions: bool| -> Vec<Clip> {
         p.tracks
             .iter()
@@ -258,7 +286,6 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         });
     }
 
-    // Changes to clips that were already there, grouped by what changed.
     let mut zoomed: Vec<(&Clip, f32)> = Vec::new();
     let mut grouped: Vec<(&'static str, Vec<&Clip>)> = Vec::new();
     for &(clip, origin) in &pairs {
@@ -357,8 +384,7 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         let clips: Vec<&Clip> = zoomed.iter().map(|(c, _)| *c).collect();
         out.push(line(format!("Zoomed in on {} ({factor})", count(clips.len(), "place", "places")), &clips));
     }
-    // Clips split in two where nothing was cut or zoomed: a new piece of a clip, playing its own part of it.
-    if cut.is_empty() && zoomed.is_empty() {
+    if passages.is_empty() && zoomed.is_empty() {
         let pieces: Vec<&Clip> = pairs
             .iter()
             .filter(|(c, o)| o.is_some_and(|o| o.id != c.id))
@@ -388,7 +414,6 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         out.push(line(format!("{what} {noun}"), &clips));
     }
 
-    // Tracks, canvas and the rest of the project.
     for t in &after.tracks {
         if let Some(b) = before.tracks.iter().find(|b| b.id == t.id) {
             let name = if t.name.is_empty() { "a track".to_owned() } else { format!("the {} track", t.name) };
@@ -489,7 +514,6 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
         });
     }
 
-    // Anything else still says that something changed.
     if out.is_empty() && before != after {
         out.push(RunChange { text: "Changed the project".into(), clip_ids: Vec::new(), at_us: None });
     }
@@ -522,6 +546,15 @@ mod tests {
 
     fn texts(changes: &[RunChange]) -> Vec<&str> {
         changes.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    #[test]
+    fn recap_duration_text_switches_to_minutes_and_cut_ignores_slivers() {
+        assert_eq!(duration_text(59_900_000), "59.9 s");
+        assert_eq!(duration_text(60_000_000), "1:00");
+        assert_eq!(duration_text(125_000_000), "2:05");
+        assert!(removed(&[(0, 100_000)], &[(19_999, 100_000)]).is_empty());
+        assert_eq!(removed(&[(0, 100_000)], &[(20_000, 100_000)]), [(0, 20_000)]);
     }
 
     #[test]
