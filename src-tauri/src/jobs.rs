@@ -2,7 +2,7 @@
 //! learning the creator's style from their videos.
 //! Every job reports through `job` events.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -11,12 +11,11 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use nuzky_analysis::CaptionGrouping;
 use nuzky_analysis::models_dir;
-use nuzky_engine::audio::{ensure_pcm, has_audio};
+use nuzky_engine::audio::{Chain, chains, ensure_pcm, has_audio};
 use nuzky_engine::edit::{CaptionPreset, new_id};
 use nuzky_engine::export::{Delivery, ExportOptions, Quality, check_options, export};
 use nuzky_engine::model::{Animation, Asset, AssetKind, ClipContent, Project, TextStyle};
 use nuzky_engine::proxy;
-use nuzky_engine::voice::{ensure_voice_pcm, voice_pcm_path};
 use nuzky_mcp::model_download::{self, Integrity};
 use nuzky_mcp::transcript;
 use nuzky_session::{host::Host, transcripts::TranscriptStore};
@@ -159,14 +158,16 @@ pub fn prepare_media(state: &AppState, project: &Project) {
             // A project opened meanwhile can use this asset id for another file (a copy keeps the
             // ids); its request found this job running and was skipped, so it is made now.
             let state = app.state::<AppState>();
-            if let Ok(open) = state.project()
-                && open.assets.iter().any(|a| a.id == asset.id && nuzky_engine::audio::pcm_path(&cache, a) != path)
-            {
-                prepare_media(&state, &open);
+            if let Ok(open) = state.project() {
+                if open.assets.iter().any(|a| a.id == asset.id && nuzky_engine::audio::pcm_path(&cache, a) != path) {
+                    prepare_media(&state, &open);
+                } else {
+                    ensure_sound(&state, &open);
+                }
             }
         });
     }
-    ensure_voice(state, project);
+    ensure_sound(state, project);
     ensure_proxies(state, project);
     ensure_mattes(state, project);
 }
@@ -229,69 +230,122 @@ fn ensure_mattes(state: &AppState, project: &Project) {
     }
 }
 
-/// Files a clip with Clean voice plays.
-fn voice_assets(project: &Project) -> HashSet<&str> {
-    project
-        .tracks
-        .iter()
-        .flat_map(|t| &t.clips)
-        .filter_map(|c| match &c.content {
-            ClipContent::Media { asset_id, clean_voice: true, .. } => Some(asset_id.as_str()),
-            _ => None,
-        })
-        .collect()
+/// Prepares the sound clips play with their Voice settings, once per file, as a job per file and kind: `voice:`
+/// cleans it, `dereverb:` takes the reverb out (and cleans that when a clip also cleans the voice), `level:` measures
+/// the loudness of what is ready for Match loudness and Even out volume. Playback switches to each as it is ready;
+/// after each job the open project is looked at again, so measuring follows the sound it measures. Work no clip needs
+/// any more (a setting turned off, the clip deleted, another project opened) stops.
+fn ensure_sound(state: &AppState, project: &Project) {
+    let app = state.app.clone();
+    for (kind, label) in [("voice", "Cleaning voice"), ("dereverb", "Reducing echo"), ("level", "Measuring loudness")] {
+        let wanted = wanted_sound(project, kind);
+        for (id, cancel) in state.jobs.lock().unwrap().iter() {
+            if id.strip_prefix(&format!("{kind}:")).is_some_and(|asset| !wanted.contains_key(asset)) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        }
+        for asset in project.assets.iter().filter(|a| wanted.contains_key(a.id.as_str()) && has_audio(a)) {
+            if !Path::new(&asset.path).is_file() {
+                continue;
+            }
+            let failed = state.audio_failed.lock().unwrap();
+            let work: Vec<_> = wanted[asset.id.as_str()]
+                .iter()
+                .filter_map(|&chain| {
+                    let cache = chain.path(&state.cache_dir, asset);
+                    let path = if kind == "level" { nuzky_engine::level::blocks_path(&cache) } else { cache.clone() };
+                    (!path.exists() && !failed.contains(&path) && (kind != "level" || cache.exists()))
+                        .then_some((chain, path))
+                })
+                .collect();
+            drop(failed);
+            let Some((_, path)) = work.first() else { continue };
+            let mut path = path.clone();
+            let id = format!("{kind}:{}", asset.id);
+            let Some(flag) = register(&app, &id) else { continue };
+            let (worker, job, asset, cache) = (app.clone(), id.clone(), asset.clone(), state.cache_dir.clone());
+            let spawned = std::thread::Builder::new().name(kind.into()).spawn(move || {
+                let (app, id) = (worker, job);
+                let mut rep = Reporter::new(&app, &id, "audio", format!("{label} in {}", asset.name));
+                // A step no clip needs any more, as cleaning once Clean voice is off while Reduce echo stays, is
+                // left out, or stops as if cancelled; what is still needed starts again after the job.
+                let needed = |chain: &Chain| {
+                    app.state::<AppState>().project().is_ok_and(|open| {
+                        wanted_sound(&open, kind).get(&asset.id).is_some_and(|chains| chains.contains(chain))
+                    })
+                };
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    for (index, (chain, output)) in work.iter().enumerate() {
+                        if !needed(chain) {
+                            continue;
+                        }
+                        path = output.clone();
+                        check_cancelled(&flag)?;
+                        let mut asked = Instant::now();
+                        let progress = |p| {
+                            if asked.elapsed() > Duration::from_millis(500) {
+                                asked = Instant::now();
+                                if !needed(chain) {
+                                    flag.store(true, Ordering::Relaxed);
+                                }
+                            }
+                            check_cancelled(&flag)?;
+                            rep.progress((index as f32 + p) / work.len() as f32, None);
+                            Ok(())
+                        };
+                        if kind == "level" {
+                            nuzky_engine::level::ensure_blocks(&chain.path(&cache, &asset), progress)?;
+                        } else {
+                            chain.ensure(&cache, &asset, progress)?;
+                        }
+                    }
+                    check_cancelled(&flag)
+                }))
+                .unwrap_or_else(|p| Err(crashed(&p)));
+                let cancelled = flag.load(Ordering::Relaxed);
+                if result.is_err() && !cancelled {
+                    app.state::<AppState>().audio_failed.lock().unwrap().insert(path);
+                }
+                rep.finish(result.map(|_| None), cancelled);
+                unregister(&app, &id);
+                let state = app.state::<AppState>();
+                if let Ok(open) = state.project() {
+                    ensure_sound(&state, &open);
+                }
+            });
+            if spawned.is_err() {
+                unregister(&app, &id);
+            }
+        }
+    }
 }
 
-/// Cleans the voice of every file a clip with Clean voice plays, once, as a job per file; playback
-/// switches to the cleaned sound when it is ready. Preparation that no clip needs any more (Clean
-/// voice turned off, the clip deleted, another project opened) stops.
-fn ensure_voice(state: &AppState, project: &Project) {
-    let app = state.app.clone();
-    let wanted = voice_assets(project);
-    for (id, cancel) in state.jobs.lock().unwrap().iter() {
-        if id.strip_prefix("voice:").is_some_and(|asset| !wanted.contains(asset)) {
-            cancel.store(true, Ordering::Relaxed);
-        }
-    }
-    for asset in project.assets.iter().filter(|a| wanted.contains(a.id.as_str()) && has_audio(a)) {
-        if !Path::new(&asset.path).is_file() {
-            continue;
-        }
-        let path = voice_pcm_path(&state.cache_dir, asset);
-        if path.exists() || state.audio_failed.lock().unwrap().contains(&path) {
-            continue;
-        }
-        let id = format!("voice:{}", asset.id);
-        let Some(flag) = register(&app, &id) else { continue };
-        let (worker, job, asset, cache) = (app.clone(), id.clone(), asset.clone(), state.cache_dir.clone());
-        let spawned = std::thread::Builder::new().name("clean-voice".into()).spawn(move || {
-            let (app, id) = (worker, job);
-            let mut rep = Reporter::new(&app, &id, "audio", format!("Cleaning voice in {}", asset.name));
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                ensure_voice_pcm(&cache, &asset, |p| {
-                    check_cancelled(&flag)?;
-                    rep.progress(p, None);
-                    Ok(())
-                })
-            }))
-            .unwrap_or_else(|p| Err(crashed(&p)));
-            let cancelled = flag.load(Ordering::Relaxed);
-            if result.is_err() && !cancelled {
-                app.state::<AppState>().audio_failed.lock().unwrap().insert(path);
-            }
-            rep.finish(result.map(|_| None), cancelled);
-            unregister(&app, &id);
-            // Turned off and on again while this ran, or another file under the same id: prepare
-            // what the open project needs now.
-            let state = app.state::<AppState>();
-            if let Ok(open) = state.project() {
-                ensure_voice(&state, &open);
-            }
+/// What the clips of `project` need of the `kind` of preparation, per file: the chains to make, or for `level` the
+/// chains to measure. Taking the reverb out comes before cleaning what is left, as a step of its own.
+fn wanted_sound(project: &Project, kind: &str) -> HashMap<String, Vec<Chain>> {
+    let mut wanted: HashMap<String, Vec<Chain>> = HashMap::new();
+    for clip in project.tracks.iter().flat_map(|t| &t.clips) {
+        let ClipContent::Media { asset_id, .. } = &clip.content else { continue };
+        let (mut chains, blocks) = chains(clip);
+        chains.retain(|chain| match kind {
+            "voice" => !chain.dereverb && chain.clean_voice,
+            "dereverb" => chain.dereverb,
+            _ => blocks,
         });
-        if spawned.is_err() {
-            unregister(&app, &id);
+        if chains.is_empty() {
+            continue;
+        }
+        if kind == "dereverb" {
+            chains.insert(0, Chain { dereverb: true, clean_voice: false });
+        }
+        let work = wanted.entry(asset_id.clone()).or_default();
+        for chain in chains {
+            if !work.contains(&chain) {
+                work.push(chain);
+            }
         }
     }
+    wanted
 }
 
 /// Makes the preview proxy of each video that decodes slowly (`nuzky_engine::proxy`), one file at a time; the

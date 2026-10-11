@@ -13,7 +13,7 @@ const ABSOLUTE_GATE_LUFS: f64 = -70.0;
 const RELATIVE_GATE_LU: f64 = -10.0;
 
 /// Loudness of a mean square summed over channels (all weights 1.0 for left and right).
-fn lufs(power: f64) -> f64 {
+pub(crate) fn lufs(power: f64) -> f64 {
     -0.691 + 10.0 * power.log10()
 }
 
@@ -26,14 +26,14 @@ pub fn gain_to_db(gain: f32) -> f64 {
 }
 
 #[derive(Clone, Copy)]
-struct Biquad {
+pub(crate) struct Biquad {
     b: [f64; 3],
     a: [f64; 2],
     z: [f64; 2],
 }
 
 impl Biquad {
-    fn run(&mut self, x: f64) -> f64 {
+    pub(crate) fn run(&mut self, x: f64) -> f64 {
         let y = self.b[0] * x + self.z[0];
         self.z[0] = self.b[1] * x - self.a[0] * y + self.z[1];
         self.z[1] = self.b[2] * x - self.a[1] * y;
@@ -42,16 +42,17 @@ impl Biquad {
 }
 
 /// K-weighting at 48 kHz, BS.1770-4 Tables 1 and 2: the head's high shelf, then the RLB high-pass.
-const SHELF: Biquad = Biquad {
+pub(crate) const SHELF: Biquad = Biquad {
     b: [1.53512485958697, -2.69169618940638, 1.19839281085285],
     a: [-1.69065929318241, 0.73248077421585],
     z: [0.0; 2],
 };
-const HIGH_PASS: Biquad = Biquad { b: [1.0, -2.0, 1.0], a: [-1.99004745483398, 0.99007225036621], z: [0.0; 2] };
+pub(crate) const HIGH_PASS: Biquad =
+    Biquad { b: [1.0, -2.0, 1.0], a: [-1.99004745483398, 0.99007225036621], z: [0.0; 2] };
 
 /// Integrated loudness of 400 ms block powers with the absolute and the relative gate, or `None`
 /// when no block is louder than -70 LUFS.
-fn gated(blocks: &[f64]) -> Option<f64> {
+pub(crate) fn gated(blocks: &[f64]) -> Option<f64> {
     let mean = |blocks: &mut dyn Iterator<Item = f64>| {
         let (sum, count) = blocks.fold((0.0, 0usize), |(s, n), z| (s + z, n + 1));
         (count > 0).then(|| sum / count as f64)

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AlertTriangle, ChevronDown } from "lucide-react";
 import { api, errorText, plainError } from "../../lib/api";
-import { aiLocked, setBackground, useEditor, useMatteJob } from "../../lib/store";
+import { aiLocked, setBackground, useEditor, useJobs } from "../../lib/store";
 import type { Background, Clip } from "../../lib/types";
 import { IMAGE_EXTENSIONS, importPaths } from "../panel/assets";
 import { Button, ColorInput, Menu, ProgressBar, Section, Segmented, Slider, lockedProps, useLockReason } from "../ui";
@@ -35,7 +35,7 @@ export function BackgroundSection({ clips }: { clips: Clip[] }) {
     const assetId = c.content.assetId;
     return project.assets.filter((a) => a.id === assetId).map((a) => a.path);
   });
-  const job = useMatteJob(paths);
+  const job = useJobs("matte", paths);
   const on = backgrounds.some((b) => b.type !== "none");
   const models = usePersonModel();
   const waiting = useWaiting(paths, on && !!models?.downloaded && !job);

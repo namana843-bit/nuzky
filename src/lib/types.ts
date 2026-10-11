@@ -281,6 +281,23 @@ export type ClipContent = {
    */
   cleanVoice: boolean,
   /**
+   * Reduce echo: how much of the room's reverb comes out of the sound, 0 to 1; 0 turns it off.
+   * The sound without reverb is made once per file in the background, as for Clean voice, and
+   * played mixed with the original by this share.
+   */
+  dereverb?: number,
+  /**
+   * Match loudness: the clip plays at -16 LUFS (`level::MATCH_LUFS`), measured over its whole file as the
+   * clip's other voice settings make it sound, so every take of a video is as loud. Volume
+   * still applies on top.
+   */
+  normalize?: boolean,
+  /**
+   * Even out volume: how far the quiet and loud passages of the file come together, 0 to 1; 0
+   * turns it off.
+   */
+  leveler?: number,
+  /**
    * Rounded corners, a border and a shadow around the picture, as for a picture in picture.
    */
   shape?: Shape | null,
@@ -488,6 +505,21 @@ export type EditCmd = {
    * Clean voice on clips with sound: less rumble, hum, background noise and harsh s sounds.
    */
   cleanVoice?: boolean | null,
+  /**
+   * Reduce echo on clips with sound: how much of the room's reverb comes out, 0 to 1; 0 turns it
+   * off. 0.8 suits speech in a bare room. The sound is prepared once per file in the background.
+   */
+  dereverb?: number | null,
+  /**
+   * Match loudness on clips with sound: the clip plays at -16 LUFS, measured over its whole file,
+   * so takes from different rooms and distances sound as loud. Volume still applies on top.
+   */
+  normalize?: boolean | null,
+  /**
+   * Even out volume on clips with sound: how far quiet and loud passages come together, 0 to 1;
+   * 0 turns it off. 0.5 suits a speaker who moves away from the phone.
+   */
+  leveler?: number | null,
   /**
    * Video and image clips: corners, border and shadow. The default shape removes them.
    */

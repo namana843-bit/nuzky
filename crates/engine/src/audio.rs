@@ -10,6 +10,7 @@ use anyhow::Result;
 use memmap2::Mmap;
 
 use crate::effects::transition_window;
+use crate::level::{self, Levels};
 use crate::loudness::db_to_gain;
 use crate::media::extract_pcm_with_peaks;
 use crate::model::{Asset, AssetKind, CHANNELS, Clip, ClipContent, Project, SAMPLE_RATE, Track, TrackKind};
@@ -38,6 +39,9 @@ const DUCK_RELEASE: i64 = SAMPLE_RATE as i64 * 400 / 1000;
 /// Where a cut is in the files on both sides: their caches, where each side stops or starts in its
 /// file and its speed.
 type CutKey = (PathBuf, i64, u32, PathBuf, i64, u32);
+/// What gains of Match loudness and Even out volume follow from: the cache a clip plays, the one without
+/// reverb with its share, and the two settings.
+type LevelKey = (PathBuf, Option<PathBuf>, u32, bool, u32);
 
 pub fn us_to_samples(us: i64) -> i64 {
     (us as i128 * SAMPLE_RATE as i128 / 1_000_000) as i64
@@ -91,22 +95,29 @@ fn peaks_for(pcm: &Path) -> PathBuf {
     pcm.with_extension(format!("{PEAKS_VERSION}.peaks"))
 }
 
-/// Removes this asset's caches and peaks from older versions, which nothing reads any more.
-/// Other revisions of the current version stay: a project may still play from them.
-fn remove_older_versions(path: &Path, asset: &Asset) {
+/// Removes the files of `asset` beside `path` that older versions made and nothing reads any more:
+/// caches, their peaks and blocks, and their locks, whose name after the asset id and the source's
+/// revision is none of `current` (`v4.f32`, say). Other revisions of the current versions stay: a
+/// project may still play from them.
+pub(crate) fn remove_older_versions(path: &Path, asset: &Asset, current: &[String]) {
     let (Some(dir), prefix) = (path.parent(), format!("{}.", asset.id)) else {
         return;
     };
-    let (current, current_peaks) = (format!(".{PCM_VERSION}.f32"), format!(".{PCM_VERSION}.{PEAKS_VERSION}.peaks"));
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let cache = name.strip_suffix(".lock").unwrap_or(&name);
-        let old_cache = cache.ends_with(".f32") && !cache.ends_with(&current);
-        let old_peaks = name.ends_with(".peaks") && !name.ends_with(&current_peaks);
-        if name.starts_with(&prefix) && (old_cache || old_peaks) {
+        let Some(rest) = name.strip_prefix(&prefix) else { continue };
+        let rest = rest.strip_suffix(".lock").unwrap_or(rest);
+        // Caches from before the revision was in the name have none.
+        let kind = rest.split_once('.').map_or(rest, |(_, kind)| kind);
+        if !current.iter().any(|c| c == kind) {
             std::fs::remove_file(entry.path()).ok();
         }
     }
+}
+
+/// The kinds of file a cache of version `version` has: itself and its measured blocks.
+pub(crate) fn with_blocks(version: String) -> [String; 2] {
+    [format!("{version}.f32"), format!("{version}.{}.blocks", level::VERSION)]
 }
 
 /// Locks `<path>.lock`, so only one process makes the cache at `path`; released when the file is dropped.
@@ -142,9 +153,97 @@ pub fn ensure_pcm(cache_dir: &Path, asset: &Asset, mut progress: impl FnMut(f32)
     let _lock = lock_cache(&path, &mut progress)?;
     if !path.exists() {
         extract_pcm_with_peaks(Path::new(&asset.path), &path, &peaks_for(&path), progress)?;
-        remove_older_versions(&path, asset);
+        let [cache, blocks] = with_blocks(PCM_VERSION.into());
+        remove_older_versions(&path, asset, &[cache, blocks, format!("{PCM_VERSION}.{PEAKS_VERSION}.peaks")]);
     }
     Ok(path)
+}
+
+/// What a clip's sound goes through before the mix: each is a cache of its file, made once in the
+/// background, with the raw cache's length and every sound on the same sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Chain {
+    /// Reduce echo, before Clean voice.
+    pub dereverb: bool,
+    pub clean_voice: bool,
+}
+
+impl Chain {
+    /// Where its cache of `asset` is.
+    pub fn path(self, cache_dir: &Path, asset: &Asset) -> PathBuf {
+        let mut path = pcm_path(cache_dir, asset);
+        if self.dereverb {
+            path = crate::dereverb::path_for(cache_dir, &path);
+        }
+        if self.clean_voice {
+            path = crate::voice::path_for(cache_dir, &path);
+        }
+        path
+    }
+
+    /// Makes its cache of `asset` unless it is there, and the caches it is made from. Concurrent
+    /// callers wait for one of them; an error from `progress` stops the work.
+    pub fn ensure(
+        self,
+        cache_dir: &Path,
+        asset: &Asset,
+        mut progress: impl FnMut(f32) -> Result<()>,
+    ) -> Result<PathBuf> {
+        match (self.dereverb, self.clean_voice) {
+            (false, false) => ensure_pcm(cache_dir, asset, progress),
+            (false, true) => crate::voice::ensure_voice_pcm(cache_dir, asset, progress),
+            (true, false) => crate::dereverb::ensure_dereverb_pcm(cache_dir, asset, progress),
+            (true, true) => {
+                // Cleaning takes about a fifth of the time taking the reverb out does.
+                let echo = crate::dereverb::ensure_dereverb_pcm(cache_dir, asset, |p| progress(p * 0.8))?;
+                crate::voice::ensure_cleaned(cache_dir, asset, &echo, |p| progress(0.8 + p * 0.2))
+            }
+        }
+    }
+}
+
+/// The chains `clip` plays: its sound, cleaned with Clean voice, and with Reduce echo the same without
+/// reverb; and whether their blocks are measured, for Match loudness and Even out volume.
+pub fn chains(clip: &Clip) -> (Vec<Chain>, bool) {
+    let ClipContent::Media { clean_voice, dereverb, normalize, leveler, .. } = &clip.content else {
+        return (Vec::new(), false);
+    };
+    let mut chains = vec![Chain { dereverb: false, clean_voice: *clean_voice }];
+    if *dereverb > 0.0 {
+        chains.push(Chain { dereverb: true, clean_voice: *clean_voice });
+    }
+    (chains, *normalize || *leveler > 0.0)
+}
+
+/// Match loudness and Even out volume for the sound of `dry` mixed with `share` of `wet`, or None
+/// while their blocks are not measured.
+fn levels_of(dry: &Path, wet: Option<&Path>, share: f32, normalize: bool, leveler: f32) -> Option<Levels> {
+    // The one without reverb is measured last, so while it is not, the other is not read for nothing.
+    let wet = match wet {
+        Some(wet) => Some(level::read_blocks(wet)?),
+        None => None,
+    };
+    let mut blocks = level::read_blocks(dry)?;
+    if let Some(wet) = wet {
+        blocks = level::blend(&blocks, &wet, share);
+    }
+    Some(level::levels(&blocks, normalize, leveler))
+}
+
+/// The gain Match loudness gives `clip` in dB as it plays now, or None without it and until its sound is
+/// measured.
+pub fn match_gain_db(cache_dir: &Path, project: &Project, clip: &Clip) -> Option<f64> {
+    let ClipContent::Media { asset_id, clean_voice, dereverb, normalize: true, leveler, .. } = &clip.content else {
+        return None;
+    };
+    let asset = project.asset(asset_id)?;
+    // The caches the mixer plays: what is ready of what the clip asks for.
+    let cleaned = Chain { dereverb: false, clean_voice: true }.path(cache_dir, asset);
+    let clean_voice = *clean_voice && cleaned.exists();
+    let dry = Chain { dereverb: false, clean_voice }.path(cache_dir, asset);
+    let wet =
+        Some(Chain { dereverb: true, clean_voice }.path(cache_dir, asset)).filter(|w| *dereverb > 0.0 && w.exists());
+    levels_of(&dry, wet.as_deref(), *dereverb, true, *leveler)?.match_db
 }
 
 pub struct Mixer {
@@ -159,6 +258,9 @@ pub struct Mixer {
     speech: HashMap<PathBuf, Vec<u8>>,
     /// Pieces of sound that keeps its pitch, by cache, the file frame at the anchor and speed.
     stretches: HashMap<(PathBuf, i64, u32), Stretch>,
+    /// Gains of Match loudness and Even out volume per block of a file, by the caches they were
+    /// measured from, the share of the one without reverb and the settings.
+    levels: HashMap<LevelKey, Arc<Vec<f32>>>,
 }
 
 impl Mixer {
@@ -169,6 +271,7 @@ impl Mixer {
             cuts: HashMap::new(),
             speech: HashMap::new(),
             stretches: HashMap::new(),
+            levels: HashMap::new(),
         }
     }
 
@@ -183,18 +286,49 @@ impl Mixer {
         self.open(raw.clone(), asset).map(|pcm| (raw, pcm))
     }
 
+    /// With Reduce echo, the sound of `dry` without reverb, once it is ready.
+    fn dereverbed(&mut self, asset: &Asset, dry: &Path) -> Option<(PathBuf, Arc<Pcm>)> {
+        let clean_voice = dry != pcm_path(&self.cache_dir, asset);
+        let path = Chain { dereverb: true, clean_voice }.path(&self.cache_dir, asset);
+        self.open(path.clone(), asset).map(|pcm| (path, pcm))
+    }
+
+    /// The gain of each block of the file that `dry`, and `wet` by `share`, play, once measured.
+    fn levels(
+        &mut self,
+        dry: &Path,
+        wet: Option<&Path>,
+        share: f32,
+        normalize: bool,
+        leveler: f32,
+    ) -> Option<Arc<Vec<f32>>> {
+        let key = (dry.to_path_buf(), wet.map(Path::to_path_buf), share.to_bits(), normalize, leveler.to_bits());
+        if let Some(gains) = self.levels.get(&key) {
+            return Some(gains.clone());
+        }
+        let gains = Arc::new(levels_of(dry, wet, share, normalize, leveler)?.gains);
+        if self.levels.len() >= 64 {
+            self.levels.clear();
+        }
+        self.levels.insert(key, gains.clone());
+        Some(gains)
+    }
+
     fn open(&mut self, path: PathBuf, asset: &Asset) -> Option<Arc<Pcm>> {
         if let Some(Some(pcm)) = self.sources.get(&path) {
             return Some(pcm.clone());
         }
         // Missing caches are retried, since extraction or cleaning may still be running. Another
-        // revision of this asset's cache of the same kind (raw or cleaned) is no longer played.
+        // revision of this asset's cache of the same kind (raw, cleaned, without reverb) is no
+        // longer played.
         let pcm = Pcm::open(&path).ok().map(Arc::new);
         let prefix = format!("{}.", asset.id);
-        self.sources.retain(|other, _| {
-            other.parent() != path.parent()
-                || !other.file_name().is_some_and(|n| n.to_string_lossy().starts_with(&prefix))
-        });
+        let kind = |path: &Path| {
+            let name = path.file_name()?.to_str()?.strip_prefix(&prefix)?;
+            name.split_once('.').map(|(_, kind)| kind.to_owned())
+        };
+        let own = kind(&path);
+        self.sources.retain(|other, _| other.parent() != path.parent() || kind(other).is_none() || kind(other) != own);
         self.sources.insert(path, pcm.clone());
         pcm
     }
@@ -211,7 +345,17 @@ impl Mixer {
             }
             for (index, clip) in track.clips.iter().enumerate() {
                 let ClipContent::Media {
-                    asset_id, source_in_us, volume, speed, fade_in_us, fade_out_us, duck_db, ..
+                    asset_id,
+                    source_in_us,
+                    volume,
+                    speed,
+                    fade_in_us,
+                    fade_out_us,
+                    duck_db,
+                    dereverb,
+                    normalize,
+                    leveler,
+                    ..
                 } = &clip.content
                 else {
                     continue;
@@ -244,7 +388,13 @@ impl Mixer {
                     continue;
                 }
                 let Some((path, pcm)) = self.source(asset, cleans_voice(clip)) else { continue };
+                let wet = (*dereverb > 0.0).then(|| self.dereverbed(asset, &path)).flatten();
+                let levels = (*normalize || *leveler > 0.0)
+                    .then(|| self.levels(&path, wet.as_ref().map(|w| w.0.as_path()), *dereverb, *normalize, *leveler))
+                    .flatten();
                 let samples = pcm.samples();
+                let wet = wet.map(|(_, pcm)| pcm);
+                let wet = wet.as_ref().map(|pcm| pcm.samples());
                 let src0 = *source_in_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                 let origin = clip.start_us as f64 * SAMPLE_RATE as f64 / 1_000_000.0;
                 // PCM cannot hold an edge sample like video holds a frame.
@@ -301,12 +451,19 @@ impl Mixer {
                     if let Some(duck) = duck {
                         gain *= db_to_gain(-(*duck_db * duck[(i - start) as usize]) as f64);
                     }
+                    if let Some(levels) = &levels {
+                        gain *= level::gain_at(levels, src);
+                    }
                     let o = ((i - start) as usize) * CHANNELS;
                     for ch in 0..CHANNELS {
-                        let sample = match stretch {
+                        let read = |samples| match stretch {
                             Some((place, stretch, kept)) => stretch.sample(samples, i - place, ch, kept),
                             None => sample_at(samples, src, ch),
                         };
+                        let mut sample = read(samples);
+                        if let Some(wet) = wet {
+                            sample += (read(wet) - sample) * *dereverb;
+                        }
                         out[o + ch] += sample * gain;
                     }
                 }
@@ -362,8 +519,8 @@ fn keeps_pitch(clip: &Clip) -> bool {
 }
 
 /// Whether `next` starts where `clip` ends and plays on from the same source at the same
-/// level, as the two halves of a split do. Halves of which only one cleans the voice or keeps the
-/// pitch, or that duck differently, sound different, so they crossfade like a cut.
+/// level, as the two halves of a split do. Halves that differ in a Voice setting or Keep pitch, or
+/// that duck differently, sound different, so they crossfade like a cut.
 fn continues(clip: &Clip, next: &Clip) -> bool {
     let (
         ClipContent::Media {
@@ -372,6 +529,9 @@ fn continues(clip: &Clip, next: &Clip) -> bool {
             volume: volume_a,
             speed: speed_a,
             duck_db: duck_a,
+            dereverb: dereverb_a,
+            normalize: normalize_a,
+            leveler: leveler_a,
             ..
         },
         ClipContent::Media {
@@ -380,6 +540,9 @@ fn continues(clip: &Clip, next: &Clip) -> bool {
             volume: volume_b,
             speed: speed_b,
             duck_db: duck_b,
+            dereverb: dereverb_b,
+            normalize: normalize_b,
+            leveler: leveler_b,
             ..
         },
     ) = (&clip.content, &next.content)
@@ -392,6 +555,7 @@ fn continues(clip: &Clip, next: &Clip) -> bool {
         && speed_a == speed_b
         && volume_a == volume_b
         && duck_a == duck_b
+        && (dereverb_a, normalize_a, leveler_a) == (dereverb_b, normalize_b, leveler_b)
         && cleans_voice(clip) == cleans_voice(next)
         && keeps_pitch(clip) == keeps_pitch(next)
         && (source_b - source_end).abs() <= samples_to_us(1)
@@ -953,6 +1117,9 @@ mod tests {
                     fade_in_us: 0,
                     fade_out_us: 0,
                     clean_voice: false,
+                    dereverb: 0.0,
+                    normalize: false,
+                    leveler: 0.0,
                     shape: None,
                     duck_db: 0.0,
                     background: Default::default(),
@@ -1021,6 +1188,9 @@ mod tests {
                     fade_in_us: 0,
                     fade_out_us: 0,
                     clean_voice: false,
+                    dereverb: 0.0,
+                    normalize: false,
+                    leveler: 0.0,
                     shape: None,
                     duck_db: 0.0,
                     background: Default::default(),

@@ -153,6 +153,36 @@ noisy_talk() {
 }
 media voice.mp4 noisy_talk
 
+# A talking head in an empty room for the room flow: six phrases with a pause after each, the third and fourth 12 dB
+# quieter, as when the speaker turns away from the phone, in a room whose diffuse reverb is as loud as the direct
+# sound and falls by 60 dB in 0.7 s. The flow reads where each phrase ends from the speech without the room.
+room_speech() {
+  local out=$1 dir n=0 inputs=() levels=(0 0 -12 -12 0 0)
+  dir=$(mktemp -d)
+  for phrase in "Welcome back to my kitchen." "The room is empty today and it rings." "Now I turn away from the phone." \
+    "So my voice gets much quieter." "And now I am back at the phone." "Reduce echo should make me sound close."; do
+    espeak-ng -v en-us -s 150 -w "$dir/$n.wav" "$phrase"
+    ff -i "$dir/$n.wav" -af "aresample=48000,volume=${levels[n]}dB,apad=pad_dur=1.2" -ac 1 "$dir/p$n.wav"
+    inputs+=(-i "$dir/p$n.wav")
+    n=$((n + 1))
+  done
+  ff "${inputs[@]}" -filter_complex "concat=n=$n:v=0:a=1,adelay=500,volume=-8dB" -c:a pcm_f32le "$out"
+  rm -rf "$dir"
+}
+media room-dry.wav room_speech
+echoey_talk() {
+  local out=$1 dir seconds
+  dir=$(mktemp -d)
+  room_speech "$dir/speech.wav"
+  ff -f lavfi -i "aevalsrc='eq(n,0)+gt(n,240)*0.035*(2*random(0)-1)*exp(-9.86*t)':s=48000:d=0.8" "$dir/room.wav"
+  seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$dir/speech.wav")
+  ff -i "$dir/speech.wav" -i "$dir/room.wav" -f lavfi -i "color=c=0x2b3a3a:s=1080x1920:r=30:d=$seconds,noise=alls=10:allf=u" \
+    -filter_complex "[0:a][1:a]afir=irnorm=-1:gtype=none,aformat=channel_layouts=mono[a]" \
+    -map 2:v -map "[a]" -c:v libx264 -preset veryfast -pix_fmt yuv420p -c:a aac -b:a 192k -ar 48000 -shortest "$out"
+  rm -rf "$dir"
+}
+media room.mp4 echoey_talk
+
 # Compares digests directly: macOS ships a BSD sha256sum without GNU's --check from stdin.
 sha256_is() { [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; }
 # Every download is kept once per machine under its SHA-256, so a new checkout clones the gigabytes of models

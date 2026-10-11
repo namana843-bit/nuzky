@@ -12,7 +12,7 @@ import { AiLock, TabBar, TabPanel } from "../ui";
 import { AnimationSection } from "./AnimationSection";
 import { BackgroundSection } from "./BackgroundSection";
 import { InspectorHeader } from "./Header";
-import { AdjustSection, AudioSection, SpeedSection } from "./MediaSections";
+import { AdjustSection, AudioSection, SpeedSection, VoiceSection } from "./MediaSections";
 import { MotionSection } from "./MotionSection";
 import { MultiInspector } from "./MultiInspector";
 import { ProjectSection } from "./ProjectSection";
@@ -76,6 +76,7 @@ function ClipInspector({ clip, kind, asset, chosen, onChoose }: { clip: Clip; ki
           {tab === "audio" && c.type === "media" && (
             <>
               <AudioSection clip={clip} content={c} />
+              <VoiceSection clips={[clip]} coalesce={clip.id} />
               {kind === "audio" && <SpeedSection clip={clip} content={c} asset={asset} />}
             </>
           )}

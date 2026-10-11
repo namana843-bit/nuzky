@@ -814,9 +814,11 @@ export const FADE_STEP_US = US / 10;
 /** The longest sound fade at each end of a clip: half its length, at most 10 s, on a whole step. */
 export const maxFadeUs = (durationUs: number) => Math.min(10 * US, Math.floor(durationUs / 2 / FADE_STEP_US) * FADE_STEP_US);
 
-/** Turns Clean voice on or off for the media clips in `ids`, as one undo step. */
-export function setCleanVoice(ids: string[], on: boolean) {
-  return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, cleanVoice: on } : null));
+export type VoiceChange = { cleanVoice?: boolean; dereverb?: number; normalize?: boolean; leveler?: number };
+
+/** Changes Voice settings of the media clips in `ids`, as one undo step. */
+export function setVoice(ids: string[], change: VoiceChange, coalesce?: string) {
+  return editClips(ids, (c) => (c.content.type === "media" ? { type: "updateClip", clipId: c.id, ...change } : null), coalesce);
 }
 
 /** Sets what shows behind the person on video and image clips, as one undo step. */
@@ -825,27 +827,20 @@ export function setBackground(ids: string[], background: Background, coalesce?: 
 }
 
 /**
- * Finding the person in these files for their clips' backgrounds: how far the least done running job is (0 while
- * it starts), or why one failed; null when nothing is left to do.
+ * The jobs `${kind}:${key}` of these keys, such as finding the person in files for their clips' backgrounds (`matte`)
+ * or preparing their sound for the Voice section (`voice`, `dereverb`, `level`): how far the least done running job
+ * is (0 while it starts), or why one failed; null when nothing is left to do.
  */
-export function useMatteJob(paths: string[]) {
+export function useJobs(kind: string, keys: string[]) {
   return useEditor(
     useShallow((s) => {
-      const jobs = paths.map((p) => s.jobs[`matte:${p}`]).filter(Boolean);
+      const jobs = keys.map((k) => s.jobs[`${kind}:${k}`]).filter(Boolean);
       const running = jobs.filter((j) => j.status === "running");
       if (running.length > 0) return { progress: Math.min(...running.map((j) => j.progress)), failed: null };
       const failed = jobs.find((j) => j.status === "failed");
       return failed ? { progress: null, failed: failed.message ?? "" } : null;
     }),
   );
-}
-
-/** How far the cleaned voice of these files is prepared (0 to 1) while that runs, else null. */
-export function useVoicePreparation(assetIds: string[]) {
-  return useEditor((s) => {
-    const running = assetIds.map((id) => s.jobs[`voice:${id}`]).filter((j) => j?.status === "running");
-    return running.length > 0 ? Math.min(...running.map((j) => j.progress)) : null;
-  });
 }
 
 /**

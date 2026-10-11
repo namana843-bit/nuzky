@@ -157,6 +157,15 @@ pub enum EditCmd {
         fade_out_us: Option<i64>,
         /// Clean voice on clips with sound: less rumble, hum, background noise and harsh s sounds.
         clean_voice: Option<bool>,
+        /// Reduce echo on clips with sound: how much of the room's reverb comes out, 0 to 1; 0 turns it
+        /// off. 0.8 suits speech in a bare room. The sound is prepared once per file in the background.
+        dereverb: Option<f32>,
+        /// Match loudness on clips with sound: the clip plays at -16 LUFS, measured over its whole file,
+        /// so takes from different rooms and distances sound as loud. Volume still applies on top.
+        normalize: Option<bool>,
+        /// Even out volume on clips with sound: how far quiet and loud passages come together, 0 to 1;
+        /// 0 turns it off. 0.5 suits a speaker who moves away from the phone.
+        leveler: Option<f32>,
         /// Video and image clips: corners, border and shadow. The default shape removes them.
         shape: Option<Shape>,
         /// Ducking: how many dB the clip goes down while a video's own sound has speech, up to 40;
@@ -385,6 +394,9 @@ fn media(asset_id: String, transform: Transform, shape: Option<Shape>) -> ClipCo
         fade_in_us: 0,
         fade_out_us: 0,
         clean_voice: false,
+        dereverb: 0.0,
+        normalize: false,
+        leveler: 0.0,
         shape,
         duck_db: 0.0,
         background: Default::default(),
@@ -926,6 +938,9 @@ impl Project {
                 fade_in_us,
                 fade_out_us,
                 clean_voice,
+                dereverb,
+                normalize,
+                leveler,
                 shape,
                 duck_db,
                 background,
@@ -952,14 +967,18 @@ impl Project {
                         );
                     }
                 }
-                if clean_voice == Some(true) {
+                if clean_voice == Some(true)
+                    || dereverb.is_some_and(|x| x > 0.0)
+                    || normalize == Some(true)
+                    || leveler.is_some_and(|x| x > 0.0)
+                {
                     let sound = match &self.tracks[ti].clips[ci].content {
                         ClipContent::Media { asset_id, .. } => {
                             self.asset(asset_id).is_some_and(crate::audio::has_audio)
                         }
                         ClipContent::Text { .. } => false,
                     };
-                    ensure!(sound, "This clip has no sound to clean");
+                    ensure!(sound, "This clip has no sound to change");
                 }
                 let limit = self.source_limit(&self.tracks[ti].clips[ci]);
                 let clip = &mut self.tracks[ti].clips[ci];
@@ -975,6 +994,9 @@ impl Project {
                         fade_in_us: fi,
                         fade_out_us: fo,
                         clean_voice: cv,
+                        dereverb: dr,
+                        normalize: n,
+                        leveler: l,
                         shape: sh,
                         duck_db: duck,
                         background: bg,
@@ -1000,6 +1022,15 @@ impl Project {
                         }
                         if let Some(x) = clean_voice {
                             *cv = x;
+                        }
+                        if let Some(x) = dereverb {
+                            *dr = x.clamp(0.0, 1.0);
+                        }
+                        if let Some(x) = normalize {
+                            *n = x;
+                        }
+                        if let Some(x) = leveler {
+                            *l = x.clamp(0.0, 1.0);
                         }
                         if let Some(x) = duck_db {
                             *duck = x.clamp(0.0, MAX_DUCK_DB);
@@ -2098,6 +2129,9 @@ mod tests {
             fade_in_us: None,
             fade_out_us: None,
             clean_voice: None,
+            dereverb: None,
+            normalize: None,
+            leveler: None,
             shape: None,
             duck_db: None,
             background: None,
@@ -2126,6 +2160,9 @@ mod tests {
             fade_in_us,
             fade_out_us,
             clean_voice: None,
+            dereverb: None,
+            normalize: None,
+            leveler: None,
             shape: None,
             duck_db: None,
             background: None,
@@ -2168,6 +2205,9 @@ mod tests {
             fade_in_us,
             fade_out_us,
             clean_voice: None,
+            dereverb: None,
+            normalize: None,
+            leveler: None,
             shape: None,
             duck_db: None,
             background: None,
@@ -2198,6 +2238,9 @@ mod tests {
             fade_in_us,
             fade_out_us,
             clean_voice: None,
+            dereverb: None,
+            normalize: None,
+            leveler: None,
             shape: None,
             duck_db: None,
             background: None,
@@ -2374,6 +2417,9 @@ mod tests {
                     fade_in_us: None,
                     fade_out_us: None,
                     clean_voice: None,
+                    dereverb: None,
+                    normalize: None,
+                    leveler: None,
                     shape: None,
                     duck_db: None,
                     background: None,
@@ -2442,6 +2488,9 @@ mod tests {
                 fade_in_us: None,
                 fade_out_us: None,
                 clean_voice: None,
+                dereverb: None,
+                normalize: None,
+                leveler: None,
                 shape: None,
                 duck_db: None,
                 background: None,

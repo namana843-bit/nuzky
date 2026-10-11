@@ -58,8 +58,18 @@ pub fn credits(project: &Project) -> Option<String> {
     let mut clips: Vec<_> = heard_clips(project).collect();
     clips.sort_by_key(|clip| clip.start_us);
     for clip in clips {
-        let ClipContent::Media { asset_id, source_in_us, speed, volume, fade_in_us, fade_out_us, duck_db, .. } =
-            &clip.content
+        let ClipContent::Media {
+            asset_id,
+            source_in_us,
+            speed,
+            volume,
+            fade_in_us,
+            fade_out_us,
+            duck_db,
+            normalize,
+            leveler,
+            ..
+        } = &clip.content
         else {
             continue;
         };
@@ -75,7 +85,7 @@ pub fn credits(project: &Project) -> Option<String> {
         entry.trimmed |=
             *source_in_us > TRIM_TOLERANCE_US || source_end < (asset.duration_us - TRIM_TOLERANCE_US) as f64;
         entry.faded |= *fade_in_us > 0 || *fade_out_us > 0;
-        entry.volume |= *volume != 1.0 || *duck_db != 0.0;
+        entry.volume |= *volume != 1.0 || *duck_db != 0.0 || *normalize || *leveler > 0.0;
         entry.speed |= *speed != 1.0;
     }
     let lines = |license: License| -> Vec<String> {
@@ -166,6 +176,19 @@ mod tests {
              \nAlso used, no credit required:\n\
              \"Song zero\" by Ann Author (https://example.org/zero), licensed under CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/).\n"
         );
+        for (match_loudness, even_volume) in [(true, 0.0), (false, 0.5)] {
+            let mut changed = project.clone();
+            let clip = changed
+                .tracks
+                .iter_mut()
+                .flat_map(|t| &mut t.clips)
+                .find(|c| matches!(&c.content, ClipContent::Media { asset_id, .. } if asset_id == "by"))
+                .unwrap();
+            let ClipContent::Media { normalize, leveler, .. } = &mut clip.content else { panic!() };
+            *normalize = match_loudness;
+            *leveler = even_volume;
+            assert!(credits(&changed).unwrap().contains("Synced to video; volume changed."));
+        }
         // Trimmed and faded in the video, so the credit says so.
         for track in &mut project.tracks {
             for clip in &mut track.clips {

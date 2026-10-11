@@ -303,6 +303,9 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 fade_in_us: fi1,
                 fade_out_us: fo1,
                 clean_voice: cv1,
+                dereverb: dr1,
+                normalize: n1,
+                leveler: l1,
                 shape: sh1,
                 duck_db: d1,
                 background: b1,
@@ -316,6 +319,9 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 fade_in_us: fi2,
                 fade_out_us: fo2,
                 clean_voice: cv2,
+                dereverb: dr2,
+                normalize: n2,
+                leveler: l2,
                 shape: sh2,
                 duck_db: d2,
                 background: b2,
@@ -351,6 +357,23 @@ pub fn summarize(before: &Project, after: &Project) -> Vec<RunChange> {
                 push("Turned on Clean voice for");
             } else if *cv1 && !cv2 {
                 push("Turned off Clean voice for");
+            }
+            if dr1 != dr2 {
+                push(match (*dr1 > 0.0, *dr2 > 0.0) {
+                    (false, true) => "Turned on Reduce echo for",
+                    (true, false) => "Turned off Reduce echo for",
+                    _ => "Changed how much echo is reduced in",
+                });
+            }
+            if n1 != n2 {
+                push(if *n2 { "Turned on Match loudness for" } else { "Turned off Match loudness for" });
+            }
+            if l1 != l2 {
+                push(match (*l1 > 0.0, *l2 > 0.0) {
+                    (false, true) => "Turned on Even out volume for",
+                    (true, false) => "Turned off Even out volume for",
+                    _ => "Changed how much the volume is evened out in",
+                });
             }
             if d1 != d2 {
                 push(match (*d1 > 0.0, *d2 > 0.0) {
@@ -596,15 +619,47 @@ mod tests {
         let music = e.project.tracks.iter().find(|t| t.kind == TrackKind::Audio).unwrap().clips[0].id.clone();
         apply(&mut e, json!({"type": "updateClip", "clipId": music, "volume": 0.3}));
         let take = e.project.tracks[0].clips[0].id.clone();
-        apply(&mut e, json!({"type": "updateClip", "clipId": take, "cleanVoice": true}));
+        apply(
+            &mut e,
+            json!({"type": "updateClip", "clipId": take, "cleanVoice": true, "dereverb": 0.8, "normalize": true, "leveler": 0.5}),
+        );
 
         let changes = summarize(&before, &e.project);
-        assert_eq!(texts(&changes), ["Added lofi.mp3 on an audio track", "Turned on Clean voice for 1 clip"]);
+        assert_eq!(
+            texts(&changes),
+            [
+                "Added lofi.mp3 on an audio track",
+                "Turned on Clean voice for 1 clip",
+                "Turned on Reduce echo for 1 clip",
+                "Turned on Match loudness for 1 clip",
+                "Turned on Even out volume for 1 clip",
+            ]
+        );
         assert_eq!(changes[0].clip_ids, [music.as_str()]);
-        assert_eq!(changes[1].clip_ids, [take]);
+        assert!(changes[1..].iter().all(|change| change.clip_ids == [take.as_str()]));
         let before = e.project.clone();
         apply(&mut e, json!({"type": "updateClip", "clipId": music, "duckDb": 12}));
         assert_eq!(texts(&summarize(&before, &e.project)), ["Turned on Lower under speech for 1 clip"]);
+        let before = e.project.clone();
+        apply(&mut e, json!({"type": "updateClip", "clipId": take, "dereverb": 0.4, "leveler": 0.2}));
+        assert_eq!(
+            texts(&summarize(&before, &e.project)),
+            ["Changed how much echo is reduced in 1 clip", "Changed how much the volume is evened out in 1 clip",]
+        );
+        let before = e.project.clone();
+        apply(
+            &mut e,
+            json!({"type": "updateClip", "clipId": take, "cleanVoice": false, "dereverb": 0.0, "normalize": false, "leveler": 0.0}),
+        );
+        assert_eq!(
+            texts(&summarize(&before, &e.project)),
+            [
+                "Turned off Clean voice for 1 clip",
+                "Turned off Reduce echo for 1 clip",
+                "Turned off Match loudness for 1 clip",
+                "Turned off Even out volume for 1 clip",
+            ]
+        );
     }
 
     #[test]

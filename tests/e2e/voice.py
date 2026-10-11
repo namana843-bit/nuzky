@@ -49,7 +49,8 @@ def voice(r):
     clip = r.track()[0]
     off = export(r, 'off.mp4')
 
-    # Keyboard: the inspector's Audio tab, then Tab from Fade out onto Clean voice and Space.
+    # Keyboard: the inspector's Audio tab, then Tab from Detach audio, the last control of Audio, onto Clean voice, the
+    # first of Voice, and Space.
     r.focus_clip(clip['id'])
     tab = "document.querySelector('aside[aria-label=Inspector] [role=tab][aria-selected=true]')"
     if not wait(lambda: r.s.run(f'return !!{tab}'), 10):
@@ -58,11 +59,11 @@ def voice(r):
     r.key('End')
     r.check('End in the tab bar opens the Audio tab', wait(lambda: r.s.run(f'return {tab}?.textContent') == 'Audio', 5),
             r.s.run(f'return {tab}?.textContent'))
-    r.s.run("document.querySelector('input[aria-label=\"Fade out value\"]').focus()")
+    r.s.run("[...document.querySelectorAll('aside[aria-label=Inspector] button')].find((b) => b.textContent.includes('Detach audio')).focus()")
     press('Tab')
     focus = "const e = document.activeElement; return e.type === 'checkbox' ? e.closest('label').textContent : e.outerHTML.slice(0, 120)"
     focused = wait(lambda: r.s.run(focus) == 'Clean voice', 3, 0.05) or r.s.run(focus)
-    r.check('Tab from Fade out reaches the Clean voice checkbox', focused is True, focused)
+    r.check('Tab from Detach audio reaches the Clean voice checkbox', focused is True, focused)
     press('space')
     clean = "return window.__nuzky.store.getState().snap.project.tracks[0].clips[0].content.cleanVoice"
     r.check('Space turns Clean voice on', wait(lambda: r.s.run(clean), 5), r.s.run(clean))
