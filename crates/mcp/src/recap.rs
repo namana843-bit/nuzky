@@ -1,3 +1,6 @@
+//! What a recap shows of a cut: the recording before it, what went on its timeline, and the words, retakes and
+//! pauses removed, counted the way the run summary counts them.
+
 use anyhow::Result;
 use nuzky_engine::{
     Project,
@@ -9,7 +12,9 @@ use nuzky_session::{summary, transcripts::TranscriptStore};
 
 use crate::transcript::{self, Derived};
 
-pub fn raw_import(project: &Project, main_assets: &[String]) -> Project {
+/// The recording as imported: every video the main track plays now or played in a kept version (`main_assets`),
+/// whole, one after another in import order.
+pub fn raw_import(project: &Project, main_assets: &[String]) -> Result<Project> {
     let mut raw = Project::new(&project.name);
     raw.canvas = project.canvas.clone();
     let mut editor = Editor::new(raw);
@@ -34,8 +39,8 @@ pub fn raw_import(project: &Project, main_assets: &[String]) -> Project {
         start_us: None,
         track_id: Some(MAIN_TRACK.into()),
     }));
-    editor.apply_batch(cmds, None).expect("importing known video assets");
-    editor.project
+    editor.apply_batch(cmds, None)?;
+    Ok(editor.project)
 }
 
 /// Missing transcripts only matter for files whose main-track picture is cut.
@@ -112,10 +117,12 @@ fn build(before: Project, after: Project, derived: Derived) -> Recap {
         recap.cuts[*cut].words += 1;
     }
     let retakes = nuzky_analysis::retakes(&derived.words);
-    let removed = |from: usize, to: usize| owners[from..=to].iter().all(Option::is_some);
+    // A take dropped whole is one retake, however many attempts at sentences it held.
+    let gone = |i: usize| change.gone_assets.contains(&derived.words[i].asset_id);
+    let removed = |from: usize, to: usize| !gone(from) && owners[from..=to].iter().all(Option::is_some);
     let mut attempts = std::collections::HashSet::new();
     for group in retakes.groups {
-        if group.sentences.iter().any(|a| !removed(a.from, a.to)) {
+        if group.sentences.iter().any(|a| owners[a.from..=a.to].iter().any(Option::is_none)) {
             for a in group.sentences.iter().filter(|a| removed(a.from, a.to)) {
                 attempts.insert((a.from, a.to));
             }
@@ -254,6 +261,16 @@ mod tests {
     }
 
     #[test]
+    fn recap_a_dropped_take_repeating_a_kept_one_is_one_retake() {
+        let p = project(&["take", "other"]);
+        let same = words("Dneska vám ukážu video.");
+        let d = Derived::new(&p, HashMap::from([("take".into(), same.clone()), ("other".into(), same)]), vec![]);
+        assert_eq!(nuzky_analysis::retakes(&d.words).groups.len(), 1);
+        let r = build(p.clone(), delete(&p, &[(0, 10_000_000)]), d);
+        assert_eq!(r.totals().retakes, Some(1));
+    }
+
+    #[test]
     fn recap_pauses_have_no_words_or_retakes() {
         let p = project(&["take"]);
         let r = build(
@@ -287,7 +304,7 @@ mod tests {
         p.apply(EditCmd::AddPictureInPicture { asset_id: "overlay".into(), start_us: 0, duration_us: None }).unwrap();
         p.apply(EditCmd::AddClip { asset_id: "audio".into(), start_us: Some(0), track_id: None }).unwrap();
         p.canvas.fps = 60;
-        let r = raw_import(&p, &["left".into(), "current".into(), "audio".into()]);
+        let r = raw_import(&p, &["left".into(), "current".into(), "audio".into()]).unwrap();
         assert_eq!(r.name, p.name);
         assert_eq!(r.canvas, p.canvas);
         assert_eq!(r.assets.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["left", "current"]);

@@ -21,7 +21,14 @@ use crate::{
 #[serde(rename_all = "camelCase")]
 pub struct RecapInfo {
     pub totals: RecapTotals,
+    /// The lengths and what went, written as the run summary writes them.
+    pub before: String,
+    pub after: String,
+    #[cfg_attr(test, ts(optional = nullable))]
+    pub removed: Option<String>,
+    /// How long the recap is with its end card.
     pub duration_us: i64,
+    /// Files a cut touches that have no transcript.
     pub untranscribed: Vec<String>,
 }
 
@@ -30,7 +37,7 @@ fn build(host: &Host, run_id: Option<&str>) -> Result<Recap> {
         Some(id) => host.session.run_pair(id)?,
         None => {
             let project = host.session.state()?.project;
-            let before = nuzky_mcp::recap::raw_import(&project, &host.session.kept_main_assets()?);
+            let before = nuzky_mcp::recap::raw_import(&project, &host.session.kept_main_assets()?)?;
             (before, project)
         }
     };
@@ -63,8 +70,12 @@ pub async fn recap_info(
                 })
             })
             .collect();
+        let totals = recap.totals();
         Ok(RecapInfo {
-            totals: recap.totals(),
+            totals,
+            before: nuzky_engine::recap::duration_text(totals.before_us),
+            after: nuzky_engine::recap::duration_text(totals.after_us),
+            removed: nuzky_mcp::recap::line(&totals),
             duration_us: nuzky_engine::recap::duration_us(&recap, true),
             untranscribed,
         })
@@ -103,7 +114,8 @@ pub async fn start_recap(
     let cache = app.state::<AppState>().cache_dir.clone();
     let (worker, job_id) = (app.clone(), id.clone());
     let spawned = std::thread::Builder::new().name("recap".into()).spawn(move || {
-        let mut rep = Reporter::new(&worker, &job_id, "export", "Exporting recap".into());
+        let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut rep = Reporter::new(&worker, &job_id, "export", format!("Exporting {name}"));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             nuzky_session::jobs::check_cancel(&cancel)?;
             recap.tick =

@@ -37,6 +37,14 @@ export interface RunChange {
   atUs: number | null;
 }
 
+/** What a run that ended changed, sent just before it ends. */
+interface RunSummary {
+  runId: string;
+  changes: RunChange[];
+  /** It cut something out of the video, so a recap can show it. */
+  cut: boolean;
+}
+
 export interface Step {
   id: string;
   title: string;
@@ -54,7 +62,16 @@ export type ChatItem =
   | { kind: "agent"; text: string }
   | { kind: "steps"; steps: Step[] }
   | { kind: "options"; id: string; question: string | null; options: Choice[]; chosen: string | null }
-  | { kind: "run"; label: string; snap: Snapshot | null; stopped: boolean; changes: RunChange[] | null; undone?: boolean }
+  | {
+      kind: "run";
+      label: string;
+      snap: Snapshot | null;
+      stopped: boolean;
+      changes: RunChange[] | null;
+      /** The run, when it cut something a recap can show. */
+      recapRun: string | null;
+      undone?: boolean;
+    }
   | { kind: "stopped" }
   /** `retry`: the message that failed after the agent had begun answering, for Try again. */
   | { kind: "error"; code: AgentErrorCode; message: string; retry?: string };
@@ -367,7 +384,7 @@ function onEvent(e: AgentEvent) {
 }
 
 /** What the run ending next changed; it arrives just before the run ends. */
-let pendingChanges: RunChange[] | null = null;
+let pendingSummary: RunSummary | null = null;
 
 /**
  * The run the panel's agent opened has ended. Returns true when the panel shows it (with Undo),
@@ -375,10 +392,18 @@ let pendingChanges: RunChange[] | null = null;
  */
 export function panelRunEnded(label: string, snap: Snapshot | null): boolean {
   const s = useAgent.getState();
-  const changes = pendingChanges;
-  pendingChanges = null;
+  const summary = pendingSummary;
+  pendingSummary = null;
   if (s.status === "idle") return false;
-  useAgent.setState({ items: [...s.items, { kind: "run", label, snap, stopped: s.status === "stopping", changes }] });
+  const run = {
+    kind: "run" as const,
+    label,
+    snap,
+    stopped: s.status === "stopping",
+    changes: summary?.changes ?? null,
+    recapRun: summary?.cut ? summary.runId : null,
+  };
+  useAgent.setState({ items: [...s.items, run] });
   return true;
 }
 
@@ -392,5 +417,5 @@ export function listenAgentEvents() {
   if (listening) return;
   listening = true;
   void listen<AgentEvent>("agent", (e) => onEvent(e.payload));
-  void listen<RunChange[]>("run-summary", (e) => (pendingChanges = e.payload));
+  void listen<RunSummary>("run-summary", (e) => (pendingSummary = e.payload));
 }

@@ -294,6 +294,7 @@ impl OpenSession {
                             .session
                             .run_pair(&run_id)
                             .and_then(|(before, after)| nuzky_mcp::recap::recap(before, after, &host.transcripts));
+                        let cut = recap.as_ref().is_ok_and(|recap| !recap.cuts.is_empty());
                         match recap {
                             Ok(recap) => {
                                 if let Some(text) = nuzky_mcp::recap::line(&recap.totals()) {
@@ -319,7 +320,8 @@ impl OpenSession {
                         if stopped.load(Ordering::Acquire) || !Arc::ptr_eq(&host, &current.host) {
                             break;
                         }
-                        app.emit("run-summary", serde_json::json!({ "runId": run_id, "changes": changes })).ok();
+                        app.emit("run-summary", serde_json::json!({ "runId": run_id, "changes": changes, "cut": cut }))
+                            .ok();
                     }
                     SessionEvent::Run(run) => {
                         app.emit("run-changed", run.map(|run| run.label)).ok();
@@ -513,8 +515,9 @@ pub struct ProjectVersion {
     label: String,
     /// Unix time in milliseconds.
     at_ms: u64,
-    /// Made by an AI agent's run.
-    ai: bool,
+    /// The AI agent's run that made it; none for the user's own steps.
+    #[cfg_attr(test, ts(optional = nullable))]
+    run_id: Option<String>,
     /// The project is this version now; only the newest version with its contents says so.
     current: bool,
 }
@@ -535,7 +538,7 @@ fn list_versions(state: State<'_, AppState>, limit: usize) -> CmdResult<Vec<Proj
                 index: version.index,
                 label: version.label,
                 at_ms: version.at_ms,
-                ai: version.run_id.is_some(),
+                run_id: version.run_id,
                 current,
             }
         })

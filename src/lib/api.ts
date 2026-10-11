@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Animation, Boot, CaptionPreset, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, ReelFraming, ReelsMade, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentConnection, AgentKind, Animation, Boot, CaptionPreset, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelFraming, ReelsMade, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -82,6 +82,10 @@ export const api = {
     invoke<string>("start_export", { path, options, expectedEpoch: epoch, replaceExisting, replaceCredits }),
   filmstrip: (assetId: string) => invoke<Filmstrip | null>("filmstrip", { assetId }),
   layerBounds: (tUs: number) => invoke<LayerBounds[]>("layer_bounds", { tUs: Math.round(tUs) }),
+  /** What a recap of an AI run, or with null of everything cut since the import, would count and how long it is. */
+  recapInfo: (runId: string | null, epoch: Epoch) => invoke<RecapInfo>("recap_info", { runId, expectedEpoch: epoch }),
+  startRecap: (out: string, runId: string | null, endCard: boolean, epoch: Epoch, replaceExisting: boolean) =>
+    invoke<string>("start_recap", { out, runId, endCard, replaceExisting, expectedEpoch: epoch }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   speechModels: () => invoke<SpeechModel[]>("speech_models"),
   /** Whether the face and person models covers need, or with "background" the person model of clip backgrounds,
@@ -182,6 +186,7 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   OUTPUT_EXISTS: "A file with that name appeared while exporting. Export again to replace it or choose another name.",
   DESTINATION_EXISTS: "A file with that name already exists.",
   UNKNOWN_VERSION: "That version is no longer kept. Open the list of versions again.",
+  RUN_UNAVAILABLE: "The project as it was before or after this AI run is no longer kept, so its recap can't be made.",
   HISTORY_CORRUPT: "That version could not be read, so the project is unchanged.",
   CANCELLED: "Cancelled.",
   AGENT_BUSY: (detail) => detail,

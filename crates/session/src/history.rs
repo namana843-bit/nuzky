@@ -411,6 +411,7 @@ impl ProjectSession {
         inner.history.run_versions()
     }
 
+    /// The project just before an AI run and as the run left it, from the kept versions.
     pub fn run_pair(&self, run_id: &str) -> Result<(Project, Project)> {
         let versions = {
             let inner = self.inner.lock().unwrap();
@@ -431,6 +432,7 @@ impl ProjectSession {
         Ok((read(&versions.0)?, read(&versions.1)?))
     }
 
+    /// The files the main track plays in any kept version, so a take dropped since the import is still known.
     pub fn kept_main_assets(&self) -> Result<Vec<String>> {
         let versions: Vec<_> = {
             let inner = self.inner.lock().unwrap();
