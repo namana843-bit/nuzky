@@ -390,3 +390,51 @@ fn fifteen_minutes_of_stereo_lose_their_echo_faster_than_real_time() {
     eprintln!("QA echo: 900 s of stereo in {seconds:.1} s, {:.1}x real time", 900.0 / seconds);
     assert!(seconds < 900.0 / 2.0, "Reduce echo took {seconds:.1} s");
 }
+
+/// Each new cache cleans up its directory: files of older versions go, and every current file of the asset, of
+/// every chain, stays, with its measured blocks and locks.
+#[test]
+fn cleaning_up_after_a_new_cache_keeps_every_current_file() {
+    if !available() {
+        return;
+    }
+    let d = dir(&format!("level-cleanup-{}", nuzky_engine::edit::new_id()));
+    let source = d.join("take.wav");
+    let (voice, _) = speech(&[0.3, 0.2], 0.3);
+    wav(&source, &voice);
+    let cache = d.join("cache");
+    let asset = probe(&source, "take".into()).unwrap();
+    let raw = pcm_path(&cache, &asset);
+    let stem = raw.file_stem().unwrap().to_string_lossy().replace(".v4", "");
+    // Files older versions left: another extraction, a cleaning, a reverb removal and measurements.
+    let old = [
+        format!("pcm/{stem}.v3.f32"),
+        format!("pcm/{stem}.v4.lvl0.blocks"),
+        format!("voice/{stem}.v4.voice0.f32"),
+        format!("voice/{stem}.v4.echo0.voice1.f32"),
+        format!("dereverb/{stem}.v4.echo0.f32.lock"),
+    ];
+    for (i, chain) in [(false, false), (true, false), (false, true), (true, true)].into_iter().enumerate() {
+        if i == 0 {
+            for file in &old {
+                std::fs::create_dir_all(cache.join(file).parent().unwrap()).unwrap();
+                std::fs::write(cache.join(file), b"old").unwrap();
+            }
+        }
+        let path = Chain { dereverb: chain.0, clean_voice: chain.1 }.ensure(&cache, &asset, |_| Ok(())).unwrap();
+        level::ensure_blocks(&path, |_| Ok(())).unwrap();
+    }
+    // The cleaned raw sound is made again, so the voice directory is cleaned up once more after the cleaned sound
+    // without reverb is there.
+    let cleaned = Chain { dereverb: false, clean_voice: true }.path(&cache, &asset);
+    std::fs::remove_file(&cleaned).unwrap();
+    Chain { dereverb: false, clean_voice: true }.ensure(&cache, &asset, |_| Ok(())).unwrap();
+    for chain in [(false, false), (true, false), (false, true), (true, true)] {
+        let path = Chain { dereverb: chain.0, clean_voice: chain.1 }.path(&cache, &asset);
+        assert!(path.exists() && level::blocks_path(&path).exists(), "{} or its blocks went", path.display());
+    }
+    assert!(level::blocks_path(&raw).with_extension("blocks.lock").exists(), "a current lock went");
+    let left: Vec<_> = old.iter().filter(|file| cache.join(file).exists()).collect();
+    assert!(left.is_empty(), "older versions stayed: {left:?}");
+    std::fs::remove_dir_all(d).unwrap();
+}
