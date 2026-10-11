@@ -149,14 +149,23 @@ export function Showcase() {
     setAuto(false);
     setActive(i);
     setSpot(0);
+    cards.current?.scrollTo({ left: 0 });
   };
+
+  // The cards exist only on a phone, so a window that grows past them gets the desktop tour back.
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 48rem)");
+    const reset = () => desktop.matches && setManual(false);
+    desktop.addEventListener("change", reset);
+    return () => desktop.removeEventListener("change", reset);
+  }, []);
 
   // While the tour runs, the cards follow it; once the visitor swipes them, the open spot follows the cards.
   useEffect(() => {
     const row = cards.current;
     const card = row?.children[spot] as HTMLElement | undefined;
     if (!row || !card || manual) return;
-    row.scrollTo({ left: card.offsetLeft - (row.children[0] as HTMLElement).offsetLeft, behavior: "smooth" });
+    row.scrollTo({ left: card.offsetLeft - (row.children[0] as HTMLElement).offsetLeft });
   }, [spot, manual]);
 
   const follow = (row: HTMLDivElement) => {
@@ -166,8 +175,7 @@ export function Showcase() {
     setSpot(all.reduce((best, c, i) => (off(c) < off(all[best]) ? i : best), 0));
   };
 
-  // Where a finger landed on the cards. It takes the tour over once it moves sideways; up or down it
-  // only scrolls the page.
+  // A touch that moves up or down only scrolls the page, so only a sideways one takes the tour over.
   const touch = useRef({ x: 0, y: 0 });
   const swipe = (t: React.Touch) => {
     const dx = Math.abs(t.clientX - touch.current.x);
@@ -281,12 +289,15 @@ export function Showcase() {
           <div
             key={`cards-${tab.id}`}
             ref={cards}
+            tabIndex={0}
+            role="region"
+            aria-label={`${tab.label} cards`}
             onScroll={(e) => follow(e.currentTarget)}
             onTouchStart={(e) => (touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY })}
             onTouchMove={(e) => swipe(e.touches[0])}
             onWheel={(e) => Math.abs(e.deltaX) > Math.abs(e.deltaY) && setManual(true)}
             onKeyDown={(e) => (e.key === "ArrowLeft" || e.key === "ArrowRight") && setManual(true)}
-            className="no-scrollbar relative -mx-5 flex snap-x snap-mandatory scroll-px-5 gap-2.5 self-stretch overflow-x-auto px-5 after:w-[calc(14%-0.625rem)] after:shrink-0 after:content-[''] md:hidden"
+            className="no-scrollbar relative -mx-5 flex snap-x snap-mandatory scroll-px-5 scroll-smooth gap-2.5 self-stretch overflow-x-auto px-5 after:w-[calc(14%-0.625rem)] after:shrink-0 after:content-[''] md:hidden"
           >
             {tab.spots.map((s, i) => (
               <div key={s.title} className="surface flex w-[86%] shrink-0 snap-start flex-col gap-1.5 rounded-[20px] px-[18px] py-4 text-left">
