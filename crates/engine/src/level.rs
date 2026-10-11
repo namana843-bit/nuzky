@@ -22,11 +22,11 @@ pub const BLOCK: usize = SAMPLE_RATE as usize / 100;
 /// BS.1770 gating blocks of 400 ms every 100 ms, in blocks.
 const GATE_BLOCK: usize = 40;
 const GATE_STEP: usize = 10;
-/// Even out volume compares the loudness of the speech within 1.5 s either side of a block with the
+/// Even out volume compares the loudness of the speech within 1 s either side of a block with the
 /// file's. A block is speech when the 400 ms around it are at most 20 dB under the file's loudness.
 const PASSAGE: usize = 100;
 const SPEECH_BELOW_FILE: f64 = 20.0;
-/// How far Even out volume at full strength moves a passage, and the second either side its gain is
+/// How far Even out volume at full strength moves a passage, and the 0.4 s either side its gain is
 /// averaged over, so it follows passages and never single words.
 const LEVEL_MAX_DB: f64 = 12.0;
 const SMOOTH: usize = 40;

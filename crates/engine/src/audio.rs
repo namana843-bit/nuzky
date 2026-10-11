@@ -218,9 +218,14 @@ pub fn chains(clip: &Clip) -> (Vec<Chain>, bool) {
 /// Match loudness and Even out volume for the sound of `dry` mixed with `share` of `wet`, or None
 /// while their blocks are not measured.
 fn levels_of(dry: &Path, wet: Option<&Path>, share: f32, normalize: bool, leveler: f32) -> Option<Levels> {
+    // The one without reverb is measured last, so while it is not, the other is not read for nothing.
+    let wet = match wet {
+        Some(wet) => Some(level::read_blocks(wet)?),
+        None => None,
+    };
     let mut blocks = level::read_blocks(dry)?;
     if let Some(wet) = wet {
-        blocks = level::blend(&blocks, &level::read_blocks(wet)?, share);
+        blocks = level::blend(&blocks, &wet, share);
     }
     Some(level::levels(&blocks, normalize, leveler))
 }

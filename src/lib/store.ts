@@ -828,37 +828,18 @@ export function setBackground(ids: string[], background: Background, coalesce?: 
 }
 
 /**
- * Finding the person in these files for their clips' backgrounds: how far the least done running job is (0 while
- * it starts), or why one failed; null when nothing is left to do.
+ * The jobs `${kind}:${key}` of these keys, such as finding the person in files for their clips' backgrounds (`matte`)
+ * or preparing their sound for the Voice section (`voice`, `dereverb`, `level`): how far the least done running job
+ * is (0 while it starts), or why one failed; null when nothing is left to do.
  */
-export function useMatteJob(paths: string[]) {
+export function useJobs(kind: string, keys: string[]) {
   return useEditor(
     useShallow((s) => {
-      const jobs = paths.map((p) => s.jobs[`matte:${p}`]).filter(Boolean);
+      const jobs = keys.map((k) => s.jobs[`${kind}:${k}`]).filter(Boolean);
       const running = jobs.filter((j) => j.status === "running");
       if (running.length > 0) return { progress: Math.min(...running.map((j) => j.progress)), failed: null };
       const failed = jobs.find((j) => j.status === "failed");
       return failed ? { progress: null, failed: failed.message ?? "" } : null;
-    }),
-  );
-}
-
-/** The jobs that prepare the sound of the Voice section, by the prefix of their id. */
-const VOICE_JOBS = [
-  ["voice", "Cleaning voice"],
-  ["dereverb", "Reducing echo"],
-  ["level", "Measuring loudness"],
-] as const;
-
-/** The first Voice preparation running for these files, with how far it is (0 to 1), else null. */
-export function useVoicePreparation(assetIds: string[]) {
-  return useEditor(
-    useShallow((s) => {
-      for (const [kind, label] of VOICE_JOBS) {
-        const running = assetIds.map((id) => s.jobs[`${kind}:${id}`]).filter((j) => j?.status === "running");
-        if (running.length > 0) return { label, progress: Math.min(...running.map((j) => j.progress)) };
-      }
-      return null;
     }),
   );
 }

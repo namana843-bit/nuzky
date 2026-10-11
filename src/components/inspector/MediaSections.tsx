@@ -1,9 +1,9 @@
-import { RotateCcw, Unlink } from "lucide-react";
+import { AlertTriangle, RotateCcw, Unlink } from "lucide-react";
 import { LIMITS } from "../../lib/limits";
 import { ADJUST_ROWS, NO_ADJUST, SPEED_PRESETS, sameAdjust } from "../../lib/presets";
 import { useEffect, useState } from "react";
-import { api } from "../../lib/api";
-import { detachAudio, detachBlocker, editClip, editClips, findClip, maxFadeUs, setVoice, useEditor, useVoicePreparation, type VoiceChange } from "../../lib/store";
+import { api, plainError } from "../../lib/api";
+import { detachAudio, detachBlocker, editClip, editClips, findClip, maxFadeUs, setVoice, useEditor, useJobs, type VoiceChange } from "../../lib/store";
 import { US, formatDuration } from "../../lib/time";
 import type { Adjust, Asset, Clip } from "../../lib/types";
 import { Button, Checkbox, IconButton, ProgressBar, Section, Segmented, Slider } from "../ui";
@@ -84,22 +84,49 @@ const signedDb = (db: number) => `${db < -0.05 ? "−" : "+"}${Math.abs(db).toFi
 
 /** The gain Match loudness gives this clip in dB once its file's loudness is measured, else null. */
 function useMatchGain(clip: Clip | undefined) {
-  const [db, setDb] = useState<number | null>(null);
   const c = clip?.content.type === "media" && clip.content.normalize ? clip.content : undefined;
   const id = c ? clip!.id : null;
   // It follows the sound the other Voice settings make, and is asked again when a preparation of the file ends.
-  const settings = c ? `${c.assetId}:${c.cleanVoice}:${c.dereverb ?? 0}:${c.leveler ?? 0}` : "";
-  const preparing = useVoicePreparation(c ? [c.assetId] : [])?.label;
+  const key = c ? `${id}:${c.assetId}:${c.cleanVoice}:${c.dereverb ?? 0}:${c.leveler ?? 0}` : null;
+  const jobs = useEditor((s) => (c ? ["voice", "dereverb", "level"].map((k) => s.jobs[`${k}:${c.assetId}`]?.status).join() : ""));
+  const [result, setResult] = useState<{ key: string; db: number | null }>();
   useEffect(() => {
     let live = true;
     // Once a slider stops moving, not on every step of a drag.
-    const timer = id ? setTimeout(() => api.matchGain(id).then((v) => live && setDb(v), () => live && setDb(null)), 150) : undefined;
+    const timer = id && key ? setTimeout(() => api.matchGain(id).then((db) => live && setResult({ key, db }), () => live && setResult({ key, db: null })), 150) : undefined;
     return () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [id, settings, preparing]);
-  return id ? db : null;
+  }, [id, key, jobs]);
+  // A value measured for other settings never shows.
+  return result && result.key === key ? result.db : null;
+}
+
+/**
+ * The preparation of a Voice setting's sound for these files, under the setting: how far it is, or why it failed
+ * and what that means.
+ */
+function JobRow({ kind, assetIds, doing, failed, meanwhile }: { kind: string; assetIds: string[]; doing: string; failed: string; meanwhile: string }) {
+  const job = useJobs(kind, assetIds);
+  if (job?.failed != null) {
+    return (
+      <p role="status" className="flex items-start gap-1.5 text-[12px] text-muted">
+        <AlertTriangle size={14} className="mt-px shrink-0 text-danger" />
+        {`${failed}: ${plainError(job.failed).split(": ").pop()}. ${meanwhile}`}
+      </p>
+    );
+  }
+  if (job?.progress == null) return null;
+  return (
+    <div className="flex flex-col gap-1.5" role="status">
+      <span className="tabular text-[12px] text-muted">
+        {doing}
+        {job.progress > 0 && ` · ${Math.round(job.progress * 100)}%`}
+      </span>
+      <ProgressBar value={job.progress} label={doing} />
+    </div>
+  );
 }
 
 /**
@@ -135,16 +162,16 @@ function StrengthRow({ clips, field, label, by, title, start, coalesce }: { clip
 }
 
 /**
- * The Voice section of one or more clips with sound. Each file's sound for it is prepared once in the
- * background; meanwhile playback keeps the sound it has and a row shows how far the work is.
+ * The Voice section of one or more clips with sound, in the order the sound goes through it. Each file's sound for
+ * a setting is prepared once in the background; meanwhile playback keeps the sound it has and a row under the
+ * setting shows how far the work is.
  */
 export function VoiceSection({ clips, coalesce }: { clips: Clip[]; coalesce: string }) {
   const ids = clips.map((c) => c.id);
   const media = clips.flatMap((c) => (c.content.type === "media" ? [c.content] : []));
   const clean = media.map((m) => m.cleanVoice);
   const normalize = media.map((m) => !!m.normalize);
-  const used = media.filter((m) => m.cleanVoice || (m.dereverb ?? 0) > 0 || m.normalize || (m.leveler ?? 0) > 0).map((m) => m.assetId);
-  const preparing = useVoicePreparation(used);
+  const files = (on: (m: (typeof media)[number]) => boolean) => [...new Set(media.filter(on).map((m) => m.assetId))];
   const single = clips.length === 1 ? clips[0] : undefined;
   const matched = useMatchGain(single);
   const volume = single?.content.type === "media" ? single.content.volume : 0;
@@ -158,31 +185,25 @@ export function VoiceSection({ clips, coalesce }: { clips: Clip[]; coalesce: str
         title="Less background noise, rumble and harsh s sounds in speech"
         onChange={(v) => setVoice(ids, { cleanVoice: v })}
       />
+      <JobRow kind="voice" assetIds={files((m) => m.cleanVoice)} doing="Cleaning voice" failed="The voice could not be cleaned" meanwhile="It plays as recorded; turn Clean voice off to export." />
       <StrengthRow clips={clips} field="dereverb" label="Reduce echo" by="Reduce by" title="Takes the ring of the room out of speech" start={DEREVERB} coalesce={coalesce} />
-      <div className="flex items-center justify-between gap-2">
-        <Checkbox
-          label="Match loudness"
-          checked={normalize.every(Boolean)}
-          mixed={!normalize.every(Boolean) && normalize.some(Boolean)}
-          title="Plays every recording equally loud, at −16 LUFS; Volume still applies on top"
-          onChange={(v) => setVoice(ids, { normalize: v })}
-        />
-        {gain !== null && (
-          <span className="tabular text-[12px] text-muted" title={`Match loudness ${signedDb(matched!)}, volume ${signedDb(20 * Math.log10(volume))}`}>
-            {signedDb(gain)}
-          </span>
-        )}
-      </div>
+      <JobRow kind="dereverb" assetIds={files((m) => (m.dereverb ?? 0) > 0)} doing="Reducing echo" failed="The echo could not be taken out" meanwhile="It plays as recorded; turn Reduce echo off to export." />
       <StrengthRow clips={clips} field="leveler" label="Even out volume" by="Even out by" title="Brings quiet and loud passages of speech closer together" start={LEVELER} coalesce={coalesce} />
-      {preparing && (
-        <div className="flex flex-col gap-1.5" role="status">
-          <span className="tabular text-[12px] text-muted">
-            {preparing.label}
-            {preparing.progress > 0 && ` · ${Math.round(preparing.progress * 100)}%`}
-          </span>
-          <ProgressBar value={preparing.progress} label={preparing.label} />
-        </div>
-      )}
+      <Checkbox
+        label="Match loudness"
+        checked={normalize.every(Boolean)}
+        mixed={!normalize.every(Boolean) && normalize.some(Boolean)}
+        title="Plays every recording equally loud, at −16 LUFS; Volume still applies on top"
+        onChange={(v) => setVoice(ids, { normalize: v })}
+        detail={gain !== null && <span title={`Match loudness ${signedDb(matched!)} with the volume ${signedDb(20 * Math.log10(volume))}`}>{signedDb(gain)}</span>}
+      />
+      <JobRow
+        kind="level"
+        assetIds={files((m) => !!m.normalize || (m.leveler ?? 0) > 0)}
+        doing="Measuring loudness"
+        failed="The loudness could not be measured"
+        meanwhile="It plays at its own level; turn Even out volume and Match loudness off to export."
+      />
     </Section>
   );
 }

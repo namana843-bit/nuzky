@@ -155,9 +155,9 @@ media voice.mp4 noisy_talk
 
 # A talking head in an empty room for the room flow: six phrases with a pause after each, the third and fourth 12 dB
 # quieter, as when the speaker turns away from the phone, in a room whose diffuse reverb is as loud as the direct
-# sound and falls by 60 dB in 0.7 s.
-echoey_talk() {
-  local out=$1 dir n=0 inputs=() seconds levels=(0 0 -12 -12 0 0)
+# sound and falls by 60 dB in 0.7 s. The flow reads where each phrase ends from the speech without the room.
+room_speech() {
+  local out=$1 dir n=0 inputs=() levels=(0 0 -12 -12 0 0)
   dir=$(mktemp -d)
   for phrase in "Welcome back to my kitchen." "The room is empty today and it rings." "Now I turn away from the phone." \
     "So my voice gets much quieter." "And now I am back at the phone." "Reduce echo should make me sound close."; do
@@ -166,7 +166,14 @@ echoey_talk() {
     inputs+=(-i "$dir/p$n.wav")
     n=$((n + 1))
   done
-  ff "${inputs[@]}" -filter_complex "concat=n=$n:v=0:a=1,adelay=500,volume=-8dB" "$dir/speech.wav"
+  ff "${inputs[@]}" -filter_complex "concat=n=$n:v=0:a=1,adelay=500,volume=-8dB" -c:a pcm_f32le "$out"
+  rm -rf "$dir"
+}
+media room-dry.wav room_speech
+echoey_talk() {
+  local out=$1 dir seconds
+  dir=$(mktemp -d)
+  room_speech "$dir/speech.wav"
   ff -f lavfi -i "aevalsrc='eq(n,0)+gt(n,240)*0.035*(2*random(0)-1)*exp(-9.86*t)':s=48000:d=0.8" "$dir/room.wav"
   seconds=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$dir/speech.wav")
   ff -i "$dir/speech.wav" -i "$dir/room.wav" -f lavfi -i "color=c=0x2b3a3a:s=1080x1920:r=30:d=$seconds,noise=alls=10:allf=u" \

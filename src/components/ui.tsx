@@ -423,6 +423,7 @@ export function Checkbox({
   mixed = false,
   hideLabel = false,
   tabIndex,
+  detail,
 }: {
   label: string;
   checked: boolean;
@@ -434,6 +435,8 @@ export function Checkbox({
   /** The label only names it for screen readers, where the row around it says what it is. */
   hideLabel?: boolean;
   tabIndex?: number;
+  /** A read-only value at the right end of the line, such as the gain it gives. */
+  detail?: ReactNode;
 }) {
   const lock = useLockReason();
   disabled = disabled || !!lock;
@@ -463,6 +466,7 @@ export function Checkbox({
         </span>
       </span>
       <span className={hideLabel ? "sr-only" : "text-[12px] text-fg"}>{label}</span>
+      {detail && <span className="tabular ml-auto text-[12px] text-muted">{detail}</span>}
     </label>
   );
 }
