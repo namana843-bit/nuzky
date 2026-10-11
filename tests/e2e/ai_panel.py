@@ -1,4 +1,4 @@
-import json, os, subprocess, time
+import json, os, shutil, subprocess, time
 from pathlib import Path
 
 from e2e.harness import CLI, FIXTURES, MACOS, clipboard, flow, press, wait, webdriver
@@ -65,6 +65,13 @@ MESSAGES = "return window.__nuzky.agent.getState().items.filter((i) => i.kind ==
 
 def idle(r):
     return wait(lambda: agent(r)['status'] == 'idle', 20)
+
+
+def setup_jobs(r):
+    setup(r)
+    # A copy of the fake, so the flow can take the agent away.
+    shutil.copy(FAKE, r.work / 'claude')
+    r.env['NUZKY_AGENT_CLAUDE'] = str(r.work / 'claude')
 
 
 def setup_codex(r):
@@ -147,6 +154,87 @@ def ai_panel_codex(r):
     send(r, 'limit please')
     r.check('the Codex usage hint includes its reset time', wait(lambda: 'Codex usage limit reached.' in panel(r)['text']
             and '9:00 PM' in panel(r)['text'], 10), panel(r)['text'])
+    r.check('no error toast along the way', not r.errors(), r.errors())
+
+
+@flow('ai_panel_jobs', "A job of the panel's agent outlasts the turn it ends to ask: it shows with Stop while the user "
+      'decides, the next turn reads its result or cancels it, and Stop or a new chat stops it', before=setup_jobs)
+def ai_panel_jobs(r):
+    r.s.run('document.body.focus()')
+    r.key('j', ctrlKey=True)
+    wait(lambda: panel(r), 5)
+    wait(lambda: r.s.run('return window.__nuzky.agent.getState().agents'), 10)
+    fake = r.work / 'fake'
+    status = "return [...document.querySelectorAll('aside[aria-label=AI] [role=status]')].map((e) => e.textContent).join(' | ')"
+    stop = "return [...document.querySelectorAll('aside[aria-label=AI] button')].some((b) => b.textContent.trim() === 'Stop')"
+    # The latest question's choice: earlier questions keep theirs, turned off.
+    answer = """const b = [...document.querySelectorAll('aside[aria-label=AI] [role=group] button')]
+        .filter((b) => b.textContent.trim() === arguments[0] && !b.getAttribute('aria-disabled')).pop(); b?.click(); return !!b;"""
+    said = lambda: (panel(r) or {}).get('text', '')
+
+    def ask(text='Export it, a long job'):
+        """The agent starts an export and ends its turn with a question; returns the job."""
+        (fake / 'job.json').unlink(missing_ok=True)
+        idle(r)
+        send(r, text)
+        wait(lambda: (fake / 'job.json').exists() and agent(r)['status'] == 'idle', 30)
+        job = json.loads((fake / 'job.json').read_text())
+        r.check('the export was still running when the agent ended its turn to ask', job['running_at_end'], job)
+        return job['id']
+
+    first = ask()
+    r.check('while the user decides, the panel shows the export with Stop, and the answer can be sent',
+            wait(lambda: 'Exporting' in r.s.run(status) and r.s.run(stop), 5) and agent(r)['status'] == 'idle', r.s.run(status))
+    r.shot('job-between-turns')
+    # The user takes a moment to answer.
+    time.sleep(1)
+    r.check('the user answers the question', r.s.run(answer, 'Wait and continue'))
+    r.check('the next turn reads the finished result of that same job', wait(lambda: f'Job {first}: done' in said(), 60), said())
+    exported = [p for p in fake.glob('export-*.mp4') if p.name in said()]
+    r.check('the export is in its file', len(exported) == 1 and exported[0].stat().st_size > 0,
+            {'files': sorted(p.name for p in fake.iterdir()), 'said': said()})
+    r.check('with the job done, the panel no longer shows it', wait(lambda: 'Exporting' not in r.s.run(status) and not r.s.run(stop), 5),
+            r.s.run(status))
+    r.shot('job-result')
+
+    second = ask()
+    r.check('the user answers the question', r.s.run(answer, 'Stop the export'))
+    r.check('the next turn can cancel the job the turn before started', wait(lambda: f'Job {second}: cancelled' in said(), 30), said())
+
+    third = ask()
+    wait(lambda: r.s.run(stop), 5)
+    started = time.monotonic()
+    click(r, 'Stop')
+    gone = wait(lambda: 'Exporting' not in r.s.run(status) and not r.s.run(stop), 5, 0.05)
+    r.check('Stop in the panel stops the job between turns within a few seconds', gone, {'seconds': round(time.monotonic() - started, 2)})
+    r.check('the user answers the question', r.s.run(answer, 'Wait and continue'))
+    r.check('the agent then finds it cancelled', wait(lambda: f'Job {third}: cancelled' in said(), 30), said())
+
+    ask('Export it into a folder, a long job')
+    # The folder goes away while the user decides, so the export cannot be saved.
+    shutil.rmtree(fake / 'folder')
+    r.check('an export that fails between turns says so in the panel, with no Stop',
+            wait(lambda: 'Exporting failed' in r.s.run(status) and not r.s.run(stop), 30), r.s.run(status))
+    r.shot('job-failed')
+
+    fourth = ask()
+    r.s.run("""document.querySelector('aside[aria-label=AI] button[aria-label^="New chat"]').click()""")
+    r.check('a new chat leaves nothing of the old one running in the panel', wait(lambda: not r.s.run(stop), 5), r.s.run(status))
+    send(r, 'Wait and continue')
+    r.check('and stops the job the old one started', wait(lambda: f'Job {fourth}: cancelled' in said(), 30), said())
+
+    ask()
+    # The agent goes away while its answer starts, so no turn starts.
+    (fake / 'vanish').touch()
+    send(r, 'Wait and continue')
+    r.check('when the answer cannot start, the panel still shows the export with Stop',
+            wait(lambda: 'error' in agent(r)['kinds'], 10) and wait(lambda: 'Exporting' in r.s.run(status) and r.s.run(stop), 5),
+            {'status': r.s.run(status), 'agent': agent(r)})
+    click(r, 'Stop')
+    r.check('and Stop stops it', wait(lambda: 'Exporting' not in r.s.run(status) and not r.s.run(stop), 5), r.s.run(status))
+    left = lambda: sorted(p.name for p in fake.iterdir() if p.name.startswith(('export-', '.nuzky-part')))
+    # The panel lets go of a stopped job at once; the export may still be removing its part.
+    r.check('the stopped exports left no file behind', bool(exported) and wait(lambda: left() == [exported[0].name], 10), left())
     r.check('no error toast along the way', not r.errors(), r.errors())
 
 

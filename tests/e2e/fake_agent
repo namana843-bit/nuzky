@@ -10,18 +10,25 @@ of the bridge from --mcp-config or -c, so its edits go through Nuzky like a real
   "options"  offers two takes with suggest_options
   "work as reels"  (Find reels) proposes four reels of at least 15 s from the transcript
   "slow"     opens a run, splits the clip and keeps working until stopped
+  "long job" starts an export (into LOG/folder when the message says "folder") and ends its turn asking whether to wait; "Wait and continue" then reads that job
+             (from $NUZKY_FAKE_AGENT_LOG/job.json) until it ends, "Stop the export" cancels it first
   "keep: …"  sent from Your style: reads the style and keeps the rest of the message as the creator's rule
   the `thumbnail` prompt (Make a thumbnail): sets both covers in one run with the hook from "Hook: …" in the wishes,
              looks at the cover with inspect_thumbnail, waiting for its mask, and exports nothing
   "signin"   is not signed in;  "limit" has hit its usage limit
   anything else is echoed back.
 Each start is logged to $NUZKY_FAKE_AGENT_LOG/runs.jsonl (argv, pid, session); sessions live there too.
+With $NUZKY_FAKE_AGENT_LOG/vanish, `--version` takes this executable's execute bit away, so the turn cannot start.
 """
 import json, os, signal, subprocess, sys, threading, queue, time, tomllib, uuid
 from pathlib import Path
 
 CODEX = Path(sys.argv[0]).name == 'fake_codex'
 if len(sys.argv) > 1 and sys.argv[1] == '--version':
+    if (Path(os.environ.get('NUZKY_FAKE_AGENT_LOG', '/tmp/fake-agent')) / 'vanish').exists():
+        # Found, then gone before it starts, slower than the panel's polling.
+        time.sleep(1.5)
+        os.chmod(sys.argv[0], 0o644)
     print('codex-cli 0.162.1' if CODEX else '2.1.292 (Claude Code)')
     sys.exit(0)
 
@@ -152,7 +159,8 @@ def call(tool, arguments):
         return result.get('structuredContent', {})
     global calls
     calls += 1
-    tid, name = f'toolu_{calls}', f'mcp__nuzky__{tool}'
+    # Claude's ids are unique across turns; a question in a later turn is a new one.
+    tid, name = f'toolu_{os.getpid()}_{calls}', f'mcp__nuzky__{tool}'
     emit({'type': 'stream_event', 'parent_tool_use_id': None, 'event': {'type': 'message_start'}})
     emit({'type': 'stream_event', 'parent_tool_use_id': None,
           'event': {'type': 'content_block_start', 'content_block': {'type': 'tool_use', 'id': tid, 'name': name, 'input': {}}}})
@@ -328,6 +336,21 @@ elif 'slow' in message:
     say('Pracuju na dalších střizích…')
     for _ in range(600):
         time.sleep(0.1)
+elif 'long job' in message:
+    folder = LOG / 'folder' if 'folder' in message else LOG
+    folder.mkdir(exist_ok=True)
+    job = call('export_video', {'path': str(folder / f'export-{uuid.uuid4().hex[:8]}.mp4'), 'resolution': 1080, 'fps': 30})['job_id']
+    say('Exportuju, chvíli to potrvá.')
+    call('suggest_options', {'question': 'Počkat na export?', 'options': [{'label': 'Wait and continue'}, {'label': 'Stop the export'}]})
+    running = call('job', {'job_id': job, 'action': 'get'})['status'] == 'running'
+    (LOG / 'job.json').write_text(json.dumps({'id': job, 'running_at_end': running}))
+elif message in ('wait and continue', 'stop the export'):
+    job = json.loads((LOG / 'job.json').read_text())['id']
+    if message == 'stop the export':
+        call('job', {'job_id': job, 'action': 'cancel'})
+    while (state := call('job', {'job_id': job, 'action': 'get'}))['status'] == 'running':
+        time.sleep(0.3)
+    say(f"Job {job}: {state['status']}" + (f" {Path(state['result']['path']).name}" if state['status'] == 'done' else ''))
 else:
     say(f'Rozumím: {message}')
 finish()

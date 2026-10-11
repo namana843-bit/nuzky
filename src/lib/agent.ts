@@ -52,6 +52,16 @@ export interface Step {
   detail: string | null;
 }
 
+/** A job the agent started that runs on after its turn, as the backend reports it. */
+export interface AgentJob {
+  job_id: string;
+  kind: string;
+  status: "running" | "done" | "failed" | "cancelled";
+  progress: number | null;
+  cancel_requested: boolean;
+  error: string | null;
+}
+
 export interface Choice {
   label: string;
   detail: string | null;
@@ -100,6 +110,8 @@ interface AgentState {
   /** The message being answered, so Stop reaches it even while it is starting. */
   turn: string | null;
   items: ChatItem[];
+  /** What the agent left running when its turn ended, such as an export it asked about; Stop stops it. One that failed meanwhile stays to say so. */
+  jobs: AgentJob[];
   status: "idle" | "working" | "stopping";
   /** When the current answer started, in ms; it survives moving the panel. */
   startedAt: number | null;
@@ -126,6 +138,7 @@ export const useAgent = create<AgentState>(() => ({
   chat: null,
   turn: null,
   items: [],
+  jobs: [],
   status: "idle",
   startedAt: null,
   about: "project",
@@ -141,6 +154,7 @@ const agentApi = {
   send: (agent: AgentId, chat: string, turn: string, text: string, context: PromptContext) =>
     invoke<void>("agent_send", { agent, chat, turn, text, context }),
   stop: (turn: string) => invoke<void>("agent_stop", { turn }),
+  jobs: () => invoke<AgentJob[]>("agent_jobs"),
 };
 
 /** Tool names as the agent reports them: `mcp__nuzky__get_state` (Claude) or `nuzky.get_state` (Codex). */
@@ -176,6 +190,24 @@ const ANALYSES: Record<string, string> = {
   retakes: "Finding retakes",
   emphasis: "Finding sentences to zoom",
 };
+
+const JOBS: Record<string, string> = {
+  transcription: "Transcribing",
+  export: "Exporting",
+  activity: "Scanning picture and sound",
+  analysis: "Analysing",
+  reframe: "Following the face",
+  matte: "Finding the person",
+  segment: "Finding the person",
+};
+
+/** What a job the agent left running is doing, with its percentage once known, or why it failed. */
+export function jobText(job: AgentJob): string {
+  const title = JOBS[job.kind] ?? "Working";
+  if (job.status === "failed") return `${title} failed. ${plainError(job.error ?? "")}`;
+  if (job.cancel_requested) return "Stopping…";
+  return job.progress === null ? `${title}…` : `${title} ${Math.round(job.progress * 100)}%`;
+}
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
 
@@ -223,12 +255,42 @@ export function chooseAgent(agent: AgentId) {
   if (s.agent === agent || s.status !== "idle") return;
   localStorage.setItem(AGENT_KEY, agent);
   // Another agent does not know this conversation, so it starts a new one; the draft stays.
-  useAgent.setState({ agent, chat: null, items: [] });
+  useAgent.setState({ agent, ...endChat() });
 }
 
 export function newChat() {
   if (useAgent.getState().status !== "idle") return;
-  useAgent.setState({ chat: null, items: [] });
+  useAgent.setState(endChat());
+}
+
+/** A new conversation stops what the old one left running. */
+function endChat() {
+  const { turn } = useAgent.getState();
+  if (turn) void agentApi.stop(turn).catch((e) => useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) }));
+  return { chat: null, items: [], jobs: [] };
+}
+
+let watching = false;
+/** Shows what the agent left running when its turn ended, until it ends or another turn starts. */
+async function watchJobs() {
+  if (watching) return;
+  watching = true;
+  try {
+    while (useAgent.getState().status === "idle") {
+      const chat = useAgent.getState().chat;
+      const all = await agentApi.jobs();
+      const s = useAgent.getState();
+      if (s.status !== "idle" || s.chat !== chat) break;
+      // One the panel showed that failed says so until the next message.
+      const shown = new Set(s.jobs.map((j) => j.job_id));
+      const jobs = all.filter((j) => j.status === "running" || (j.status === "failed" && shown.has(j.job_id)));
+      useAgent.setState({ jobs });
+      if (!jobs.some((j) => j.status === "running")) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
+  } finally {
+    watching = false;
+  }
 }
 
 /** What the next message would carry, as the chips show it. */
@@ -305,6 +367,7 @@ export async function send(text = useAgent.getState().draft.trim(), about: AiAbo
     turn,
     // Earlier problems are over once a new message goes; their Try again would send this one.
     items: [...s.items.filter((i) => i.kind !== "error"), { kind: "user", text: text || "Make a thumbnail", context: text ? describeContext(context) : describeContext({ ...context, thumbnail: false }) }],
+    jobs: [],
     status: "working",
     startedAt: Date.now(),
     about,
@@ -319,6 +382,7 @@ export async function send(text = useAgent.getState().draft.trim(), about: AiAbo
   } catch (e) {
     const text = errorText(e);
     fail(text.startsWith("NOT_INSTALLED") ? "NOT_INSTALLED" : "AGENT_FAILED", plainError(text));
+    void watchJobs();
   }
 }
 
@@ -335,13 +399,14 @@ export function choose(id: string, label: string) {
 }
 
 export async function stop() {
-  const { turn, status } = useAgent.getState();
-  if (!turn || status !== "working") return;
-  useAgent.setState({ status: "stopping" });
+  const { turn, status, jobs } = useAgent.getState();
+  const between = status === "idle" && jobs.some((j) => j.status === "running");
+  if (!turn || (status !== "working" && !between)) return;
+  useAgent.setState(between ? { jobs: jobs.map((j) => ({ ...j, cancel_requested: true })) } : { status: "stopping" });
   try {
     await agentApi.stop(turn);
   } catch (e) {
-    useAgent.setState({ status: "working" });
+    if (!between) useAgent.setState({ status: "working" });
     useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
   }
 }
@@ -400,6 +465,7 @@ function onEvent(e: AgentEvent) {
     useAgent.setState({ items });
   } else if (e.type === "error") {
     fail(e.code, e.message);
+    void watchJobs();
   } else {
     // A stopped turn marks the step it was on; one that changed nothing says so.
     const marked = items.map((it) => (it.kind === "steps" ? { ...it, steps: it.steps.map((x) => (x.status === "running" ? { ...x, status: e.stopped ? ("stopped" as const) : ("done" as const) } : x)) } : it));
@@ -410,6 +476,7 @@ function onEvent(e: AgentEvent) {
     const runs = turn.filter((it) => it.kind === "run").map((it) => (e.stopped ? { ...it, stopped: true } : it));
     const ordered = [...marked.slice(0, turnStart), ...turn.filter((it) => it.kind !== "run"), ...runs];
     useAgent.setState({ items: e.stopped && !runs.length ? [...ordered, { kind: "stopped" }] : ordered, status: "idle" });
+    void watchJobs();
   }
 }
 
@@ -440,7 +507,7 @@ export function panelRunEnded(label: string, snap: Snapshot | null): boolean {
 
 // Another project starts a new conversation; the backend stops an agent still working on the old one.
 useEditor.subscribe((s, prev) => {
-  if (prev.snap && s.snap?.sessionEpoch !== prev.snap.sessionEpoch) useAgent.setState({ chat: null, items: [], status: "idle" });
+  if (prev.snap && s.snap?.sessionEpoch !== prev.snap.sessionEpoch) useAgent.setState({ chat: null, items: [], jobs: [], status: "idle" });
 });
 
 let listening = false;
