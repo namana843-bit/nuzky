@@ -12,6 +12,14 @@ STUB = """const win = window.__nuzky.previewWindow;
 window.__fullscreen = [];
 win.isFullscreen = () => Promise.resolve(false);
 win.setFullscreen = (on) => { window.__fullscreen.push(on); return Promise.resolve(); };"""
+# A window already in full screen, answering only after a moment, as a real window may.
+SLOW_FULL = """window.__fullscreen = [];
+window.__nuzky.previewWindow.isFullscreen = () => new Promise((done) => setTimeout(() => done(true), 1000));"""
+# Records what the preview tells the engine; the sound card's silence itself cannot be heard from a run.
+SPY = """const api = window.__nuzky.api, send = api.setPreviewMuted;
+window.__muted = [];
+api.setPreviewMuted = (on) => { window.__muted.push(on); return send(on); };"""
+FOCUS_IN_PREVIEW = "return document.activeElement?.matches('section[aria-label=Preview]')"
 # The transport's three parts, left to right, and whether each fits in the bar beside the next.
 TRANSPORT = """const bar = document.querySelector('section[aria-label=Preview] .bar'), b = bar.getBoundingClientRect();
 const parts = [...bar.children].map((e) => e.getBoundingClientRect());
@@ -52,8 +60,10 @@ def preview(r):
     added = r.s.call('window.__nuzky.store.getState().edit(arguments[0])', CAPTION)
     r.check('a caption is on the video', added['ok'] and wait(lambda: len(r.state()['tracks']) == 2, 5), added)
 
+    r.s.run(SPY)
     r.key('m')
-    r.check('M mutes the preview and its button shows it', pressed(r, 'Unmute') == 'true')
+    r.check('M mutes the preview: its button shows it and the engine is told',
+            pressed(r, 'Unmute') == 'true' and r.s.run('return window.__muted') == [True], r.s.run('return window.__muted'))
     start = time_us(r)
     r.key(' ')
     moved = wait(lambda: time_us(r) > start + 1_000_000, 8)
@@ -66,8 +76,10 @@ def preview(r):
     wait(lambda: r.s.run("const c = window.__nuzky; if (window.__oldPage || !c?.store.getState().snap) return false; "
                          "c.store.setState({view: 'editor'}); return true", retries=3), 30)
     r.check('after a restart the preview is still muted', wait(lambda: pressed(r, 'Unmute') == 'true', 10))
+    r.s.run(SPY)
     r.s.run(BUTTON + '.click()', 'Unmute')
-    r.check('clicking the button turns the sound back on', pressed(r, 'Mute') == 'false')
+    r.check('clicking the button turns the sound back on',
+            pressed(r, 'Mute') == 'false' and r.s.run('return window.__muted') == [False], r.s.run('return window.__muted'))
 
     normal = wait(lambda: (lambda l: l if l['frame'][1] > 100 else None)(layout(r)), 10) or layout(r)
     time.sleep(0.3)  # The button's colour fades for 120 ms.
@@ -91,6 +103,39 @@ def preview(r):
     r.check('the button opens full screen too', wait(lambda: layout(r)['section'] == [0, 0, *normal['window']], 5), layout(r))
     r.s.run(BUTTON + '.click()', 'Exit full screen')
     r.check('and closes it', wait(lambda: layout(r)['section'] == normal['section'], 5), layout(r))
+
+    r.s.run(SLOW_FULL)
+    r.key('f')
+    r.key('f')
+    time.sleep(2.5)
+    r.check('a window already in full screen stays in it, even after F pressed twice quickly',
+            r.s.run('return window.__fullscreen') == [] and layout(r)['section'] == normal['section'],
+            [r.s.run('return window.__fullscreen'), layout(r)])
+    r.s.run(STUB)
+
+    clip = r.track()[0]['id']
+    r.focus_clip(clip)
+    r.key('f')
+    r.check('full screen takes the keyboard from the editor hidden behind it', wait(lambda: r.s.run(FOCUS_IN_PREVIEW), 5))
+    r.key('Delete')
+    r.s.run("window.__nuzky.store.setState({aiRun: 'Cutting pauses'})")
+    run_bar = r.s.run("return document.querySelector('section[aria-label=Preview] [role=status]')?.textContent")
+    r.check('an AI run shows what it does and its Stop over the full screen video', 'Stop and edit' in (run_bar or ''), run_bar)
+    r.shot('full-screen-ai-run')
+    r.s.run("window.__nuzky.store.setState({aiRun: null})")
+    r.key('Escape')
+    r.check('Delete does not cut the clip selected on the hidden timeline, and Esc gives the keyboard back to that clip',
+            wait(lambda: layout(r)['section'] == normal['section'], 5) and [c['id'] for c in r.track()][:1] == [clip]
+            and r.s.run('return document.activeElement?.dataset.clipId') == clip, r.track())
+
+    r.s.run("window.__nuzky.store.setState({connectOpen: true})")
+    wait(lambda: r.s.run("return !!document.querySelector('[aria-modal=true]')"), 5)
+    r.key('m')
+    r.key('f')
+    time.sleep(0.3)
+    r.check('with a dialog open, M and F leave the preview alone',
+            pressed(r, 'Mute') == 'false' and layout(r)['section'] == normal['section'], layout(r))
+    r.s.run("window.__nuzky.store.setState({connectOpen: false})")
 
     size = layout(r)['window']
     webdriver('POST', r.s.path + '/window/rect', {'width': 1024, 'height': 640})

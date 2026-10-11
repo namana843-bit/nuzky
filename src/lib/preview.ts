@@ -19,11 +19,16 @@ export function toggleMuted() {
 export const appWindow = getCurrentWindow();
 /** A window already in full screen stays in it when the preview leaves. */
 let windowWasFull = false;
+// One window change at a time: a quick second press must know what the first one found.
+let windowChange = Promise.resolve();
 
-export async function toggleFullPreview() {
+export function toggleFullPreview() {
   const full = !usePreview.getState().full;
   usePreview.setState({ full });
-  if (full) windowWasFull = await appWindow.isFullscreen();
-  // Pressed twice quickly, the window follows the last press.
-  if (!windowWasFull) await appWindow.setFullscreen(usePreview.getState().full);
+  const change = async () => {
+    if (full) windowWasFull = await appWindow.isFullscreen();
+    if (!windowWasFull) await appWindow.setFullscreen(full);
+  };
+  windowChange = windowChange.then(change, change);
+  return windowChange;
 }

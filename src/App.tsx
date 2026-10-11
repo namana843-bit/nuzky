@@ -97,8 +97,8 @@ function useShortcuts() {
         useEditor.setState({ launcherOpen: true });
         return;
       }
-      // The editor's keys stay with an open dialog of its own.
-      if (isTyping(target) || s.exportOpen || useStyle.getState().learnOpen) return;
+      // The editor's keys stay with an open dialog.
+      if (isTyping(target) || document.querySelector("dialog[open], [aria-modal='true']")) return;
       const fps = s.snap?.project.canvas.fps ?? 30;
       const key = e.key.toLowerCase();
       // A focused slider keeps its own arrow, Home and End keys.
@@ -134,6 +134,11 @@ function useShortcuts() {
           }
         } else if (key === "home" && reel && !onRange) s.seek(reel.startUs);
         else if (key === "end" && !onRange) playEnding();
+        return;
+      }
+      // Full screen hides the timeline; the keys that would change it unseen rest.
+      if (usePreview.getState().full && (key === "delete" || key === "backspace" || (!mod && (key === "s" || key === "q" || key === "w")) || (mod && (key === "d" || key === "i" || key === "y" || key === "z")))) {
+        e.preventDefault();
         return;
       }
       if (key === " ") {
@@ -509,6 +514,7 @@ export default function App() {
   const learnOpen = useStyle((s) => s.learnOpen);
   // Choosing reels: the candidates in the timeline's place, the preview wide without the inspector.
   const reels = useReels((s) => s.open);
+  const full = usePreview((s) => s.full);
   const dock = useDockLayout();
   const win = useWindowSize();
   // A column docked at either edge narrows the editor; in the inspector's place the panel is the inspector's width.
@@ -580,9 +586,9 @@ export default function App() {
           {dock.open && dock.mode === "right" && <DockedAiPanel side="right" width={dock.width} />}
           {dock.open && dock.mode === "inspector" && <DockedAiPanel side="right" width={panes.inspector} inspectorMax={panes.max.inspector} />}
         </div>
-        {/* Floating above the editor, it would float above the home screen too; hidden there, it keeps what was typed. */}
+        {/* Floating above the editor, it would float above the home screen and the full screen preview too; hidden there, it keeps what was typed. */}
         {dock.open && dock.mode === "float" && (
-          <div hidden={home}>
+          <div hidden={home || full}>
             <FloatingAiPanel rect={dock.float} />
           </div>
         )}
