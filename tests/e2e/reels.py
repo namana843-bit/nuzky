@@ -77,8 +77,9 @@ def reels(r):
     trim(r)
     make(r, source, collection)
     failure(r)
+    moved(r)
     missing(r)
-    export(r)
+    export(r, source)
     from_home(r)
     r.check('no error toast', not r.errors(), r.errors())
 
@@ -183,20 +184,46 @@ def make(r, source, collection):
         resize(r, 1440, 900)
 
 
+def pick(r, title):
+    c = next(c for c in candidates(r) if c['title'] == title)
+    r.s.run(f"document.querySelector('{CARD.format(c['id'])} input[type=checkbox]').click()")
+    wait(lambda: next(x for x in candidates(r) if x['id'] == c['id'])['status'] == 'picked', 10)
+    return c
+
+
 def failure(r):
-    third = next(c for c in candidates(r) if c['title'] == 'Moment 3')
+    third = pick(r, 'Moment 3')
+    wait(lambda: r.s.run('return window.__nuzky.store.getState().saveState') == 'saved', 10)
+    # The folder the reels go into cannot be written to, as on a full or locked disk.
+    folder = Path(r.s.run('return window.__nuzky.store.getState().snap.path')).parent
+    before = sorted(folder.iterdir())
+    folder.chmod(0o555)
+    try:
+        r.s.run(CLICK, 'Make 1 reel', LIST)
+        said = wait(lambda: text(r, f'{LIST} [role=alert]'), 20)
+        r.check('a make that fails says so under the list', said and said.startswith("Couldn't save the reels") and 'Free some space' in said, said)
+        r.check('it leaves no file and the reel is not made', sorted(folder.iterdir()) == before
+                and next(c for c in candidates(r) if c['id'] == third['id'])['status'] == 'picked', candidates(r))
+        time.sleep(0.3)
+        r.shot('failed')
+    finally:
+        folder.chmod(0o755)
+
+
+def moved(r):
+    fourth = pick(r, 'Moment 4')
     # The user cuts a word out of that moment meanwhile: its words no longer play where they did.
     cut = r.s.call("""window.__nuzky.api.transcriptView(500000).then((v) => window.__nuzky.api.cutWords(v.key, [[arguments[0], arguments[0]]],
         window.__nuzky.store.getState().snap.sessionEpoch)).then((t) => { window.__nuzky.store.getState().setSnap(t.snapshot); return 'cut'; })""",
-                   third['from'] + 1)
-    r.check('a word of the third moment is cut out', cut.get('value') == 'cut', cut)
-    r.s.run(f"document.querySelector('{CARD.format(third['id'])} input[type=checkbox]').click()")
-    wait(lambda: next(c for c in candidates(r) if c['id'] == third['id'])['status'] == 'picked', 10)
-    r.s.run(CLICK, 'Make 1 reel', LIST)
-    r.check('making it fails and says what to do', wait(lambda: 'Find reels again' in (text(r, f'{LIST} [role=alert]') or ''), 20),
+                   fourth['from'] + 1)
+    r.check('a word of the fourth moment is cut out', cut.get('value') == 'cut', cut)
+    card = CARD.format(fourth['id'])
+    r.check('its card says its words moved and what to do', wait(lambda: 'Find again' in (text(r, card) or ''), 10), text(r, card))
+    r.check('and it can no longer be checked or made', r.s.run(f"return document.querySelector('{card} input[type=checkbox]').disabled")
+            and r.s.run(f"return [...document.querySelectorAll('{LIST} button')].some((b) => b.textContent === 'Make 1 reel')"),
             text(r, LIST))
-    r.check('nothing was made of it', next(c for c in candidates(r) if c['id'] == third['id'])['status'] == 'picked', candidates(r))
-    r.shot('failed')
+    time.sleep(0.3)
+    r.shot('moved')
 
 
 def missing(r):
@@ -208,13 +235,14 @@ def missing(r):
         r.check('with its video moved away, the list says to put it back', said and 'Put it back' in said, said)
         make = r.s.run(f"const b = [...document.querySelectorAll('{LIST} button')].find((b) => b.textContent.startsWith('Make')); return b && [b.getAttribute('aria-disabled'), b.title];")
         r.check('and Make waits with that reason', make and make[0] == 'true' and 'missing' in make[1], make)
+        time.sleep(0.3)
         r.shot('missing')
     finally:
         (r.work / 'moved.mp4').rename(video)
         r.s.call('window.__nuzky.refreshLibrary()')
 
 
-def export(r):
+def export(r, source):
     reel = next(c for c in candidates(r) if c['title'] == 'Moment 2')
     r.s.run(f"[...document.querySelectorAll('{CARD.format(reel['id'])} button')].find((b) => b.textContent === 'Export…').click()")
     r.check('Export… opens the made reel', wait(lambda: r.s.run('return window.__nuzky.store.getState().snap.path') == reel['projectPath'], 20))
@@ -227,6 +255,9 @@ def export(r):
     r.shot('export')
     r.key('Escape')
     r.check('the export dialog closes', wait(lambda: not r.s.run('return window.__nuzky.store.getState().exportOpen'), 5))
+    r.check('a toast offers the way back', r.s.run(CLICK, 'Back to reels', None) == 'false')
+    r.check("Back to reels opens the long video's reels again", wait(lambda: r.s.run(
+        'return window.__nuzky.store.getState().snap.path === arguments[0] && window.__nuzky.reels.getState().open', source), 20))
 
 
 def from_home(r):

@@ -116,7 +116,9 @@ export function Preview() {
   const cover = useCover((s) => s.open);
   // Choosing reels shows what Center crop keeps, and the clips cannot be moved.
   const reels = useReels((s) => s.open);
-  const crop = useReels((s) => s.framing === "crop");
+  const framing = useReels((s) => s.framing);
+  const found = useEditor((s) => (s.snap?.project.reelCandidates?.length ?? 0) > 0);
+  const crop = framing === "crop" && found;
   const { togglePlay, seek } = useEditor.getState();
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);

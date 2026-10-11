@@ -4,11 +4,12 @@ import { api } from "../../lib/api";
 import { loadAgents, useAgent } from "../../lib/agent";
 import { useDock } from "../../lib/dock";
 import { useLibrary } from "../../lib/library";
-import { REEL_LIMIT_US, candidates, choose, findBlocked, findReels, makeReels, openReel, pickAll, setFraming, setPicked, setRejected, toggleReelPlay, useReels } from "../../lib/reels";
+import { useTranscriptView } from "../../lib/speech";
+import { REEL_LIMIT_US, candidates, choose, findBlocked, findReels, makeReels, moved, openReel, pickAll, setFraming, setPicked, setRejected, toggleReelPlay, useReels } from "../../lib/reels";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { ReelCandidate } from "../../lib/types";
-import { AiLock, Bars, Button, Checkbox, ProgressBar, Segmented } from "../ui";
+import { AiLock, Bars, Button, Checkbox, LockReason, ProgressBar, Segmented } from "../ui";
 
 const plural = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
 
@@ -33,7 +34,7 @@ function Thumb() {
   );
 }
 
-function Card({ c, current, tabbable }: { c: ReelCandidate; current: boolean; tabbable: boolean }) {
+function Card({ c, current, tabbable, stale }: { c: ReelCandidate; current: boolean; tabbable: boolean; stale: boolean }) {
   const made = c.status === "made";
   const rejected = c.status === "rejected";
   const long = c.durationUs > REEL_LIMIT_US;
@@ -48,7 +49,9 @@ function Card({ c, current, tabbable }: { c: ReelCandidate; current: boolean; ta
       tabIndex={tabbable ? 0 : -1}
       onFocus={(e) => e.target === e.currentTarget && !current && choose(c.id)}
       onClick={() => !current && choose(c.id)}
-      className={`flex cursor-pointer gap-3 rounded-xl p-2.5 shadow-[inset_0_0_0_1px_rgb(255_255_255/.06)] transition-colors duration-[120ms] ease-out hover:shadow-[inset_0_0_0_1px_rgb(255_255_255/.16)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${current ? "bg-raised" : "bg-white/[.055]"}`}
+      className={`flex cursor-pointer gap-3 rounded-xl p-2.5 transition-colors duration-[120ms] ease-out focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+        current ? "bg-raised shadow-[inset_0_0_0_2px_var(--color-accent)]" : "bg-white/[.055] shadow-[inset_0_0_0_1px_rgb(255_255_255/.06)] hover:shadow-[inset_0_0_0_1px_rgb(255_255_255/.16)]"
+      }`}
     >
       <Thumb />
       <div className={`flex min-w-0 flex-1 flex-col gap-1 ${rejected ? "opacity-45" : ""}`}>
@@ -58,7 +61,15 @@ function Card({ c, current, tabbable }: { c: ReelCandidate; current: boolean; ta
           ) : (
             !rejected && (
               <span onClick={(e) => e.stopPropagation()} className="flex">
-                <Checkbox hideLabel tabIndex={inner} label={`Make “${c.title}”`} checked={c.status === "picked"} onChange={(v) => void setPicked(c.id, v)} />
+                <Checkbox
+                  hideLabel
+                  tabIndex={inner}
+                  label={`Make “${c.title}”`}
+                  checked={c.status === "picked" && !stale}
+                  disabled={stale}
+                  title={stale ? "Its words moved since it was found" : undefined}
+                  onChange={(v) => void setPicked(c.id, v)}
+                />
               </span>
             )
           )}
@@ -71,11 +82,18 @@ function Card({ c, current, tabbable }: { c: ReelCandidate; current: boolean; ta
           </span>
         </div>
         <p className="line-clamp-2 text-[13px] leading-[18px] text-fg/90">“{c.hook}”</p>
-        {c.why && <p className="line-clamp-2 text-[12px] leading-4 text-muted">{c.why}</p>}
+        {stale ? (
+          <p className="flex items-start gap-1.5 text-[12px] leading-4 text-fg">
+            <AlertTriangle size={12} className="mt-0.5 shrink-0 text-warn" />
+            Its words moved since it was found. Find again proposes it anew.
+          </p>
+        ) : (
+          c.why && <p className="line-clamp-2 text-[12px] leading-4 text-muted">{c.why}</p>
+        )}
         <div className="mt-auto flex items-center gap-2 pt-1">
           {made ? (
-            <span className="min-w-0 flex-1 truncate text-[12px] text-muted" title={c.projectPath ?? undefined}>
-              Made · {c.projectPath?.split(/[\\/]/).pop()?.replace(/\.nuzky$/, "")}
+            <span className="flex-1 text-[12px] text-muted" title={c.projectPath ?? undefined}>
+              Made
             </span>
           ) : (
             <span className="flex flex-1 items-center gap-1.5 text-[12px] text-muted" title={`Score ${score} of 100: how well your AI thinks it works on its own`}>
@@ -85,14 +103,15 @@ function Card({ c, current, tabbable }: { c: ReelCandidate; current: boolean; ta
             </span>
           )}
           {made ? (
-            <>
+            // A made reel opens even while the AI edits; switching asks about its changes first.
+            <LockReason.Provider value={null}>
               <Button pill tabIndex={inner} className="h-6 px-2.5 text-[12px]" onClick={() => openReel(c, false)}>
                 Open
               </Button>
               <Button pill tabIndex={inner} className="h-6 px-2.5 text-[12px]" title="Open it with Export on Reels & TikTok" onClick={() => openReel(c, true)}>
                 Export…
               </Button>
-            </>
+            </LockReason.Provider>
           ) : (
             <Button variant="ghost" tabIndex={inner} className="h-6 px-2 text-[12px]" onClick={(e) => (e.stopPropagation(), void setRejected(c.id, !rejected))}>
               {rejected ? "Restore" : "Reject"}
@@ -107,6 +126,7 @@ function Card({ c, current, tabbable }: { c: ReelCandidate; current: boolean; ta
 /** The cards are one tab stop: arrows move between them and show each in the preview. */
 function Cards({ list, current }: { list: ReelCandidate[]; current: string | null }) {
   const grid = useRef<HTMLDivElement>(null);
+  const words = useReels((s) => s.transcript.words);
   const at = Math.max(0, list.findIndex((c) => c.id === current));
 
   // A card chosen elsewhere, such as the first one on opening, scrolls into view.
@@ -154,7 +174,7 @@ function Cards({ list, current }: { list: ReelCandidate[]; current: string | nul
   return (
     <div ref={grid} role="listbox" aria-label="Reels" onKeyDown={onKey} className="grid min-h-0 flex-1 auto-rows-min grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-2 overflow-y-auto p-2 pt-0">
       {list.map((c, i) => (
-        <Card key={c.id} c={c} current={c.id === current} tabbable={i === at} />
+        <Card key={c.id} c={c} current={c.id === current} tabbable={i === at} stale={moved(c, words)} />
       ))}
     </div>
   );
@@ -187,7 +207,7 @@ function NoReels() {
             <Button pill className="h-7 px-3 text-[12px]" onClick={() => void loadAgents()}>
               Check again
             </Button>
-            <Button variant="ghost" className="h-7 px-2 text-[12px] text-accent" onClick={() => useEditor.setState({ connectOpen: true })}>
+            <Button variant="ghost" className="h-7 px-2 text-[12px] text-accent! hover:text-accent!" onClick={() => useEditor.setState({ connectOpen: true })}>
               <Plug size={14} /> Connect an agent in a terminal…
             </Button>
           </>
@@ -223,7 +243,7 @@ function NoReels() {
     );
   return (
     <Empty icon={<GalleryVerticalEnd size={20} />} title="No reels yet" actions={find}>
-      Find reels asks your AI for moments of this video that work on their own, up to a minute each. You choose which to make.
+      Your AI picks the moments of this video that work on their own, up to a minute each, and you choose which to make.
     </Empty>
   );
 }
@@ -265,7 +285,10 @@ export function ReelList({ height }: { height: number }) {
   const blocked = useAgent(() => findBlocked());
   const missing = useLibrary((s) => s.projects?.find((p) => p.path === path)?.missing ?? 0);
   const list = candidates(project);
-  const picked = list.filter((c) => c.status === "picked").length;
+  const { view, error } = useTranscriptView();
+  // Read once here for the cards and the trim pane.
+  useEffect(() => useReels.setState({ transcript: { words: view?.words ?? null, error } }), [view, error]);
+  const picked = list.filter((c) => c.status === "picked" && !moved(c, view?.words ?? null)).length;
   const missingText = missing > 0 ? `${plural(missing, "media file")} ${missing === 1 ? "is" : "are"} missing. Put ${missing === 1 ? "it" : "them"} back where ${missing === 1 ? "it was" : "they were"} to play and make reels.` : null;
 
   return (
@@ -285,7 +308,7 @@ export function ReelList({ height }: { height: number }) {
                 <Loader2 size={14} className="animate-spin text-accent" /> Finding reels…
               </span>
             ) : (
-              <Button variant="ghost" className="h-7 px-2 text-[12px] text-accent" disabled={!!blocked} disabledReason={blocked ?? undefined} title="Ask your AI again. Reels not made yet are replaced." onClick={findReels}>
+              <Button variant="ghost" className="h-7 px-2 text-[12px] text-accent! hover:text-accent!" disabled={!!blocked} disabledReason={blocked ?? undefined} title="Ask your AI again. Reels not made yet are replaced." onClick={findReels}>
                 <Sparkles size={14} /> Find again
               </Button>
             ))}

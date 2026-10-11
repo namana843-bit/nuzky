@@ -1,25 +1,13 @@
-import { FastForward, Pause, Play, SkipBack } from "lucide-react";
+import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { candidateOf, closeReels, playEnding, toggleReelPlay, useReels } from "../../lib/reels";
 import { useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import { Button, IconButton } from "../ui";
 
-/** Where the reel is in the video: the playhead and the reel's span, both as recorded. */
+/** The playhead in the recording; the reel's span stands over its words. */
 function Where() {
   const timeUs = useEditor((s) => s.timeUs);
-  const current = useReels((s) => s.current);
-  const c = useEditor((s) => candidateOf(s.snap?.project, current));
-  return (
-    <span className="tabular truncate text-[13px]">
-      <span className="font-medium text-fg">{formatTime(timeUs)}</span>
-      {c && (
-        <span className="text-muted @max-[460px]:hidden">
-          {" "}
-          / {formatTime(c.startUs, false)}–{formatTime(c.endUs, false)}
-        </span>
-      )}
-    </span>
-  );
+  return <span className="tabular truncate text-[13px] font-medium text-fg">{formatTime(timeUs)}</span>;
 }
 
 /** The transport while choosing reels: the reel from its start, its ending, and Done. */
@@ -46,7 +34,7 @@ export function ReelBar() {
           {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="translate-x-px" />}
         </button>
         <IconButton round label="Hear the ending (End)" disabled={none} onClick={playEnding}>
-          <FastForward size={16} />
+          <SkipForward size={16} />
         </IconButton>
       </div>
       <div className="flex justify-end">

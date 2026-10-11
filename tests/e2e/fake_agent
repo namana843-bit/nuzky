@@ -6,7 +6,7 @@ Nuzky's tools, and answers in Claude Code's stream-json or Codex's JSON lines. I
 of the bridge from --mcp-config or -c, so its edits go through Nuzky like a real agent's. The message picks what it does:
   "cut"      reads the project and its activity, cuts 1-3 s out, adds two captions and answers
   "options"  offers two takes with suggest_options
-  "propose_reels"  (Find reels) proposes four reels of at least 15 s from the transcript
+  "work as reels"  (Find reels) proposes four reels of at least 15 s from the transcript
   "slow"     opens a run, splits the clip and keeps working until stopped
   "keep: …"  sent from Your style: reads the style and keeps the rest of the message as the creator's rule
   the `thumbnail` prompt (Make a thumbnail): sets both covers in one run with the hook from "Hook: …" in the wishes,
@@ -246,7 +246,7 @@ elif thumbnail:
                 time.sleep(0.5)
     call('end_run', {'run_id': run, 'action': 'keep'})
     say(f'Hotovo: cover i náhledovka pro YouTube mají hook „{hook}“ za hlavou.')
-elif 'propose_reels' in message:
+elif 'work as reels' in message:
     transcript = call('get_transcript', {})
     words = transcript['words']
 

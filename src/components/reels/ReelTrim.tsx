@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import { AlertTriangle } from "lucide-react";
 import { REEL_LIMIT_US, candidateOf, setBounds, toggleReelPlay, useReels } from "../../lib/reels";
 import { aiLocked, useEditor } from "../../lib/store";
-import { paragraphs, tokenAt, useTranscriptView, type Token } from "../../lib/speech";
+import { paragraphs, tokenAt, type Token } from "../../lib/speech";
 import { US, formatDuration, formatTime } from "../../lib/time";
 import type { Project, TranscriptWord } from "../../lib/types";
+import { useLockReason } from "../ui";
 
 /** How much is said around a reel, to trim it into. */
 const CONTEXT_US = 60 * US;
@@ -28,8 +29,8 @@ export function ReelTrim() {
   const id = useReels((s) => s.current);
   const trim = useReels((s) => s.trim);
   const c = candidateOf(project, id);
-  const { view, error } = useTranscriptView();
-  const words = view?.words;
+  const { words, error } = useReels((s) => s.transcript);
+  const lock = useLockReason();
   // The bounds asked for show at once; the engine's length follows.
   const from = trim?.id === id ? trim.from : (c?.from ?? 0);
   const to = trim?.id === id ? trim.to : (c?.to ?? 0);
@@ -56,7 +57,7 @@ export function ReelTrim() {
     box.current?.querySelector(`[data-w="${start.current}"]`)?.scrollIntoView({ block: "center" });
   }, [id, fits]);
 
-  if (!c) return <p className="m-auto px-6 text-center text-[13px] text-muted">The words of the reel you choose show here, to trim it.</p>;
+  if (!c) return <p className="m-auto px-6 text-center text-[13px] text-muted">Choose a reel to trim its words.</p>;
   const made = c.status === "made";
   const long = c.durationUs > REEL_LIMIT_US;
   const seek = (us: number) => useEditor.getState().seek(us);
@@ -114,7 +115,7 @@ export function ReelTrim() {
         </p>
       </div>
       {error && <p className="p-3.5 text-[12px] text-danger">{error}</p>}
-      {view && !fits && <p className="p-3.5 text-[12px] text-muted">The video changed since this reel was found. Find reels again.</p>}
+      {words && !fits && <p className="p-3.5 text-[12px] text-muted">The video changed since this reel was found. Find reels again.</p>}
       {fits && (
         <div
           ref={box}
@@ -156,7 +157,7 @@ export function ReelTrim() {
           ))}
         </div>
       )}
-      {fits && <p className="shrink-0 border-t border-white/[.07] px-3.5 py-2 text-[12px] text-muted">{made ? "Made reels keep their words. Open it to change it." : "Shift-click a word to start or end the reel there."}</p>}
+      {fits && <p className="shrink-0 border-t border-white/[.07] px-3.5 py-2 text-[12px] text-muted">{made ? "Made reels keep their words. Open it to change it." : (lock ?? "Shift-click a word to start or end the reel there.")}</p>}
     </div>
   );
 }

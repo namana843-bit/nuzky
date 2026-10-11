@@ -5,7 +5,7 @@ import { useDock } from "./dock";
 import { openProject, refreshLibrary } from "./library";
 import { aiLocked, currentEpoch, projectDuration, useEditor, whenIdle } from "./store";
 import { US } from "./time";
-import type { JobEvent, MadeReel, Project, ReelCandidate, ReelFraming } from "./types";
+import type { JobEvent, MadeReel, Project, ReelCandidate, ReelFraming, TranscriptWord } from "./types";
 
 /** From this length on the Transcript tab offers Reels from a long video. */
 export const LONG_VIDEO_US = 180 * US;
@@ -14,7 +14,7 @@ export const REEL_LIMIT_US = 60 * US;
 
 /** What Find reels asks the AI panel's agent; the guide it reads tells it how. */
 export const FIND_REELS =
-  "Find the moments in this video that work as reels on their own and propose them with propose_reels. Transcribe it first if it has no transcript. Don't change the video itself.";
+  "Find the moments in this video that work as reels on their own and propose them for me to pick. Transcribe it first if it has no transcript. Don't change the video itself.";
 
 const FRAMING_KEY = "nuzky.reelFraming";
 
@@ -35,6 +35,8 @@ interface ReelsState {
   job: string | null;
   /** Why the last make failed, until another starts. */
   failed: string | null;
+  /** The video's words as they play now, read once for the list and the trim pane. */
+  transcript: { words: TranscriptWord[] | null; error: string | null };
 }
 
 export const useReels = create<ReelsState>(() => ({
@@ -47,6 +49,7 @@ export const useReels = create<ReelsState>(() => ({
   searched: false,
   job: null,
   failed: null,
+  transcript: { words: null, error: null },
 }));
 
 /** Best first, the rest in the order they are said. */
@@ -55,6 +58,10 @@ export function candidates(project: Project | undefined): ReelCandidate[] {
 }
 
 export const candidateOf = (project: Project | undefined, id: string | null) => project?.reelCandidates?.find((c) => c.id === id);
+
+/** A cut made since the reel was found moved its words, so making it would cut others. */
+export const moved = (c: ReelCandidate, words: TranscriptWord[] | null) =>
+  !!words && c.status !== "made" && !(words[c.from]?.startUs === c.startUs && words[c.to]?.endUs === c.endUs);
 
 /** Opens the mode on the best candidate; the playhead and selection come back on close. */
 export function openReels() {
@@ -210,7 +217,8 @@ export function setFraming(framing: ReelFraming) {
 /** Makes a project of each checked candidate as a job with progress and Stop. */
 export async function makeReels() {
   const { snap } = useEditor.getState();
-  const ids = (snap?.project.reelCandidates ?? []).filter((c) => c.status === "picked").map((c) => c.id);
+  const { words } = useReels.getState().transcript;
+  const ids = (snap?.project.reelCandidates ?? []).filter((c) => c.status === "picked" && !moved(c, words)).map((c) => c.id);
   if (ids.length === 0 || aiLocked() || useReels.getState().job) return;
   // Picks made just before are part of what is made.
   await whenIdle();
@@ -228,8 +236,9 @@ export async function makeReels() {
 
 /** What went wrong in words that say what to do next. */
 function makeError(text: string): string {
-  if (text.includes("SPEECH_CHANGED")) return "The video changed since these reels were found. Find reels again.";
+  if (text.includes("SPEECH_CHANGED")) return "The video changed since these reels were found. Use Find again.";
   if (text.includes("RUN_ACTIVE")) return "The AI started editing, so no reels were made. Try again when it's done.";
+  if (text.includes("os error")) return "Couldn't save the reels beside the long video. Free some space, or check that its folder can be written to.";
   return `Couldn't make the reels: ${plainError(text)}`;
 }
 
@@ -241,10 +250,18 @@ export function onReelsJob(job: JobEvent) {
   useEditor.getState().toast({ kind: "success", text: made.length === 1 ? "Made 1 reel" : `Made ${made.length} reels` });
 }
 
-/** Opens a made reel's project, with the Export dialog on Reels & TikTok when `exporting`. The mode closes once it is open. */
+/**
+ * Opens a made reel's project, with the Export dialog on Reels & TikTok when `exporting`. The mode closes once it is
+ * open; a toast leads back to the long video's reels.
+ */
 export function openReel(c: ReelCandidate, exporting: boolean) {
-  if (!c.projectPath) return;
-  openProject({ path: c.projectPath, name: c.title }, undefined, exporting ? () => useEditor.setState({ exportOpen: true, exportPreset: "reels" }) : undefined);
+  const source = useEditor.getState().snap;
+  if (!c.projectPath || !source) return;
+  const back = { path: source.path, name: source.project.name };
+  openProject({ path: c.projectPath, name: c.title }, undefined, () => {
+    if (exporting) useEditor.setState({ exportOpen: true, exportPreset: "reels" });
+    useEditor.getState().toast({ kind: "info", text: `Opened the reel “${c.title}”`, action: { label: "Back to reels", run: () => openProject(back, undefined, openReels) } });
+  });
 }
 
 /** Opens the mode on a project just made of a long video, with the keyboard on Find reels. */
