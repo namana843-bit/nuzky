@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentConnection, AgentKind, Animation, Boot, CaptionPreset, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelFraming, ReelsMade, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CaptionPreset, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelFraming, ReelsMade, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -38,6 +38,10 @@ export const api = {
   listProjects: () => invoke<ProjectSummary[]>("list_projects"),
   agentConnections: () => invoke<AgentConnection[]>("agent_connections"),
   connectAgent: (agent: AgentKind) => invoke<AgentConnection>("connect_agent", { agent }),
+  /** The `nuzky` server and a first message to paste into an agent Nuzky does not connect itself. */
+  agentSetup: (setup: AgentSetup) => invoke<string>("agent_setup", { setup }),
+  agentAccess: () => invoke<AgentAccess>("agent_access"),
+  setAgentAccess: (on: boolean, atLaunch: boolean) => invoke<AgentAccess>("set_agent_access", { on, atLaunch }),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
   /** A new project with the media on its timeline, in the format of the first picture. */

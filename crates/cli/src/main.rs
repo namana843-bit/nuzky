@@ -17,7 +17,7 @@ mod style;
 const USAGE: &str = "Usage:
   nuzky mcp (--project <path> | --current) [--allow-write] [--cache <dir>]
   nuzky probe <media>
-  nuzky new <project.json> <media>...     main-track project from media files
+  nuzky new <project.json> [<media>...]   empty project, or main-track project from media files
   nuzky frame <project.json> <seconds> <out.png> [width]
   nuzky bench <project.json> [width] [seconds] [--proxy]
       plays and scrubs the preview; --proxy first makes the preview proxies of heavy video and plays from them
@@ -243,7 +243,7 @@ fn main() -> Result<()> {
         ["probe", media] => {
             println!("{}", serde_json::to_string_pretty(&probe(Path::new(media), new_id())?)?);
         }
-        ["new", out, media @ ..] if !media.is_empty() => {
+        ["new", out, media @ ..] => {
             let out = Path::new(out);
             let _lock = nuzky_session::lock_project(out, true)?;
             if out.symlink_metadata().is_ok() {

@@ -1,6 +1,8 @@
 //! The same stdio server attaches to the open app or owns a headless session.
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail};
 #[cfg(unix)]
@@ -17,6 +19,8 @@ pub(crate) enum Target {
     Local(Arc<Backend>),
     #[cfg(unix)]
     App(Arc<crate::ipc::Remote>),
+    #[cfg(unix)]
+    Current(Arc<Current>),
 }
 
 impl Target {
@@ -26,37 +30,79 @@ impl Target {
             #[cfg(unix)]
             Self::App(remote) => {
                 let remote = remote.clone();
-                let result = tokio::task::spawn_blocking(move || remote.call(name, args)).await;
-                match result {
-                    Ok(Ok(result)) => result,
-                    Ok(Err(e)) => {
-                        CallToolResult::error(vec![ContentBlock::text(tools::error_message(format!("{e:#}")))])
-                    }
-                    Err(e) => CallToolResult::error(vec![ContentBlock::text(format!("IPC_FAILED: {e}"))]),
-                }
+                answer(tokio::task::spawn_blocking(move || remote.call(name, args)).await)
+            }
+            #[cfg(unix)]
+            Self::Current(current) => {
+                let current = current.clone();
+                answer(tokio::task::spawn_blocking(move || current.call(name, args)).await)
             }
         }
     }
 }
 
+#[cfg(unix)]
+fn answer(result: Result<Result<CallToolResult>, tokio::task::JoinError>) -> CallToolResult {
+    match result {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => CallToolResult::error(vec![ContentBlock::text(tools::error_message(format!("{e:#}")))]),
+        Err(e) => CallToolResult::error(vec![ContentBlock::text(format!("IPC_FAILED: {e}"))]),
+    }
+}
+
 /// Why `--current` found nothing to attach to.
 #[cfg(unix)]
-const NOT_OPEN: &str =
-    "APP_NOT_RUNNING: no project is open in Nuzky. Open the project in Nuzky, then restart the agent's MCP server";
+const NOT_OPEN: &str = "APP_NOT_RUNNING: no project is open in Nuzky. Ask the user to open one, then call again";
+#[cfg(unix)]
+const DETACHED: &str = "APP_CLOSED: Nuzky closed the project, quit or turned Agent access off. The next call attaches to the project open in Nuzky then; read get_state before editing";
 
-/// `require_app`: attach to the open app or fail; never edit the project headless.
-pub fn run(project: &Path, allow_write: bool, cache: PathBuf, require_app: bool) -> Result<()> {
+/// `--current`: the project open in the app, attached at the first call and again whenever the app
+/// let go, so opening a project or turning on Agent access needs no restart. Never headless.
+#[cfg(unix)]
+pub(crate) struct Current {
+    allow_write: bool,
+    remote: Mutex<Option<Arc<crate::ipc::Remote>>>,
+}
+
+#[cfg(unix)]
+impl Current {
+    fn call(&self, name: String, args: Value) -> Result<CallToolResult> {
+        let remote = {
+            let mut attached = self.remote.lock().unwrap();
+            // The project the agent read may be gone, so this call says so instead of acting on another one.
+            if attached.take_if(|remote| remote.closed()).is_some() {
+                bail!(DETACHED);
+            }
+            match attached.as_ref() {
+                Some(remote) => remote.clone(),
+                None => {
+                    let project = crate::ipc::current_project()?.context(NOT_OPEN)?;
+                    let remote = crate::ipc::Remote::connect(&project, self.allow_write, true)?.context(NOT_OPEN)?;
+                    attached.insert(Arc::new(remote)).clone()
+                }
+            }
+        };
+        remote.call(name, args).map_err(|error| {
+            if !remote.closed() {
+                return error;
+            }
+            // This call already said so; the next one attaches.
+            self.remote.lock().unwrap().take_if(|attached| Arc::ptr_eq(attached, &remote));
+            anyhow::anyhow!(DETACHED)
+        })
+    }
+}
+
+/// Attaches to the app when it has the project open, else edits it headless.
+pub fn run(project: &Path, allow_write: bool, cache: PathBuf) -> Result<()> {
     #[cfg(unix)]
-    let target = match crate::ipc::Remote::connect(project, allow_write)? {
-        Some(remote) => Target::App(Arc::new(remote)),
-        None if require_app => bail!(NOT_OPEN),
-        None => Target::Local(Arc::new(Backend::open(project, allow_write, cache)?)),
-    };
-    #[cfg(not(unix))]
-    let target = {
-        anyhow::ensure!(!require_app, "UNSUPPORTED: --current needs the app's local socket, not available here yet");
-        Target::Local(Arc::new(Backend::open(project, allow_write, cache)?))
-    };
+    if let Some(remote) = crate::ipc::Remote::connect(project, allow_write, false)? {
+        return serve(Target::App(Arc::new(remote)));
+    }
+    serve(Target::Local(Arc::new(Backend::open(project, allow_write, cache)?)))
+}
+
+fn serve(target: Target) -> Result<()> {
     let target = Arc::new(target);
     let server = Server { target: target.clone(), tools: Arc::new(catalog()?) };
     let runtime =
@@ -73,7 +119,7 @@ pub fn run(project: &Path, allow_write: bool, cache: PathBuf, require_app: bool)
             result.and(finish)
         }
         #[cfg(unix)]
-        Target::App(_) => result,
+        Target::App(_) | Target::Current(_) => result,
     }
 }
 
@@ -94,14 +140,13 @@ pub fn run_args(args: &[String], mut cache: PathBuf) -> Result<()> {
             _ => bail!("INVALID_ARGUMENTS: unknown MCP argument: {arg}"),
         }
     }
-    let project = match (project, current) {
+    match (project, current) {
         (Some(_), true) => bail!("INVALID_ARGUMENTS: use --project <path> or --current, not both"),
-        (Some(project), false) => project,
+        (Some(project), false) => run(&project, allow_write, cache),
         #[cfg(unix)]
-        (None, true) => crate::ipc::current_project()?.context(NOT_OPEN)?,
+        (None, true) => serve(Target::Current(Arc::new(Current { allow_write, remote: Mutex::default() }))),
         #[cfg(not(unix))]
         (None, true) => bail!("UNSUPPORTED: --current needs the app's local socket, not available here yet"),
         (None, false) => bail!("INVALID_ARGUMENTS: mcp requires --project <path> or --current"),
-    };
-    run(&project, allow_write, cache, current)
+    }
 }

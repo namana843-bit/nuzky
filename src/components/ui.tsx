@@ -461,6 +461,31 @@ export function Checkbox({
   );
 }
 
+/** An on/off setting that takes effect at once; `Space` or `Enter` flips it. */
+export function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  const lock = useLockReason();
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={lock ?? label}
+      {...disabledProps(!!lock, () => onChange(!checked))}
+      className={`relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors duration-[120ms] ease-out ${checked ? "bg-accent-strong" : "bg-white/[.16]"} ${
+        lock ? "cursor-not-allowed opacity-40" : ""
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`absolute left-0 top-[2px] h-[18px] w-[18px] rounded-full bg-white shadow-[0_1px_3px_rgb(0_0_0/.35)] transition-transform duration-[120ms] ease-out ${
+          checked ? "translate-x-[18px]" : "translate-x-[2px]"
+        }`}
+      />
+    </button>
+  );
+}
+
 /**
  * Keyboard for a tablist: ←/→ move to the previous/next tab (wrapping), Home/End to the first/last,
  * and focus follows. The keys stop here, so they never also move the playhead.

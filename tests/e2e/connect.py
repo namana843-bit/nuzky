@@ -1,14 +1,19 @@
-"""Connect your agent: one click puts Nuzky into Claude Code's and Codex's own settings, after a
-backup and without touching anything else there, and the agent those settings start edits the
-project open in the app, live."""
-import json, time
+"""Connect your agent: one click puts Nuzky into Claude Code's and Codex's own settings, after a backup and without
+touching anything else there, a copy gives any other agent the same server and a first message, and Agent access
+decides whether an agent attached to the open project may edit it, without restarting the agent."""
+import json, subprocess, time
 
-from e2e.harness import Bridge, flow, wait
+from e2e.harness import AI_EDITING, MACOS, Bridge, clipboard, flow, press, wait, webdriver
 
 CLAUDE = '{\n  "numStartups": 12,\n  "projects": {\n    "/home/me/site": {\n      "allowedTools": []\n    }\n  },\n  "mcpServers": {\n    "other": {\n      "type": "stdio",\n      "command": "other-server"\n    }\n  }\n}\n'
 CODEX = '# my Codex settings\nmodel = "gpt-6.1-sol" # keep this\n\n[mcp_servers.other]\ncommand = "other"\n\n[profiles.fast]\nmodel_reasoning_effort = "low"\n'
-ROWS = """return [...document.querySelectorAll('[role=dialog] [role=group]')].map((row) => ({
-  text: row.textContent, button: row.querySelector('button')?.textContent}));"""
+ROWS = """return [...document.querySelectorAll('[role=dialog] [role=group]')]
+  .filter((row) => ['Claude Code', 'Codex'].includes(row.getAttribute('aria-label')))
+  .map((row) => ({text: row.textContent, button: row.querySelector('button')?.textContent}));"""
+ACCESS = """const row = document.querySelector('[role=dialog] [role=group][aria-label="Agent access"]');
+const toggle = row && row.querySelector('[role=switch]');
+return toggle && {on: toggle.getAttribute('aria-checked') === 'true', atLaunch: row.querySelector('input[type=checkbox]').checked,
+  locked: toggle.getAttribute('aria-disabled') === 'true', why: toggle.title, text: row.textContent};"""
 
 
 def home(r):
@@ -27,32 +32,130 @@ def click(r, label, scope='document'):
         if (!b) return false; b.focus(); b.click(); return true;""", label)
 
 
-@flow('connect', 'Connect an agent in a terminal (in the AI panel) writes only the nuzky entry into Claude Code and Codex settings, after a backup, '
-      'and the agent they start edits the open project live', before=home)
+def copy(r, label):
+    """Presses the copy button for real, as the clipboard takes text only from something the user did, and returns
+    the clipboard and the toast."""
+    r.s.run("window.__nuzky.store.setState({toasts: []})")
+    r.s.run("[...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.trim() === arguments[0]).focus()", label)
+    press('Return')
+    toast = wait(lambda: r.state()['toasts'], 5) or [{}]
+    return clipboard(), toast[0]
+
+
+def tool(agent, name, arguments):
+    """A tool call that may fail, as the agent sees it."""
+    return agent.rpc('tools/call', {'name': name, 'arguments': arguments})['result']
+
+
+def server_of(text):
+    return json.loads(text[text.index('{'):text.rindex('}') + 1])['mcpServers']['nuzky']
+
+
+@flow('connect', 'Connect an agent outside Nuzky (in the AI panel) writes only the nuzky entry into Claude Code and Codex settings, '
+      'after a backup, a copy gives other agents the same server, and Agent access lets the agent edit the open project live',
+      before=home)
 def connect(r):
     folder = r.work / 'home'
-    # Connect agent lives in the AI panel's agent menu: AI in the top bar, the agent's name, then the item.
-    r.check('AI in the top bar opens the panel', click(r, 'AI', "document.querySelector('header')")
-            and wait(lambda: r.s.run("return !!document.querySelector('aside[aria-label=AI]')"), 5))
-    r.check('its agent menu offers to connect an agent in a terminal',
-            r.s.run("document.querySelector('aside[aria-label=AI] button[title=\"Choose the agent\"]').click(); return true")
-            and wait(lambda: r.s.run("""const item = [...document.querySelectorAll('[role=menu] [role=menuitem]')]
-                .find((b) => b.textContent.includes('Connect an agent in a terminal')); if (!item) return false; item.click(); return true;"""), 5))
-    rows = wait(lambda: r.s.run(ROWS) or None, 10)
-    r.check('the dialog lists Claude Code and Codex, not yet connected',
-            rows and [('Claude Code' in x['text'], 'Not connected' in x['text']) for x in rows][0] == (True, True)
-            and 'Codex' in rows[1]['text'] and 'Not connected' in rows[1]['text'], rows)
-    time.sleep(0.3)  # the dialog fades in over 200 ms
-    r.shot('connect-dialog')
-    focused = "const el = document.activeElement; return el && el.closest('[role=dialog]') ? el.textContent.trim() : null;"
-    for name, next_focus in (('Claude Code', 'Connect'), ('Codex', 'Done')):
-        r.s.run("""const row = [...document.querySelectorAll('[role=dialog] [role=group]')]
-            .find((row) => row.textContent.includes(arguments[0])); row.querySelector('button').focus(); row.querySelector('button').click();""", name)
-        r.check(f'{name} shows connected', wait(lambda: any(name in x['text'] and 'Connected' in x['text'] for x in r.s.run(ROWS)), 10),
-                r.s.run(ROWS))
-        # A connected row has no button, so keyboard focus moves on inside the dialog instead of getting lost.
-        r.check(f'after {name}, focus moves to {next_focus}', wait(lambda: r.s.run(focused) == next_focus, 3), r.s.run(focused))
-    r.shot('connected')
+    # On macOS the copies land on the person's own clipboard; their text goes back at the end.
+    theirs = clipboard() if MACOS else None
+    agent = None
+    try:
+        # Connect agent lives in the AI panel's agent menu: AI in the top bar, the agent's name, then the item.
+        r.check('AI in the top bar opens the panel', click(r, 'AI', "document.querySelector('header')")
+                and wait(lambda: r.s.run("return !!document.querySelector('aside[aria-label=AI]')"), 5))
+        r.check('its agent menu offers to connect an agent outside Nuzky',
+                r.s.run("document.querySelector('aside[aria-label=AI] button[title=\"Choose the agent\"]').click(); return true")
+                and wait(lambda: r.s.run("""const item = [...document.querySelectorAll('[role=menu] [role=menuitem]')]
+                    .find((b) => b.textContent.includes('Connect an agent outside Nuzky')); if (!item) return false; item.click(); return true;"""), 5))
+        rows = wait(lambda: r.s.run(ROWS) or None, 10)
+        r.check('the dialog lists Claude Code and Codex, not yet connected',
+                rows and [('Claude Code' in x['text'], 'Not connected' in x['text']) for x in rows][0] == (True, True)
+                and 'Codex' in rows[1]['text'] and 'Not connected' in rows[1]['text'], rows)
+        access = wait(lambda: r.s.run(ACCESS), 5)
+        r.check('Agent access starts off and is not turned on at launch', access and not access['on'] and not access['atLaunch']
+                and "can't edit" in access['text'], access)
+        time.sleep(0.3)  # the dialog fades in over 200 ms
+        r.shot('connect-dialog')
+
+        # Copies for agents Nuzky does not connect itself: the server for their settings and a first message.
+        text, toast = copy(r, 'Copy MCP config')
+        server = server_of(text) if text and '{' in text else {}
+        r.check('Copy MCP config copies a server that runs this app attached to the open project',
+                server.get('args') == ['mcp', '--current', '--allow-write'] and server.get('command', '').endswith('nuzky-app'), text)
+        r.check('it says to add only the nuzky entry to a file that has servers, then gives a first message: read nuzky://guide, '
+                'edit only through the tools, a run is one undo step',
+                'add only the "nuzky" entry' in text and 'nuzky://guide' in text and 'begin_run' in text and 'one undo step' in text, text)
+        r.check('the toast says what was copied and that Agent access is off',
+                toast.get('kind') == 'success' and 'Turn on Agent access' in toast.get('text', ''), toast)
+        for label, place in (('Copy for Claude', 'Claude Desktop config (Settings, Developer, Edit Config)'), ('Copy for Cursor', '~/.cursor/mcp.json')):
+            text, _ = copy(r, label)
+            r.check(f'{label} copies the same server and says where it goes', place in text and server_of(text) == server, text)
+        r.check('copying changes no file', (folder / '.claude.json').read_text() == CLAUDE
+                and (folder / '.codex/config.toml').read_text() == CODEX and not list(folder.rglob('*.nuzky-backup-*'))
+                and not (r.work / 'data/nuzky/agent-access.json').exists())
+
+        # An agent set up from that copy, the way its settings start it.
+        agent = Bridge(r, command=[server['command'], *server['args']])
+        refused = tool(agent, 'get_state', {})
+        r.check('with Agent access off the agent is refused, saying how to turn it on',
+                refused.get('isError') and 'AGENT_ACCESS_OFF' in json.dumps(refused) and 'Agent access is off' in json.dumps(refused), refused)
+        r.s.run("document.querySelector('[role=dialog] [role=switch]').focus()")
+        press('space')
+        r.check('Space on the switch turns Agent access on, not at launch', wait(lambda: (r.s.run(ACCESS) or {}).get('on'), 5)
+                and not r.s.run(ACCESS)['atLaunch'], r.s.run(ACCESS))
+        open_name = r.s.run('return window.__nuzky.store.getState().snap.project.name')
+        state = tool(agent, 'get_state', {})
+        r.check('the same agent, not restarted, now reads the project open in the app',
+                not state.get('isError') and state['structuredContent']['name'] == open_name, state)
+        run = agent.call('begin_run', {'label': 'Connected agent'})
+        r.check("the agent's run shows in the app", wait(lambda: r.state()['aiRun'], 10))
+        locked = r.s.run(ACCESS)
+        r.check('while it edits, the switch is locked and says why', locked['locked'] and locked['why'] == AI_EDITING, locked)
+        agent.call('end_run', {'run_id': run['run_id'], 'action': 'discard'})
+        r.check('and the run ends there', wait(lambda: not r.state()['aiRun'], 10))
+        r.check('the switch unlocks', wait(lambda: not r.s.run(ACCESS)['locked'], 5))
+        r.s.run("document.querySelector('[role=dialog] [role=switch]').focus()")
+        press('space')
+        r.check('Space again turns it off', wait(lambda: not r.s.run(ACCESS)['on'], 5), r.s.run(ACCESS))
+        # The app lets go of the agent within its next 20 ms round, so a call may still pass just before.
+        r.check('and the agent is refused again', wait(lambda: 'AGENT_ACCESS_OFF' in json.dumps(tool(agent, 'get_state', {})), 5),
+                tool(agent, 'get_state', {}))
+
+        focused = "const el = document.activeElement; return el && el.closest('[role=dialog]') ? el.textContent.trim() : null;"
+        for name, next_focus in (('Claude Code', 'Connect'), ('Codex', 'Done')):
+            r.s.run("""const row = document.querySelector(`[role=dialog] [role=group][aria-label="${arguments[0]}"]`);
+                row.querySelector('button').focus(); row.querySelector('button').click();""", name)
+            r.check(f'{name} shows connected', wait(lambda: any(name in x['text'] and 'Connected' in x['text'] for x in r.s.run(ROWS)), 10),
+                    r.s.run(ROWS))
+            # A connected row has no button, so keyboard focus moves on inside the dialog instead of getting lost.
+            r.check(f'after {name}, focus moves to {next_focus}', wait(lambda: r.s.run(focused) == next_focus, 3), r.s.run(focused))
+        access = r.s.run(ACCESS)
+        saved = r.work / 'data/nuzky/agent-access.json'
+        r.check('connecting turns Agent access on, and on at every launch, so a connected agent keeps working',
+                access['on'] and access['atLaunch'] and saved.exists() and json.loads(saved.read_text()) == {'atLaunch': True}, access)
+        state = tool(agent, 'get_state', {})
+        r.check('the agent from the copy can edit again, still not restarted', not state.get('isError'), state)
+        r.shot('connected')
+        r.s.run("document.querySelector('[role=dialog] [role=switch]').focus()")
+        press('space')
+        r.check('with access off, a connected agent does not look ready', wait(lambda: all(
+            'Connected. Agent access is off' in x['text'] for x in r.s.run(ROWS)), 5), r.s.run(ROWS))
+        press('space')
+        r.check('and with access back on it does', wait(lambda: all(
+            'Agent access is off' not in x['text'] and 'Connected' in x['text'] for x in r.s.run(ROWS)), 5), r.s.run(ROWS))
+        webdriver('POST', r.s.path + '/window/rect', {'width': 1024, 'height': 640})
+        wait(lambda: r.s.run('return window.innerWidth') == 1024, 5)
+        time.sleep(0.5)
+        box = r.s.run("const b = document.querySelector('[role=dialog]').getBoundingClientRect(); "
+                      "return {top: b.top, bottom: b.bottom, height: innerHeight};")
+        r.check('in the smallest window, 1024 x 640, the whole dialog fits', box['top'] >= 0 and box['bottom'] <= box['height'], box)
+        r.shot('connected-1024')
+        webdriver('POST', r.s.path + '/window/rect', {'width': 1440, 'height': 900})
+    finally:
+        if agent:
+            agent.close()
+        if theirs is not None:
+            subprocess.run(['pbcopy'], input=theirs, text=True, check=True)
 
     claude = (folder / '.claude.json').read_text()
     config = json.loads(claude)
@@ -66,20 +169,33 @@ def connect(r):
             codex)
     backups = sorted((folder / '.codex').glob('config.toml.nuzky-backup-*'))
     r.check("Codex's settings were backed up first", len(backups) == 1 and backups[0].read_text() == CODEX, backups)
-    r.check('the entry runs this app attached to the open project', entry['args'] == ['mcp', '--current', '--allow-write']
-            and entry['command'].endswith('nuzky-app'), entry)
+    r.check('the entry runs this app attached to the open project, as the copy does',
+            entry['args'] == ['mcp', '--current', '--allow-write'] and entry['command'] == server['command'], entry)
 
     # What Claude Code starts from that entry: an MCP server that edits the project open here.
-    agent = Bridge(r, command=[entry['command'], *entry['args']])
+    connected = Bridge(r, command=[entry['command'], *entry['args']])
     try:
-        state = agent.call('get_state', {})
-        open_name = r.s.run('return window.__nuzky.store.getState().snap.project.name')
-        r.check('the agent sees the project open in the app', state['name'] == open_name, [state['name'], open_name])
-        run = agent.call('begin_run', {'label': 'Connected agent'})
-        r.check("the agent's run shows in the app", wait(lambda: r.state()['aiRun'], 10))
-        agent.call('end_run', {'run_id': run['run_id'], 'action': 'discard'})
-        r.check('and ends there', wait(lambda: not r.state()['aiRun'], 10))
+        state = connected.call('get_state', {})
+        r.check('the agent Claude Code starts sees the project open in the app', state['name'] == open_name, [state['name'], open_name])
     finally:
-        agent.close()
+        connected.close()
     r.check('Done closes the dialog', click(r, 'Done') and wait(lambda: not r.s.run("return !!document.querySelector('[role=dialog]')"), 5))
     r.check('no error toast', not r.errors(), r.errors())
+
+
+def asked_at_launch(r):
+    (r.work / 'data/nuzky/agent-access.json').write_text('{"atLaunch": true}')
+
+
+@flow('connect_at_launch', 'With "Turn on when Nuzky starts" set, Agent access is on as Nuzky starts and an agent attached to the '
+      'open project edits it at once', before=asked_at_launch)
+def connect_at_launch(r):
+    access = r.s.call('window.__nuzky.api.agentAccess().then(JSON.stringify)')
+    r.check('Agent access is on from the start', access['ok'] and json.loads(access['value']) == {'on': True, 'atLaunch': True}, access)
+    text = r.s.call("window.__nuzky.api.agentSetup('other')")['value']
+    agent = Bridge(r, command=[server_of(text)['command'], *server_of(text)['args']])
+    try:
+        name = r.s.run('return window.__nuzky.store.getState().snap.project.name')
+        r.check('an agent attached with --current reads the open project', agent.call('get_state', {})['name'] == name)
+    finally:
+        agent.close()

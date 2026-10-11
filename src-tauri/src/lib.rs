@@ -200,7 +200,7 @@ impl OpenSession {
     /// The project stays open for editing when the live agent bridge cannot start.
     fn start_bridge(&mut self) {
         #[cfg(unix)]
-        match nuzky_mcp::ipc::Listener::start(self.host.clone()) {
+        match nuzky_mcp::ipc::Listener::start(self.host.clone(), connect::access_flag()) {
             Ok(listener) => {
                 self.listener = Some(listener);
                 self.bridge_error = None;
@@ -718,17 +718,37 @@ async fn agent_connections() -> CmdResult<Vec<connect::Connection>> {
     .map_err(err)?
 }
 
-/// Writes the `nuzky` entry into the agent's config after a backup; nothing else changes.
+/// Writes the `nuzky` entry into the agent's config after a backup; nothing else changes. The agent
+/// it connects can edit right away and after every launch, as before Agent access existed.
 #[tauri::command]
 async fn connect_agent(agent: connect::Agent) -> CmdResult<connect::Connection> {
     tauri::async_runtime::spawn_blocking(move || {
         let command = connect::Command::this_app().map_err(err)?;
         let home = dirs::home_dir().ok_or("No home folder")?;
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        connect::connect(agent, &agent.config(&home), &command, stamp).map(|c| c.shown_from(&home)).map_err(err)
+        let connection = connect::connect(agent, &agent.config(&home), &command, stamp).map_err(err)?;
+        connect::set_access(true, true).map_err(err)?;
+        Ok(connection.shown_from(&home))
     })
     .await
     .map_err(err)?
+}
+
+/// The `nuzky` server and a first message for an agent Nuzky does not connect itself.
+#[tauri::command]
+fn agent_setup(setup: connect::Setup) -> CmdResult<String> {
+    connect::setup(setup, &connect::Command::this_app().map_err(err)?).map_err(err)
+}
+
+#[tauri::command]
+fn agent_access() -> connect::Access {
+    connect::access()
+}
+
+/// Off drops the agents attached with `--current` at once; their open run ends kept.
+#[tauri::command]
+fn set_agent_access(on: bool, at_launch: bool) -> CmdResult<connect::Access> {
+    connect::set_access(on, at_launch).map_err(err)
 }
 
 /// Families the engine can draw: bundled ones ship with Nuzky, system ones are installed on this computer.
@@ -1109,6 +1129,9 @@ pub fn run() {
             zooms::apply_zooms,
             agent_connections,
             connect_agent,
+            agent_setup,
+            agent_access,
+            set_agent_access,
             agent_panel::agent_list,
             agent_panel::agent_send,
             agent_panel::agent_stop,
@@ -1306,7 +1329,7 @@ mod ipc_lifecycle_tests {
         std::fs::create_dir(&path).unwrap();
         assert!(current.prepare_switch().unwrap_err().to_string().contains("SAVE_FAILED"));
         assert!(current.listener.is_some());
-        let remote = nuzky_mcp::ipc::Remote::connect(&path, false).unwrap().unwrap();
+        let remote = nuzky_mcp::ipc::Remote::connect(&path, false, false).unwrap().unwrap();
         let result = remote.call("get_state".into(), serde_json::json!({})).unwrap();
         assert_ne!(result.is_error, Some(true));
         assert_eq!(result.structured_content.unwrap()["name"], "still open");

@@ -28,7 +28,7 @@ impl Fixture {
         Self { socket: dir.join("project.sock"), _cleanup: Cleanup(dir.clone()), dir, path, host }
     }
     fn listener(&self) -> Listener {
-        Listener::at(self.host.clone(), self.socket.clone()).unwrap()
+        Listener::at(self.host.clone(), self.socket.clone(), Arc::new(AtomicBool::new(true))).unwrap()
     }
     fn hello(&self) -> Value {
         json!({"nuzky":1,"token":fs::read_to_string(self.socket.with_extension("token")).unwrap(),"client":"test","access":"write"})
@@ -54,7 +54,7 @@ fn prepared_endpoint_cannot_exfiltrate_a_symlinked_token() {
     fs::write(&secret, "a".repeat(security::TOKEN_LEN)).unwrap();
     fs::set_permissions(&secret, Permissions::from_mode(0o600)).unwrap();
     symlink(&secret, f.socket.with_extension("token")).unwrap();
-    let error = Remote::at(&f.socket, false).err().unwrap();
+    let error = Remote::at(&f.socket, false, false).err().unwrap();
     assert!(error.to_string().starts_with("IPC_UNTRUSTED"));
     let (mut peer, _) = fake.accept().unwrap();
     // macOS refuses socket options once the client has hung up, which is the expected state here.
@@ -63,18 +63,18 @@ fn prepared_endpoint_cannot_exfiltrate_a_symlinked_token() {
     peer.read_to_end(&mut sent).unwrap();
     assert!(sent.is_empty(), "no hello or token may be sent");
     fs::set_permissions(&f.dir, Permissions::from_mode(0o755)).unwrap();
-    assert!(Remote::at(&f.socket, false).is_err());
-    assert!(Listener::at(f.host.clone(), f.socket.clone()).is_err());
+    assert!(Remote::at(&f.socket, false, false).is_err());
+    assert!(Listener::at(f.host.clone(), f.socket.clone(), Arc::new(AtomicBool::new(true))).is_err());
     assert_eq!(fs::metadata(&f.dir).unwrap().permissions().mode() & 0o777, 0o755);
 }
 
 #[test]
 fn fallback_requires_absence_not_rejection_mismatch_or_timeout() {
     let f = Fixture::new();
-    assert!(Remote::at(&f.socket, true).unwrap().is_none());
+    assert!(Remote::at(&f.socket, true, false).unwrap().is_none());
     let fake = UnixListener::bind(&f.socket).unwrap();
     drop(fake);
-    assert!(Remote::at(&f.socket, true).unwrap().is_none());
+    assert!(Remote::at(&f.socket, true, false).unwrap().is_none());
     fs::remove_file(&f.socket).unwrap();
     security::create_token(&f.socket.with_extension("token"))
         .unwrap()
@@ -96,7 +96,7 @@ fn fallback_requires_absence_not_rejection_mismatch_or_timeout() {
                 std::thread::sleep(HELLO_TIMEOUT + Duration::from_millis(100));
             }
         });
-        let error = Remote::at(&f.socket, false).err().unwrap();
+        let error = Remote::at(&f.socket, false, false).err().unwrap();
         assert!(error.to_string().starts_with(code), "{error:#}");
         server.join().unwrap();
         fs::remove_file(&f.socket).unwrap();
@@ -152,7 +152,7 @@ fn oversized_request_receives_an_error_with_its_id() {
 fn oversized_inspection_is_a_tool_error_and_connection_survives() {
     let f = Fixture::new();
     let listener = f.listener();
-    let remote = Remote::at(&f.socket, true).unwrap().unwrap();
+    let remote = Remote::at(&f.socket, true, false).unwrap().unwrap();
     let run = remote.call("begin_run".into(), json!({"label":"frames"})).unwrap().structured_content.unwrap();
     let result = remote.call("apply_edits".into(), json!({"run_id":run["run_id"],"request_id":"caption","edits":[{"type":"addText","startUs":0,"text":"test","style":{"fontSize":64,"color":"#fff","bold":false,"strokeWidth":0,"strokeColor":"#000","background":null}}]})).unwrap();
     assert_ne!(result.is_error, Some(true), "{result:?}");
@@ -170,7 +170,7 @@ fn oversized_inspection_is_a_tool_error_and_connection_survives() {
 fn remote_disconnect_cancels_its_jobs_and_keeps_its_run() {
     let f = Fixture::new();
     let listener = f.listener();
-    let remote = Remote::at(&f.socket, true).unwrap().unwrap();
+    let remote = Remote::at(&f.socket, true, false).unwrap().unwrap();
     let run = remote.call("begin_run".into(), json!({"label":"owner"})).unwrap().structured_content.unwrap();
     let job = remote.call("transcribe".into(), json!({"asset_ids":[]})).unwrap().structured_content.unwrap();
     assert_eq!(job["run_id"], run["run_id"]);
@@ -235,12 +235,12 @@ fn token_is_ready_before_the_socket_and_a_failed_bind_leaves_neither() {
     let f = Fixture::new();
     // Unix socket paths are limited to about 108 bytes, so binding this one fails.
     let long = f.dir.join(format!("{}.sock", "x".repeat(120)));
-    let error = Listener::at(f.host.clone(), long.clone()).err().unwrap();
+    let error = Listener::at(f.host.clone(), long.clone(), Arc::new(AtomicBool::new(true))).err().unwrap();
     assert!(error.to_string().starts_with("IPC_UNAVAILABLE"), "{error:#}");
     assert!(!long.with_extension("token").exists() && !long.exists());
     let listener = f.listener();
     assert!(f.socket.exists() && f.socket.with_extension("token").exists());
-    let remote = Remote::at(&f.socket, false).unwrap().unwrap();
+    let remote = Remote::at(&f.socket, false, false).unwrap().unwrap();
     assert_ne!(remote.call("get_state".into(), json!({})).unwrap().is_error, Some(true));
     drop(remote);
     drop(listener);
