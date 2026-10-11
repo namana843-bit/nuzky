@@ -6,13 +6,15 @@ import json, re, subprocess
 
 import numpy as np
 
-from e2e.harness import FIXTURES, export, flow, press, wait
+from e2e.harness import FIXTURES, export, flow, press, wait, webdriver
 
 SOURCE, DRY = FIXTURES / 'room.mp4', FIXTURES / 'room-dry.wav'
 RATE = 48_000
 WINDOW = RATE // 50  # 20 ms
 JOB = "return window.__nuzky.store.getState().jobs[arguments[0]] ?? null"
 CONTENT = "return window.__nuzky.store.getState().snap.project.tracks[0].clips[0].content"
+VOICE = ("[...document.querySelectorAll('aside[aria-label=Inspector] section')]"
+         ".find((s) => s.querySelector('h3')?.textContent === 'Voice')")
 CHECKBOX = ("[...document.querySelectorAll('aside[aria-label=Inspector] label')]"
             ".find((l) => l.textContent === arguments[0])?.querySelector('input')")
 
@@ -101,7 +103,15 @@ def room(r):
             "?.querySelector('.tabular')?.textContent ?? null")
     shown = wait(lambda: (g := r.s.run(gain)) and g, 10) or r.s.run(gain)
     r.check('Match loudness shows the gain it gives, in dB', bool(shown) and re.fullmatch(r'[+−]\d+\.\d dB', shown), shown)
+    r.s.run(f"{VOICE}.scrollIntoView({{block: 'end'}})")
     r.shot('inspector-voice')
+    # The smallest window: the section scrolls in the inspector and keeps its rows whole.
+    size = r.s.run('return [window.innerWidth, window.innerHeight]')
+    webdriver('POST', r.s.path + '/window/rect', {'width': 1024, 'height': 640})
+    if r.check('the window gets to 1024 x 640', wait(lambda: r.s.run('return [window.innerWidth, window.innerHeight]') == [1024, 640], 5)):
+        r.s.run(f"{VOICE}.scrollIntoView({{block: 'end'}})")
+        r.shot('inspector-voice-small')
+    webdriver('POST', r.s.path + '/window/rect', {'width': size[0], 'height': size[1]})
     saved = lambda: {k: json.loads(r.saved_project().read_text())['tracks'][0]['clips'][0]['content'].get(k)
                      for k in ('dereverb', 'normalize', 'leveler')}
     r.check('the project file on disk has the three settings', wait(lambda: saved() == {'dereverb': 0.8, 'normalize': True, 'leveler': 0.5}, 10), saved())
