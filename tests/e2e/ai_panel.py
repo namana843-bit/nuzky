@@ -1,7 +1,7 @@
 import json, os, subprocess, time
 from pathlib import Path
 
-from e2e.harness import CLI, FIXTURES, flow, wait, webdriver
+from e2e.harness import CLI, FIXTURES, MACOS, clipboard, flow, press, wait, webdriver
 
 FAKE = Path(__file__).resolve().parent / 'fake_agent'
 PANEL = """const p = document.querySelector('aside[aria-label=AI]'); if (!p) return null; const b = p.getBoundingClientRect();
@@ -191,6 +191,20 @@ def ai_panel(r):
             not first['missing'] and not first['cwd'].startswith(os.environ['HOME']) and not first['resume'], first)
     r.check('the message carried the selection and the playhead', f"Selected clips: {clip['id']}" in first['prompt'] and '[Nuzky] Playhead' in first['prompt'], first['prompt'])
     r.shot('run-done')
+    # A real key press, as the clipboard takes text only from something the user did. On macOS it is the person's
+    # own clipboard, so their text goes back right after.
+    theirs = clipboard() if MACOS else None
+    found = r.s.run("""const b = document.querySelector('aside[aria-label=AI] button[aria-label="Copy message"]');
+        b?.focus(); return !!b;""")
+    press('Return')
+    copied = wait(lambda: clipboard() == 'Cut the pause at the start and add captions', 5)
+    got = clipboard()
+    label = r.s.run("return document.activeElement?.getAttribute('aria-label')")
+    r.shot('message-copied')
+    if theirs is not None:
+        subprocess.run(['pbcopy'], input=theirs, text=True, check=True)
+    r.check('Copy beside my message puts exactly what I sent on the clipboard and says it is copied',
+            found and copied and label == 'Copied', {'button': found, 'clipboard': got, 'label': label})
     click(r, 'Added 2 captions')
     r.check('a line of the card selects the clips it is about', wait(lambda: len(r.s.run('return window.__nuzky.store.getState().selection')) == 2, 5))
     click(r, 'Undo')

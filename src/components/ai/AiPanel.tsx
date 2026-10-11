@@ -10,6 +10,7 @@ import {
   ChevronRight,
   CircleStop,
   Clapperboard,
+  Copy,
   Crosshair,
   Download,
   ExternalLink,
@@ -48,6 +49,7 @@ import {
 } from "../../lib/agent";
 import { DOCK_LABELS, TOO_NARROW, useDock, useDockLayout, type DockMode } from "../../lib/dock";
 import { api } from "../../lib/api";
+import { copyText } from "../../lib/clipboard";
 import { downloadModels, useCover } from "../../lib/cover";
 import { openRecap, undoAction, undoStep, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
@@ -526,15 +528,39 @@ function Empty() {
   );
 }
 
+function UserMessage({ text, context }: { text: string; context: string | null }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+  const copy = () =>
+    copyText(text, "The clipboard is not available here.").then(
+      () => setCopied(true),
+      (e: Error) => useEditor.getState().toast({ kind: "error", text: e.message }),
+    );
+  return (
+    <div className="group flex max-w-[88%] flex-col items-end gap-1 self-end">
+      <div className="flex items-end gap-1">
+        <IconButton
+          label={copied ? "Copied" : "Copy message"}
+          onClick={() => void copy()}
+          className={`h-6 w-6 shrink-0 focus-visible:opacity-100 group-hover:opacity-100 ${copied ? "opacity-100" : "opacity-0"}`}
+        >
+          {copied ? <Check size={13} className="text-ok" /> : <Copy size={13} />}
+        </IconButton>
+        <div className="whitespace-pre-wrap break-words rounded-[14px] rounded-br-[4px] bg-raised px-3 py-2 leading-[19px] text-fg">{text}</div>
+      </div>
+      {context && <div className="tabular text-[11px] text-muted">{context}</div>}
+    </div>
+  );
+}
+
 function Item({ item, index, collapsed }: { item: ChatItem; index: number; collapsed: boolean }) {
   switch (item.kind) {
     case "user":
-      return (
-        <div className="flex max-w-[88%] flex-col items-end gap-1 self-end">
-          <div className="whitespace-pre-wrap break-words rounded-[14px] rounded-br-[4px] bg-raised px-3 py-2 leading-[19px] text-fg">{item.text}</div>
-          {item.context && <div className="tabular text-[11px] text-muted">{item.context}</div>}
-        </div>
-      );
+      return <UserMessage text={item.text} context={item.context} />;
     case "agent":
       return (
         <div className="break-words leading-[20px] text-fg/90">
