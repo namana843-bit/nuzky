@@ -436,6 +436,10 @@ impl Remote {
         }))
     }
 
+    pub fn close(&self) {
+        let _ = self.writer.lock().unwrap().shutdown(Shutdown::Both);
+    }
+
     /// The app closed the connection: it closed the project, quit, or turned Agent access off.
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
@@ -464,7 +468,7 @@ impl Remote {
 
 impl Drop for Remote {
     fn drop(&mut self) {
-        let _ = self.writer.lock().unwrap().shutdown(Shutdown::Both);
+        self.close();
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }

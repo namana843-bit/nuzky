@@ -188,6 +188,14 @@ fn remote_disconnect_cancels_its_jobs_and_keeps_its_run() {
             },
         )
         .unwrap();
+    let request = Request {
+        id: 999,
+        tool: "job".into(),
+        args: json!({"job_id":held["job_id"], "action":"wait", "timeout_s":30}),
+    };
+    remote.writer.lock().unwrap().write_all(&wire::encode(&request).unwrap()).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    let disconnected = Instant::now();
     drop(remote);
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
@@ -198,6 +206,7 @@ fn remote_disconnect_cancels_its_jobs_and_keeps_its_run() {
         assert!(Instant::now() < deadline, "disconnect did not cancel the client job and finish the run");
         std::thread::sleep(Duration::from_millis(10));
     }
+    assert!(disconnected.elapsed() < Duration::from_millis(250), "wait held disconnect open");
     release.send(()).unwrap();
     drop(listener);
 }
@@ -225,6 +234,7 @@ fn cancelled_transcription_never_loads_models() {
         missing,
         "auto",
         || true,
+        |_| {},
     )
     .unwrap_err();
     assert!(error.to_string().starts_with("CANCELLED"));

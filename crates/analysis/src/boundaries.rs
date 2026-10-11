@@ -117,15 +117,17 @@ pub fn align_to_sound(
     cache: &Path,
     aligner: Option<&Aligner>,
     cancelled: impl Fn() -> bool,
+    mut progress: impl FnMut(f32),
 ) -> Result<bool> {
     let pcm = open_pcm(asset, cache, &cancelled)?;
     let placed = match aligner {
         // The model hears the sound as recognition does.
-        Some(aligner) => aligner.align(words, &speech_rate(pcm.samples()), &cancelled)?,
+        Some(aligner) => aligner.align(words, &speech_rate(pcm.samples()), &cancelled, &mut progress)?,
         None => vec![false; words.len()],
     };
     anyhow::ensure!(!cancelled(), "CANCELLED: transcription cancelled");
     refine_words(words, pcm.samples(), &placed);
+    progress(1.0);
     Ok(placed.contains(&true))
 }
 

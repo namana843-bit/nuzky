@@ -883,11 +883,35 @@ fn emphasis_suggests_and_apply_zooms_punches_in_as_one_undo_over_stdio() {
 }
 
 #[test]
-#[ignore = "Requires tmp-test/talk.mp4 and installed small + Silero models; run with XDG_DATA_HOME=tmp-test/xdg/data"]
+#[ignore = "Requires tmp-test/speech.wav and installed small, Silero and English word timing models; run with isolated HOME and XDG_DATA_HOME"]
 fn transcribe_edit_and_caption_real_media_over_stdio() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let media = root.join("tmp-test/talk.mp4").canonicalize().unwrap();
     let mut c = Client::new(true);
+    let media = c.dir.join("long-speech.mp4");
+    assert!(
+        Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(root.join("tmp-test/speech.wav"))
+            .args([
+                "-f",
+                "lavfi",
+                "-i",
+                "color=s=16x16:r=1",
+                "-af",
+                "aresample=16000,apad=whole_dur=16,aloop=loop=7:size=256000",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
+                "-shortest"
+            ])
+            .arg(&media)
+            .status()
+            .unwrap()
+            .success()
+    );
     let run = c.call("begin_run", json!({"label":"import"}));
     let assets = c.call("import_media", json!({"run_id":run["run_id"],"paths":[media]}));
     let asset_id = &assets["asset_ids"][0];
@@ -898,8 +922,19 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
     let job = c.call("transcribe", json!({"asset_ids":[asset_id],"model":"small"}));
     let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    let (mut recognising, mut measuring, mut estimate) = (false, false, false);
+    let mut previous = 0.0;
     loop {
-        let status = c.call("job", json!({"job_id":job["job_id"],"action":"get"}));
+        let status = c.call("job", json!({"job_id":job["job_id"],"action":"wait","timeout_s":1}));
+        eprintln!("job progress: {status}");
+        let progress = status["progress"].as_f64().unwrap_or(0.0);
+        assert!(progress >= previous, "progress went backwards: {status}");
+        previous = progress;
+        if status["status"] == "running" {
+            recognising |= status["phase"] == "transcribing" && progress > 0.0 && progress < 0.5;
+            measuring |= status["phase"] == "measuring_word_times" && progress > 0.5 && progress < 1.0;
+            estimate |= status["remaining_s"].as_u64().is_some();
+        }
         if status["status"] == "done" {
             // The English word timing model from scripts/fixtures.sh measured the words.
             assert_eq!(status["result"]["assets"][0]["word_times"], "measured", "{status}");
@@ -907,8 +942,14 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
         }
         assert_eq!(status["status"], "running", "{status}");
         assert!(std::time::Instant::now() < deadline, "transcription timed out");
-        std::thread::sleep(Duration::from_secs(2));
     }
+    assert!(
+        recognising && measuring && estimate,
+        "recognising={recognising}, measuring={measuring}, estimate={estimate}"
+    );
+    let at = std::time::Instant::now();
+    assert_eq!(c.call("job", json!({"job_id":job["job_id"],"action":"wait"}))["status"], "done");
+    assert!(at.elapsed() < Duration::from_millis(250));
     let transcript = c.call("get_transcript", json!({}));
     assert!(transcript["words"].as_array().unwrap().len() >= 2);
     assert_eq!(transcript["untranscribed"], json!([]));
@@ -940,7 +981,21 @@ fn transcribe_edit_and_caption_real_media_over_stdio() {
         assert_eq!(words.join(" "), content["text"].as_str().unwrap());
     }
     c.call("end_run", json!({"run_id":run["run_id"],"action":"keep"}));
+    let slot = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(nuzky_analysis::models_dir().join(".recognition.lock"))
+        .unwrap();
+    slot.lock().unwrap();
+    let job = c.call("transcribe", json!({"asset_ids":[asset_id],"model":"small"}));
+    c.send(json!({"jsonrpc":"2.0", "id":99999, "method":"tools/call", "params":{"name":"job", "arguments":{"job_id":job["job_id"],"action":"wait","timeout_s":30}}}));
+    std::thread::sleep(Duration::from_millis(50));
+    let closed = std::time::Instant::now();
     c.finish();
+    // rmcp would otherwise give a call in flight 5 s after its input ends.
+    assert!(closed.elapsed() < Duration::from_secs(2), "wait held stdio shutdown open: {:?}", closed.elapsed());
 }
 
 #[test]

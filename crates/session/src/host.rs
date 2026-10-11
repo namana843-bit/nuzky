@@ -54,7 +54,8 @@ impl Host {
 
     pub fn new(session: ProjectSession, cache_dir: PathBuf) -> Result<Self> {
         let transcripts = TranscriptStore::open()?.with_events(session.inner.lock().unwrap().events.clone());
-        Ok(Self { session, jobs: Jobs::default(), transcripts, cache_dir })
+        let jobs = Jobs::default().with_events(session.inner.lock().unwrap().events.clone());
+        Ok(Self { session, jobs, transcripts, cache_dir })
     }
 }
 

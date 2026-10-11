@@ -331,6 +331,7 @@ pub struct ApplyMotion {
 #[serde(rename_all = "snake_case")]
 pub enum JobAction {
     Get,
+    Wait,
     Cancel,
 }
 #[derive(Deserialize, JsonSchema)]
@@ -338,6 +339,7 @@ pub enum JobAction {
 pub struct Job {
     pub job_id: String,
     pub action: JobAction,
+    pub timeout_s: Option<u64>,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

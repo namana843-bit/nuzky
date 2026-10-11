@@ -271,6 +271,31 @@ impl OpenSession {
                     break;
                 }
                 match event {
+                    SessionEvent::Job { id, kind, status, progress, error } => {
+                        let label = match kind {
+                            "transcription" => "Transcribing",
+                            "export" => "Exporting",
+                            "activity" => "Scanning picture and sound",
+                            "analysis" => "Analysing media",
+                            "segment" | "matte" => "Finding the person",
+                            "reframe" => "Reframing",
+                            _ => "Working",
+                        };
+                        app.emit(
+                            "job",
+                            jobs::JobEvent {
+                                id: format!("agent:{id}"),
+                                kind: "agent",
+                                label: label.into(),
+                                status,
+                                progress,
+                                phase: None,
+                                message: error,
+                                output: None,
+                            },
+                        )
+                        .ok();
+                    }
                     SessionEvent::TranscriptsChanged => {
                         app.emit("transcripts-changed", ()).ok();
                     }
@@ -955,6 +980,10 @@ fn mattes_missing(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
 
 #[tauri::command]
 fn cancel_job(state: State<'_, AppState>, id: String) {
+    if let Some(job) = id.strip_prefix("agent:") {
+        let _ = state.session.lock().unwrap().host.jobs.get(job, true);
+        return;
+    }
     if let Some(flag) = state.jobs.lock().unwrap().get(&id) {
         flag.store(true, std::sync::atomic::Ordering::Relaxed);
         // A preview proxy the user stopped stays stopped until the app restarts.

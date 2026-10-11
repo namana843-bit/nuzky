@@ -79,11 +79,11 @@ pub(crate) fn ask_for_model() -> Option<&'static AskForModel> {
 pub enum Stage {
     /// Another recognition holds the slot.
     Waiting,
-    Recognising,
+    Recognising(f32),
     /// The word timing model of the recognised language is downloading, 0..1.
     DownloadingAligner(f32),
     /// Measuring word times in the sound.
-    Aligning,
+    Aligning(f32),
 }
 
 /// Recognises the whole file in its own time and stores its words, replacing an older record.
@@ -124,7 +124,7 @@ fn recognise_with(
     aligner: &AlignerSource<'_>,
 ) -> Result<Record> {
     let _slot = recognition_slot(&nuzky_analysis::models_dir().join(".recognition.lock"), cancel, |waiting| {
-        stage(if waiting { Stage::Waiting } else { Stage::Recognising })
+        stage(if waiting { Stage::Waiting } else { Stage::Recognising(0.0) })
     })?;
     let fingerprint = store.fingerprint(asset)?;
     let mut result = nuzky_analysis::transcribe_words_cancellable(
@@ -133,12 +133,15 @@ fn recognise_with(
         vad,
         language,
         || cancel.load(Ordering::Relaxed),
+        |part| stage(Stage::Recognising(part)),
     )?;
     check_cancel(cancel)?;
     let aligner = aligner(&result.language, &mut stage)?;
-    stage(Stage::Aligning);
+    stage(Stage::Aligning(0.0));
     // Cuts are planned from these times, so they follow the sound, not Whisper's estimates.
-    let measured = measure(&mut result.words, asset, cache, aligner.as_ref().map(|(a, _)| a), cancel)?;
+    let measured = measure(&mut result.words, asset, cache, aligner.as_ref().map(|(a, _)| a), cancel, &mut |part| {
+        stage(Stage::Aligning(part))
+    })?;
     // A stop asked for while the words were being refined still keeps nothing.
     check_cancel(cancel)?;
     let record = Record {
@@ -193,12 +196,13 @@ fn measure(
     cache: &Path,
     aligner: Option<&nuzky_analysis::Aligner>,
     cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
 ) -> Result<bool> {
     let cancelled = || cancel.load(Ordering::Relaxed);
     if aligner.is_some() {
         let mut measured = words.to_vec();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            nuzky_analysis::align_to_sound(&mut measured, asset, cache, aligner, cancelled)
+            nuzky_analysis::align_to_sound(&mut measured, asset, cache, aligner, cancelled, &mut *progress)
         }))
         .unwrap_or_else(|_| Err(anyhow::anyhow!("the word timing model crashed")));
         match result {
@@ -212,7 +216,7 @@ fn measure(
             }
         }
     }
-    nuzky_analysis::align_to_sound(words, asset, cache, None, cancelled)?;
+    nuzky_analysis::align_to_sound(words, asset, cache, None, cancelled, progress)?;
     Ok(false)
 }
 

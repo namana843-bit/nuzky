@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use crate::{activity, media, params::*, reels, transcript, waveform};
 
 const PREVIEW_CHARS: usize = 400;
-/// How long activity waits for its job before handing it over to poll.
+/// How long activity waits for its job before handing it over to the client.
 const ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 struct PreparedImport {
@@ -269,7 +269,13 @@ impl Backend {
             "correct_words" => self.correct_words(parse(arguments)?, state),
             "job" => {
                 let a: Job = parse(arguments)?;
-                self.host.jobs.get_for(Some(&self.client.id), &a.job_id, matches!(a.action, JobAction::Cancel))
+                if matches!(a.action, JobAction::Wait) {
+                    let timeout = a.timeout_s.unwrap_or(25);
+                    ensure!(timeout <= 30, "INVALID_ARGUMENTS: timeout_s is at most 30");
+                    self.host.jobs.wait_for(&self.client.id, &a.job_id, std::time::Duration::from_secs(timeout))
+                } else {
+                    self.host.jobs.get_for(Some(&self.client.id), &a.job_id, matches!(a.action, JobAction::Cancel))
+                }
             }
             "build_captions" => self.captions(parse(arguments)?, state),
             "apply_zooms" => self.apply_zooms(parse(arguments)?, state),
@@ -772,7 +778,7 @@ impl Backend {
             },
         )?;
         anyhow::bail!(
-            "AUDIO_NOT_READY: preparing the sound of {names} as job {}; poll job until done, then call {tool} again",
+            "AUDIO_NOT_READY: preparing the sound of {names} as job {}; wait with job action wait until done, then call {tool} again",
             job["job_id"].as_str().unwrap_or_default()
         )
     }
@@ -833,28 +839,34 @@ impl Backend {
                     model_paths = Some(transcript::models(&name)?);
                 }
                 let mut recognised = Vec::new();
-                let count = assets.len();
+                let total = assets.iter().map(|asset| asset.duration_us.max(1) as f64).sum::<f64>();
+                let mut done = 0.0;
                 let mut recognised_files = std::collections::HashSet::new();
-                for (i, asset) in assets.into_iter().enumerate() {
+                for asset in assets {
                     check_cancel(&cancel)?;
-                    progress.set("transcribing", Some(i as f32 / count as f32));
+                    let weight = asset.duration_us.max(1) as f64;
+                    let fraction = |part: f32| Some(((done + weight * f64::from(part)) / total) as f32);
+                    progress.set("transcribing", fraction(0.0));
                     let fingerprint = store.fingerprint(&asset)?;
                     if !recognised_files.insert(fingerprint.clone()) {
                         recognised.push(json!({"asset_id":asset.id,"reused":true}));
+                        done += weight;
                         continue;
                     }
                     let models = model_paths.as_ref().context("MODEL_MISSING: transcription model")?;
-                    let fraction = Some(i as f32 / count as f32);
                     let stage = |stage| match stage {
-                        transcript::Stage::Waiting => progress.set("waiting_for_other_transcription", fraction),
-                        transcript::Stage::Recognising => progress.set("transcribing", fraction),
-                        transcript::Stage::DownloadingAligner(done) => {
-                            progress.set("downloading_word_timing_model", Some(done))
+                        transcript::Stage::Waiting => progress.set("waiting_for_other_transcription", fraction(0.0)),
+                        transcript::Stage::Recognising(part) => progress.set("transcribing", fraction(part * 0.5)),
+                        transcript::Stage::DownloadingAligner(_) => {
+                            progress.set("downloading_word_timing_model", fraction(0.5))
                         }
-                        transcript::Stage::Aligning => progress.set("measuring_word_times", fraction),
+                        transcript::Stage::Aligning(part) => {
+                            progress.set("measuring_word_times", fraction(0.5 + part * 0.5))
+                        }
                     };
                     let record =
                         transcript::recognise(&store, &asset, &cache, &name, models, &language, &cancel, stage)?;
+                    done += weight;
                     recognised.push(json!({
                         "asset_id": asset.id,
                         "words": record.words.len(),
@@ -1240,7 +1252,7 @@ impl Backend {
                         drop(renderer);
                         let job = self.segment_subject(SegmentSubject { time_us: thumbnail.time_us }, state)?;
                         anyhow::bail!(
-                            "MASK_NOT_READY: making the person's mask as job {}; poll job until done, then inspect_thumbnail again",
+                            "MASK_NOT_READY: making the person's mask as job {}; wait with job action wait until done, then inspect_thumbnail again",
                             job["job_id"].as_str().unwrap_or_default()
                         )
                     }
@@ -1356,7 +1368,7 @@ impl Backend {
             }
         };
         anyhow::bail!(
-            "MATTE_NOT_READY: finding the person behind whom the clips' backgrounds go, as job {job}; poll job until done, then try again"
+            "MATTE_NOT_READY: finding the person behind whom the clips' backgrounds go, as job {job}; wait with job action wait until done, then try again"
         )
     }
 

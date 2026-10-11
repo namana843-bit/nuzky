@@ -87,13 +87,27 @@ impl Aligner {
     /// Moves `words` of 16 kHz mono `audio` to where the model hears them. Returns, for each word,
     /// whether its times were measured; the others keep Whisper's estimate between measured
     /// neighbours. Text and order never change.
-    pub fn align(&self, words: &mut [Word], audio: &[f32], cancelled: &dyn Fn() -> bool) -> Result<Vec<bool>> {
+    pub fn align(
+        &self,
+        words: &mut [Word],
+        audio: &[f32],
+        cancelled: &dyn Fn() -> bool,
+        progress: &mut dyn FnMut(f32),
+    ) -> Result<Vec<bool>> {
         let mut placed = vec![false; words.len()];
         let duration = sample_us(audio.len());
-        for span in spans(words) {
+        let spans = spans(words);
+        // Each span counts by its length in Whisper's times, which the work follows.
+        let lengths: Vec<i64> =
+            spans.iter().map(|s| (words[s.end - 1].end_us - words[s.start].start_us).max(1)).collect();
+        let total = lengths.iter().sum::<i64>() as f32;
+        let mut done = 0;
+        for (span, length) in spans.into_iter().zip(lengths) {
             if cancelled() {
                 anyhow::bail!("CANCELLED: transcription cancelled");
             }
+            progress(done as f32 / total);
+            done += length;
             let from =
                 if span.start == 0 { 0 } else { (words[span.start - 1].end_us + words[span.start].start_us) / 2 };
             let to = words.get(span.end).map_or(duration, |next| (words[span.end - 1].end_us + next.start_us) / 2);

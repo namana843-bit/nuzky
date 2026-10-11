@@ -1,11 +1,13 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::Sender;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
-use crate::Stamp;
+use crate::{SessionEvent, Stamp};
 use anyhow::{Context, Result, ensure};
 use nuzky_engine::edit::new_id;
 use serde_json::{Value, json};
@@ -27,14 +29,27 @@ pub struct JobState {
     pub error: Option<String>,
     pub cancel: Arc<AtomicBool>,
     sequence: u64,
+    started: Instant,
+    ended: Option<Instant>,
+    estimate_from: Option<(Instant, f32)>,
+    events: Option<Sender<SessionEvent>>,
+    last_event: Instant,
 }
 
 impl JobState {
     /// A finished analysis's result can be large, and polling progress does not need it.
     fn summary(&self) -> Value {
+        let now = self.ended.unwrap_or_else(Instant::now);
+        let remaining = self.estimate_from.and_then(|(at, initial)| {
+            let elapsed = now.duration_since(at).as_secs_f64();
+            let progress = self.progress?;
+            (elapsed >= 5.0 && progress - initial >= 0.03)
+                .then(|| (elapsed * f64::from(1.0 - progress) / f64::from(progress - initial)) as u64)
+        });
         json!({"job_id": self.id, "kind": self.kind, "revision": self.stamp.revision,
             "session_epoch": self.stamp.session_epoch, "status": self.status,
             "progress": self.progress, "phase": self.phase, "cancel_requested": self.cancel.load(Ordering::Relaxed),
+            "elapsed_s": now.duration_since(self.started).as_secs(), "remaining_s": remaining,
             "owner": self.owner, "run_id": self.run_id, "error": self.error})
     }
 
@@ -43,6 +58,19 @@ impl JobState {
         job["result"] = json!(self.result);
         job
     }
+
+    fn emit(&mut self) {
+        self.last_event = Instant::now();
+        if let Some(events) = &self.events {
+            let _ = events.send(SessionEvent::Job {
+                id: self.id.clone(),
+                kind: self.kind,
+                status: self.status,
+                progress: self.progress.unwrap_or(0.0),
+                error: self.error.clone(),
+            });
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -50,8 +78,23 @@ pub struct Progress(Arc<Mutex<JobState>>);
 impl Progress {
     pub fn set(&self, phase: &'static str, fraction: Option<f32>) {
         let mut state = self.0.lock().unwrap();
+        let phase_changed = state.phase != phase;
+        let before = state.progress;
+        // A job whose next phase counts from 0 again, such as an export after finding the person,
+        // estimates the time left of that phase.
+        if fraction.unwrap_or(0.0) < before.unwrap_or(0.0) {
+            state.estimate_from = None;
+        }
+        if let Some(fraction) = fraction.filter(|f| *f > 0.0)
+            && state.estimate_from.is_none()
+        {
+            state.estimate_from = Some((Instant::now(), fraction));
+        }
         state.phase = phase;
         state.progress = fraction;
+        if phase_changed || (fraction != before && state.last_event.elapsed() >= Duration::from_millis(250)) {
+            state.emit();
+        }
     }
 }
 
@@ -70,9 +113,15 @@ pub struct Jobs {
     entries: Mutex<HashMap<String, Arc<Mutex<JobState>>>>,
     workers: Mutex<Vec<JoinHandle<()>>>,
     started: AtomicU64,
+    events: Option<Sender<SessionEvent>>,
 }
 
 impl Jobs {
+    pub fn with_events(mut self, events: Option<Sender<SessionEvent>>) -> Self {
+        self.events = events;
+        self
+    }
+
     pub fn start(
         &self,
         owner: &str,
@@ -118,8 +167,17 @@ impl Jobs {
             error: None,
             cancel: Arc::new(AtomicBool::new(false)),
             sequence: self.started.fetch_add(1, Ordering::Relaxed),
+            started: Instant::now(),
+            ended: None,
+            estimate_from: None,
+            events: self.events.clone(),
+            last_event: Instant::now(),
         }));
-        let response = state.lock().unwrap().json();
+        let response = {
+            let mut state = state.lock().unwrap();
+            state.emit();
+            state.json()
+        };
         let owned = state.clone();
         let worker = std::thread::Builder::new()
             .name(format!("nuzky-{kind}"))
@@ -150,6 +208,8 @@ impl Jobs {
                         }
                     }
                 }
+                state.ended = Some(Instant::now());
+                state.emit();
             })
             .context("JOB_FAILED: starting thread")?;
         entries.insert(id, state);
@@ -178,6 +238,22 @@ impl Jobs {
             state.cancel.store(true, Ordering::Relaxed);
         }
         Ok(state.json())
+    }
+
+    pub fn wait_for(&self, client: &str, id: &str, timeout: Duration) -> Result<Value> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let ended = {
+                let lifecycle = self.lifecycle.lock().unwrap();
+                lifecycle.closing || lifecycle.disconnected_clients.contains(client)
+            };
+            let state = self.get_for(Some(client), id, false)?;
+            if ended || state["status"] != "running" || state["cancel_requested"] == true || Instant::now() >= deadline
+            {
+                return Ok(state);
+            }
+            std::thread::sleep(Duration::from_millis(100).min(deadline.saturating_duration_since(Instant::now())));
+        }
     }
 
     /// A running job of `kind`, to name again instead of starting the same work twice.
@@ -275,6 +351,92 @@ pub fn check_cancel(cancel: &AtomicBool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn job_wait_timeout_completion_and_stop() {
+        for stop in ["cancel", "disconnect", "shutdown", "run"] {
+            let jobs = Arc::new(Jobs::default());
+            let (tx, rx) = std::sync::mpsc::channel();
+            let job = jobs
+                .start("client", Some("run"), "test", Stamp { revision: 1, session_epoch: "e".into() }, move |_, _| {
+                    rx.recv().unwrap();
+                    Ok(json!({}))
+                })
+                .unwrap();
+            let id = job["job_id"].as_str().unwrap();
+            let at = Instant::now();
+            assert_eq!(jobs.wait_for("client", id, Duration::from_secs(1)).unwrap()["status"], "running");
+            assert!(at.elapsed() >= Duration::from_secs(1) && at.elapsed() < Duration::from_millis(1500));
+            std::thread::scope(|scope| {
+                let waiting = scope.spawn(|| jobs.wait_for("client", id, Duration::from_secs(30)).unwrap());
+                std::thread::sleep(Duration::from_millis(50));
+                let at = Instant::now();
+                match stop {
+                    "cancel" => {
+                        jobs.get(id, true).unwrap();
+                    }
+                    "disconnect" => jobs.cancel_owner("client"),
+                    "shutdown" => jobs.begin_shutdown(),
+                    _ => jobs.cancel_run("run"),
+                }
+                waiting.join().unwrap();
+                assert!(at.elapsed() < Duration::from_millis(250));
+            });
+            tx.send(()).unwrap();
+            jobs.shutdown();
+            let at = Instant::now();
+            assert_eq!(jobs.wait_for("client", id, Duration::from_secs(30)).unwrap()["status"], "cancelled");
+            assert!(at.elapsed() < Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn job_progress_estimate_and_events() {
+        let (events, rx) = std::sync::mpsc::channel();
+        let jobs = Jobs::default().with_events(Some(events));
+        let (release, hold) = std::sync::mpsc::channel();
+        let (send, receive) = std::sync::mpsc::channel();
+        let job = jobs
+            .start("client", None, "test", Stamp { revision: 1, session_epoch: "e".into() }, move |_, progress| {
+                send.send(progress).unwrap();
+                hold.recv().unwrap();
+                Ok(json!({}))
+            })
+            .unwrap();
+        let progress = receive.recv().unwrap();
+        assert!(matches!(rx.recv().unwrap(), SessionEvent::Job { status: "running", progress: 0.0, .. }));
+        progress.set("recognising", Some(0.1));
+        assert!(matches!(rx.recv().unwrap(), SessionEvent::Job { progress: 0.1, .. }));
+        assert!(progress.0.lock().unwrap().json()["remaining_s"].is_null());
+        {
+            let mut state = progress.0.lock().unwrap();
+            state.started = Instant::now() - Duration::from_secs(10);
+            state.estimate_from = Some((Instant::now() - Duration::from_secs(5), 0.1));
+        }
+        progress.set("recognising", Some(0.12));
+        assert!(progress.0.lock().unwrap().json()["remaining_s"].is_null());
+        progress.set("aligning", Some(0.5));
+        let state = progress.0.lock().unwrap().json();
+        assert_eq!(state["elapsed_s"], 10);
+        assert_eq!(state["remaining_s"], 6);
+        assert!(matches!(rx.recv().unwrap(), SessionEvent::Job { progress: 0.5, .. }));
+        progress.set("aligning", Some(0.55));
+        assert!(rx.try_recv().is_err(), "progress alone is sent at most every 250 ms");
+        progress.set("rendering", Some(0.25));
+        let state = progress.0.lock().unwrap().json();
+        assert!(
+            state["progress"] == 0.25 && state["remaining_s"].is_null(),
+            "a phase from 0 again estimates anew: {state}"
+        );
+        assert!(matches!(rx.recv().unwrap(), SessionEvent::Job { progress: 0.25, .. }));
+        std::thread::sleep(Duration::from_millis(250));
+        progress.set("rendering", Some(0.75));
+        assert!(matches!(rx.recv().unwrap(), SessionEvent::Job { progress: 0.75, .. }));
+        release.send(()).unwrap();
+        jobs.wait_for("client", job["job_id"].as_str().unwrap(), Duration::from_secs(1)).unwrap();
+        jobs.shutdown();
+        assert!(matches!(rx.recv().unwrap(), SessionEvent::Job { status: "done", progress: 1.0, .. }));
+    }
 
     #[test]
     fn finished_jobs_and_their_threads_are_pruned() {

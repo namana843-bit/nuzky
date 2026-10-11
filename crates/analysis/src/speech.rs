@@ -67,7 +67,7 @@ pub fn transcribe_words(
     vad_model_path: &Path,
     language: &str,
 ) -> Result<Transcript> {
-    transcribe_words_cancellable(source, model_path, vad_model_path, language, || false)
+    transcribe_words_cancellable(source, model_path, vad_model_path, language, || false, |_| {})
 }
 
 pub fn transcribe_words_cancellable(
@@ -76,6 +76,7 @@ pub fn transcribe_words_cancellable(
     vad_model_path: &Path,
     language: &str,
     cancelled: impl Fn() -> bool,
+    mut progress: impl FnMut(f32),
 ) -> Result<Transcript> {
     let check = || {
         ensure!(!cancelled(), "CANCELLED: transcription cancelled");
@@ -98,12 +99,14 @@ pub fn transcribe_words_cancellable(
     ensure!(audio.iter().all(|s| s.is_finite()), "Speech audio contains non-finite samples");
     let mut transcript = Transcript { language: language.into(), words: Vec::new(), segments: Vec::new() };
     if audio.is_empty() {
+        progress(1.0);
         return Ok(transcript);
     }
     check()?;
     let regions = voice_regions(audio, vad_model_path)?;
     check()?;
     if regions.is_empty() {
+        progress(1.0);
         return Ok(transcript);
     }
     let mut context_params = WhisperContextParameters::default();
@@ -144,6 +147,8 @@ pub fn transcribe_words_cancellable(
     }
     let mut state = context.create_state().context("Creating speech recognition state")?;
     // Independent decoding prevents tokens from drifting across compacted pauses.
+    let total: usize = regions.iter().map(|(start, end)| end - start).sum();
+    let mut done = 0;
     for region in regions {
         check()?;
         let (compact, mapping) = compact_audio(audio, &[region]);
@@ -156,6 +161,8 @@ pub fn transcribe_words_cancellable(
         transcript.language =
             whisper_rs::get_lang_str(state.full_lang_id_from_state()).context("Missing detected language")?.into();
         append_segments(&state, context.token_eot(), &mapping, &mut transcript, &cancelled)?;
+        done += region.1 - region.0;
+        progress(done as f32 / total as f32);
     }
     Ok(transcript)
 }

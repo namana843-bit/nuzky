@@ -13,7 +13,7 @@ scene_cuts(asset: &Asset, params: SceneParams) -> Result<Vec<SceneCut>>
 transcribe_words(source: AudioSource<'_>, model: &Path, vad: &Path, language: &str)
     -> Result<Transcript>
 align_to_sound(words: &mut [Word], asset: &Asset, cache: &Path, aligner: Option<&Aligner>,
-    cancelled: impl Fn() -> bool) -> Result<bool>
+    cancelled: impl Fn() -> bool, progress: impl FnMut(f32)) -> Result<bool>
 filler_words(transcript: &Transcript, language: &str) -> Vec<Range>
 ```
 

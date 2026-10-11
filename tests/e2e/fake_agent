@@ -12,6 +12,8 @@ of the bridge from --mcp-config or -c, so its edits go through Nuzky like a real
   "slow"     opens a run, splits the clip and keeps working until stopped
   "long job" starts an export (into LOG/folder when the message says "folder") and ends its turn asking whether to wait; "Wait and continue" then reads that job
              (from $NUZKY_FAKE_AGENT_LOG/job.json) until it ends, "Stop the export" cancels it first
+  "transcribe" transcribes with the small model and waits on the job until it ends; "transcribe again" recognises
+             the files anew
   "keep: …"  sent from Your style: reads the style and keeps the rest of the message as the creator's rule
   the `thumbnail` prompt (Make a thumbnail): sets both covers in one run with the hook from "Hook: …" in the wishes,
              looks at the cover with inspect_thumbnail, waiting for its mask, and exports nothing
@@ -351,6 +353,14 @@ elif message in ('wait and continue', 'stop the export'):
     while (state := call('job', {'job_id': job, 'action': 'get'}))['status'] == 'running':
         time.sleep(0.3)
     say(f"Job {job}: {state['status']}" + (f" {Path(state['result']['path']).name}" if state['status'] == 'done' else ''))
+elif 'transcribe' in message:
+    again = {'asset_ids': [a['id'] for a in call('get_state', {})['assets']]} if 'again' in message else {}
+    job = call('transcribe', {'model': 'small', **again})
+    say('Přepisuju.')
+    status = job
+    while status['status'] == 'running':
+        status = call('job', {'job_id': job['job_id'], 'action': 'wait', 'timeout_s': 5})
+    say(f"Přepis skončil: {status['status']}.")
 else:
     say(f'Rozumím: {message}')
 finish()
