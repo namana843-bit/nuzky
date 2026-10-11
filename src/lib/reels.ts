@@ -3,7 +3,7 @@ import { api, errorText, plainError } from "./api";
 import { send, sendBlocked, useAgent } from "./agent";
 import { useDock } from "./dock";
 import { openProject, refreshLibrary } from "./library";
-import { aiLocked, currentEpoch, projectDuration, useEditor, whenIdle } from "./store";
+import { MAIN_TRACK, aiLocked, currentEpoch, projectDuration, useEditor, whenIdle } from "./store";
 import { US } from "./time";
 import type { JobEvent, MadeReel, Project, ReelCandidate, ReelFraming, TranscriptWord } from "./types";
 
@@ -59,6 +59,14 @@ export function candidates(project: Project | undefined): ReelCandidate[] {
 
 export const candidateOf = (project: Project | undefined, id: string | null) => project?.reelCandidates?.find((c) => c.id === id);
 
+/** Width over height of the picture the reel starts on, which Center crop cuts to 9:16; 0 when there is none. */
+export function pictureAspect(project: Project | undefined, id: string | null): number {
+  const c = candidateOf(project, id);
+  const clip = c && project?.tracks.find((t) => t.id === MAIN_TRACK)?.clips.find((k) => k.startUs <= c.startUs && c.startUs < k.startUs + k.durationUs);
+  const asset = clip?.content.type === "media" ? project?.assets.find((a) => clip.content.type === "media" && a.id === clip.content.assetId) : undefined;
+  return asset && asset.width > 0 && asset.height > 0 ? asset.width / asset.height : 0;
+}
+
 /** A cut made since the reel was found moved its words, so making it would cut others. */
 export const moved = (c: ReelCandidate, words: TranscriptWord[] | null) =>
   !!words && c.status !== "made" && !(words[c.from]?.startUs === c.startUs && words[c.to]?.endUs === c.endUs);
@@ -100,15 +108,11 @@ export function choose(id: string) {
   if (c) useEditor.getState().seek(c.startUs);
 }
 
-/** Set when playback stopped at the current reel's end, so Play starts it again. */
-let atEnd = false;
-
 /** Plays the current reel to its end, from its start when it stopped there. */
 export function toggleReelPlay() {
-  const { playing, snap, seek, togglePlay } = useEditor.getState();
+  const { playing, snap, timeUs, seek, togglePlay } = useEditor.getState();
   const c = candidateOf(snap?.project, useReels.getState().current);
-  if (!playing && c && atEnd) seek(c.startUs);
-  atEnd = false;
+  if (!playing && c && timeUs === c.endUs) seek(c.startUs);
   togglePlay();
 }
 
@@ -118,7 +122,6 @@ export function playEnding() {
   const c = candidateOf(snap?.project, useReels.getState().current);
   if (!c) return;
   seek(Math.max(c.startUs, c.endUs - 3 * US));
-  atEnd = false;
   if (!playing) void api.play();
 }
 
@@ -127,7 +130,6 @@ useEditor.subscribe((s, prev) => {
   if (!useReels.getState().open || !s.playing) return;
   const c = candidateOf(s.snap?.project, useReels.getState().current);
   if (c && prev.timeUs < c.endUs && s.timeUs >= c.endUs) {
-    atEnd = true;
     void api.pause();
     useEditor.getState().seek(c.endUs);
   }
@@ -139,10 +141,12 @@ useEditor.subscribe((s) => {
   if (open && s.snap && !candidateOf(s.snap.project, current)) showBest(s.snap.project);
 });
 
-// Another project opened: its editor starts on the video.
+// Another project opened: its editor starts on the video, and reels still being made could not be marked made.
 useEditor.subscribe((s, prev) => {
-  if (prev.snap && s.snap && s.snap.sessionEpoch !== prev.snap.sessionEpoch && useReels.getState().open)
-    useReels.setState({ open: false, before: null, trim: null, current: null, searched: false, failed: null });
+  if (!prev.snap || !s.snap || s.snap.sessionEpoch === prev.snap.sessionEpoch) return;
+  const { job } = useReels.getState();
+  if (job) void api.cancelJob(job);
+  useReels.setState({ open: false, before: null, trim: null, current: null, searched: false, failed: null, job: null });
 });
 
 /** Changes one candidate as one undo step, built on the latest project; a made one stays as it is. */
@@ -165,13 +169,19 @@ export function pickAll() {
 }
 
 let boundsAsked = 0;
+/** The trim being measured, which Make waits for. */
+let measuring: Promise<void> = Promise.resolve();
 
 /**
  * Moves the reel to start at word `from` and end at word `to`. The engine measures how long it is once cut; a burst
  * of keys is one undo step.
  */
-export async function setBounds(id: string, from: number, to: number) {
+export function setBounds(id: string, from: number, to: number) {
   if (aiLocked()) return;
+  measuring = measure(id, from, to, currentEpoch());
+}
+
+async function measure(id: string, from: number, to: number, epoch: string | undefined) {
   const asked = ++boundsAsked;
   useReels.setState({ trim: { id, from, to } });
   let bounds: ReelCandidate;
@@ -182,8 +192,8 @@ export async function setBounds(id: string, from: number, to: number) {
     useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
     return;
   }
-  // A newer change is on its way and measures again.
-  if (asked !== boundsAsked) return;
+  // A newer change is on its way and measures again; another project has other words.
+  if (asked !== boundsAsked || currentEpoch() !== epoch) return;
   const { from: f, to: t, startUs, endUs, hook, durationUs } = bounds;
   await update(id, (c) => ({ ...c, from: f, to: t, startUs, endUs, hook, durationUs }), `reel-bounds:${id}`);
   if (asked === boundsAsked) useReels.setState({ trim: null });
@@ -193,12 +203,15 @@ export async function setBounds(id: string, from: number, to: number) {
 export function findBlocked(): string | null {
   const { agents } = useAgent.getState();
   if (agents && !agents.some((a) => a.path)) return "Install Claude Code or Codex first";
-  return sendBlocked();
+  return sendBlocked(false);
 }
 
 /** Asks the AI panel's agent for reels; they show up in the list as it proposes them. */
 export function findReels() {
-  if (aiLocked() || findBlocked()) return;
+  if (aiLocked()) return;
+  // Make a thumbnail waiting in the field would turn the message into a thumbnail request.
+  useAgent.setState({ thumbnail: false });
+  if (findBlocked()) return;
   useDock.setState({ open: true });
   useReels.setState({ finding: true });
   void send(FIND_REELS, "project");
@@ -220,7 +233,8 @@ export async function makeReels() {
   const { words } = useReels.getState().transcript;
   const ids = (snap?.project.reelCandidates ?? []).filter((c) => c.status === "picked" && !moved(c, words)).map((c) => c.id);
   if (ids.length === 0 || aiLocked() || useReels.getState().job) return;
-  // Picks made just before are part of what is made.
+  // Picks and trims made just before are part of what is made.
+  await measuring;
   await whenIdle();
   useReels.setState({ failed: null });
   try {
@@ -246,8 +260,11 @@ export function onReelsJob(job: JobEvent) {
   if (job.id !== useReels.getState().job || job.status === "running") return;
   useReels.setState({ job: null, failed: job.status === "failed" ? makeError(job.message ?? "") : null });
   if (job.status !== "done") return;
-  const made = JSON.parse(job.output ?? "[]") as MadeReel[];
-  useEditor.getState().toast({ kind: "success", text: made.length === 1 ? "Made 1 reel" : `Made ${made.length} reels` });
+  const { reels, unlisted } = JSON.parse(job.output ?? "{}") as { reels: MadeReel[]; unlisted: string | null };
+  const made = reels.length === 1 ? "Made 1 reel" : `Made ${reels.length} reels`;
+  if (unlisted)
+    useEditor.getState().toast({ kind: "warning", text: `${made} beside the long video, but your projects list could not be updated (${unlisted}). Open them with Open file… on the home screen.` });
+  else useEditor.getState().toast({ kind: "success", text: made });
 }
 
 /**

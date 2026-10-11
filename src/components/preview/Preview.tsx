@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pause, Play, SkipBack, SkipForward, Smartphone } from "lucide-react";
 import { api } from "../../lib/api";
 import { useCover } from "../../lib/cover";
-import { useReels } from "../../lib/reels";
+import { pictureAspect, useReels } from "../../lib/reels";
 import { projectDuration, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import type { SafeArea } from "../../lib/types";
@@ -116,9 +116,9 @@ export function Preview() {
   const cover = useCover((s) => s.open);
   // Choosing reels shows what Center crop keeps, and the clips cannot be moved.
   const reels = useReels((s) => s.open);
-  const framing = useReels((s) => s.framing);
-  const found = useEditor((s) => (s.snap?.project.reelCandidates?.length ?? 0) > 0);
-  const crop = framing === "crop" && found;
+  const crop = useReels((s) => s.framing === "crop");
+  const reel = useReels((s) => s.current);
+  const picture = useEditor((s) => (reels ? pictureAspect(s.snap?.project, reel) : 0));
   const { togglePlay, seek } = useEditor.getState();
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -168,7 +168,7 @@ export function Preview() {
             <div className="absolute inset-0 overflow-hidden bg-black shadow-[0_0_0_1px_rgb(255_255_255/.07)]">
               <canvas ref={canvasRef} className="h-full w-full" style={{ imageRendering: "auto" }} />
               {showSafe && area && canvas && !reels && <SafeZone area={area} width={canvas.width} height={canvas.height} />}
-              {reels && crop && canvas && <CropGuide width={canvas.width} height={canvas.height} />}
+              {reels && crop && canvas && picture > 0 && <CropGuide width={canvas.width} height={canvas.height} picture={picture} />}
               {empty && !engineError && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-6 text-center">
                   <p className="text-[13px] text-fg">Your video appears here</p>

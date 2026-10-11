@@ -388,21 +388,19 @@ impl Library {
     }
 
     /// Reels made of `source` join its collection and show on the home screen wherever they were written.
-    pub fn remember_reels(&self, source: &Path, reels: &[nuzky_mcp::reels::MadeReel]) {
-        let copied = self.update(|index| {
+    pub fn remember_reels(&self, source: &Path, reels: &[nuzky_mcp::reels::MadeReel]) -> Result<()> {
+        self.update(|index| {
             if let Some(collection) = index.members.get(&key(source)).cloned() {
                 for reel in reels {
                     index.members.insert(key(&reel.path), collection.clone());
                 }
             }
             Ok(())
-        });
-        if let Err(error) = copied {
-            log::error!("Cannot copy the reels' collection: {error:#}");
-        }
+        })?;
         for reel in reels {
             self.remember(&reel.path);
         }
+        Ok(())
     }
 
     /// Hides the projects at once and moves them to the Trash after `TRASH_DELAY`, unless restored.

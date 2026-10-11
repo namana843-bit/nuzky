@@ -247,16 +247,16 @@ function describeContext(c: PromptContext): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
-/** Why a message cannot be sent right now, or null. */
-export function sendBlocked(): string | null {
+/** Why a message cannot be sent right now, or null; `thumbnail`: whether it asks for one. */
+export function sendBlocked(thumbnail = useAgent.getState().thumbnail): string | null {
   const s = useAgent.getState();
   const info = s.agents?.find((a) => a.id === s.agent);
   if (s.agents && !info?.path) return `${info?.name ?? "The agent"} is not installed`;
   if (s.status !== "idle") return "Wait for the answer, or stop it";
   if (useEditor.getState().aiRun) return "Another agent is editing. Wait for it, or stop it in the top bar";
   const models = useCover.getState().models;
-  if (s.thumbnail && models?.unavailable) return "Finding faces doesn't work on this computer, so the AI can't make a thumbnail here";
-  if (s.thumbnail && models && !models.downloaded) return `Download the cover models first (${models.sizeMb} MB)`;
+  if (thumbnail && models?.unavailable) return "Finding faces doesn't work on this computer, so the AI can't make a thumbnail here";
+  if (thumbnail && models && !models.downloaded) return `Download the cover models first (${models.sizeMb} MB)`;
   return null;
 }
 

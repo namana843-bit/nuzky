@@ -99,6 +99,10 @@ def find_and_pick(r, bridge):
     order = r.s.run(f"return [...document.querySelectorAll('{LIST} [data-reel]')].map((c) => c.getAttribute('aria-label').split(',')[0])")
     r.check('the best moment comes first', order == ['Moment 1', 'Moment 2', 'Moment 3', 'Moment 4'], order)
     r.check('finding ends with the agent\'s answer', wait(lambda: not r.s.run('return window.__nuzky.reels.getState().finding'), 20))
+    kept = r.s.run("""const box = document.querySelector('section[aria-label=Preview] .border-dashed');
+        const frame = document.querySelector('section[aria-label=Preview] canvas');
+        return box && frame && box.getBoundingClientRect().width / frame.getBoundingClientRect().width;""")
+    r.check('Center crop marks the middle 9:16 of the wide picture', kept and abs(kept - 1080 * 9 / 16 / 1920) < 0.01, kept)
 
     run = bridge.call('begin_run', {'label': 'Look again'})['run_id']
     try:

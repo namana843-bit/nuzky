@@ -13,7 +13,6 @@ import { AiLock, Bars, Button, Checkbox, LockReason, ProgressBar, Segmented } fr
 
 const plural = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
 
-/** One centred block: icon, title, one line and what to do. */
 function Empty({ icon, title, children, actions }: { icon: React.ReactNode; title: string; children: React.ReactNode; actions?: React.ReactNode }) {
   return (
     <div className="m-auto flex max-w-[440px] flex-col items-center gap-1 px-4 py-6 text-center">

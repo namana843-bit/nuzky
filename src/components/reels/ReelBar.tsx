@@ -46,16 +46,26 @@ export function ReelBar() {
   );
 }
 
-/** What Center crop keeps of a wider frame: the middle 9:16, the sides dimmed as the safe zone dims. */
-export function CropGuide({ width, height }: { width: number; height: number }) {
-  const kept = (height * 9) / 16 / width;
-  if (kept >= 1) return null;
-  const side = `${((1 - kept) / 2) * 100}%`;
+/**
+ * What Center crop keeps of the picture, fitted into the `width`×`height` canvas as a clip is: its middle 9:16, the rest
+ * dimmed as the safe zone dims. `picture` is its width over height.
+ */
+export function CropGuide({ width, height, picture }: { width: number; height: number; picture: number }) {
+  const canvas = width / height;
+  const [pw, ph] = picture >= canvas ? [1, canvas / picture] : [picture / canvas, 1];
+  const kw = Math.min(pw, (ph * 9) / 16 / canvas);
+  const kh = Math.min(ph, (pw * canvas * 16) / 9);
+  if (kw > pw - 0.001 && kh > ph - 0.001) return null;
+  const pct = (v: number) => `${v * 100}%`;
+  const [left, top] = [(1 - kw) / 2, (1 - kh) / 2];
+  const band = "pointer-events-none absolute bg-black/45";
   return (
     <>
-      <div className="pointer-events-none absolute inset-y-0 left-0 bg-black/45" style={{ width: side }} />
-      <div className="pointer-events-none absolute inset-y-0 right-0 bg-black/45" style={{ width: side }} />
-      <div className="pointer-events-none absolute inset-y-0 border-x border-dashed border-fg/50" style={{ left: side, right: side }} />
+      <div className={`${band} inset-x-0 top-0`} style={{ height: pct(top) }} />
+      <div className={`${band} inset-x-0 bottom-0`} style={{ height: pct(top) }} />
+      <div className={`${band} left-0`} style={{ top: pct(top), bottom: pct(top), width: pct(left) }} />
+      <div className={`${band} right-0`} style={{ top: pct(top), bottom: pct(top), width: pct(left) }} />
+      <div className="pointer-events-none absolute border border-dashed border-fg/50" style={{ left: pct(left), top: pct(top), width: pct(kw), height: pct(kh) }} />
     </>
   );
 }

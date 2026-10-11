@@ -89,8 +89,10 @@ pub fn start_make_reels(
                     Ok(())
                 },
             )?;
-            worker.state::<AppState>().library.remember_reels(&source.session.path(), &made);
-            Ok(Some(serde_json::to_string(&made)?))
+            // The reels are made either way; the user hears when the home screen will not list them.
+            let listed = worker.state::<AppState>().library.remember_reels(&source.session.path(), &made);
+            let unlisted = listed.err().map(|error| format!("{error:#}"));
+            Ok(Some(serde_json::json!({ "reels": made, "unlisted": unlisted }).to_string()))
         }))
         .unwrap_or_else(|p| Err(anyhow::anyhow!("Making reels crashed: {}", panic_text(&p))));
         rep.finish(result, cancel.load(Ordering::Relaxed));
@@ -106,7 +108,6 @@ pub fn start_make_reels(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuzky_engine::edit::EditCmd;
     use nuzky_engine::model::ReelStatus;
     use nuzky_mcp::reels::ReelProposal;
     use nuzky_session::EndAction;
