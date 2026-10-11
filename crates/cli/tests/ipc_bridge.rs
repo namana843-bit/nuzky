@@ -307,11 +307,14 @@ fn current_attaches_while_agent_access_is_on_and_never_headless() {
     assert_eq!(app.host.session.state().unwrap().open_run.unwrap().run_id, run["run_id"]);
     app.access.store(false, Ordering::Release);
     wait(|| app.host.session.state().unwrap().open_run.is_none());
+    // The first call after the app let go says so, rather than act on whatever is open next.
+    bridge.error("get_state", json!({}), "APP_CLOSED");
     bridge.error("get_state", json!({}), "AGENT_ACCESS_OFF");
     app.access.store(true, Ordering::Release);
     assert_eq!(bridge.call("get_state", json!({}))["open_run"], Value::Null);
     app.listener.take();
     assert!(!current.exists(), "closing the project removes its name");
+    bridge.error("get_state", json!({}), "APP_CLOSED");
     bridge.error("get_state", json!({}), "APP_NOT_RUNNING");
     app.listener = Some(Listener::at(app.host.clone(), app.socket.clone(), app.access.clone()).unwrap());
     assert_eq!(bridge.call("get_state", json!({}))["name"], "Before");

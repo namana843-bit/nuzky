@@ -13,7 +13,6 @@ const STATE_TEXT: Record<AgentConnection["state"], string> = {
   unreadable: "Its settings file could not be read",
 };
 
-/** Agents Nuzky does not connect itself: the label, and whom the toast names. */
 const COPIES: { setup: AgentSetup; label: string; name: string }[] = [
   { setup: "claude", label: "Copy for Claude", name: "Claude Desktop" },
   { setup: "cursor", label: "Copy for Cursor", name: "Cursor" },

@@ -285,9 +285,9 @@ fn connection(
         receive::<Hello>(&mut reader, MAX_HELLO_BYTES, Some(Instant::now() + HELLO_TIMEOUT)).and_then(|hello| {
             ensure!(hello.nuzky == PROTOCOL, "PROTOCOL_MISMATCH: expected nuzky {PROTOCOL}");
             ensure!(security::equal_token(&hello.token, token), "UNAUTHORIZED: invalid token");
-            // Marked before the check, so access turned off right after it still drops this client.
-            current.store(hello.current, Ordering::Release);
             ensure!(!hello.current || agent_access.load(Ordering::Acquire), ACCESS_OFF);
+            // Access turned off after the check still drops it: the listener looks again every round.
+            current.store(hello.current, Ordering::Release);
             Ok(hello)
         });
     let hello = match hello {

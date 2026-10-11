@@ -69,7 +69,11 @@ impl Current {
     fn call(&self, name: String, args: Value) -> Result<CallToolResult> {
         let remote = {
             let mut attached = self.remote.lock().unwrap();
-            match attached.as_ref().filter(|remote| !remote.closed()) {
+            // The project the agent read may be gone, so this call says so instead of acting on another one.
+            if attached.take_if(|remote| remote.closed()).is_some() {
+                bail!(DETACHED);
+            }
+            match attached.as_ref() {
                 Some(remote) => remote.clone(),
                 None => {
                     let project = crate::ipc::current_project()?.context(NOT_OPEN)?;
@@ -78,7 +82,14 @@ impl Current {
                 }
             }
         };
-        remote.call(name, args).map_err(|error| if remote.closed() { anyhow::anyhow!(DETACHED) } else { error })
+        remote.call(name, args).map_err(|error| {
+            if !remote.closed() {
+                return error;
+            }
+            // This call already said so; the next one attaches.
+            self.remote.lock().unwrap().take_if(|attached| Arc::ptr_eq(attached, &remote));
+            anyhow::anyhow!(DETACHED)
+        })
     }
 }
 
