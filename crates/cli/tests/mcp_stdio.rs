@@ -193,7 +193,7 @@ fn initialize_list_state_edit_end_undo_over_stdio() {
     let mut c = Client::new(true);
     let list = c.rpc("tools/list", json!({}));
     let tools = list["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 32);
+    assert_eq!(tools.len(), 33);
     let search = tools.iter().find(|t| t["name"] == "search_sounds").unwrap();
     assert_eq!(search["annotations"]["openWorldHint"], true);
     assert_eq!(search["annotations"]["readOnlyHint"], true);
