@@ -101,6 +101,7 @@ def main(args):
         os.environ.setdefault('PKG_CONFIG_PATH', brew('ffmpeg@8') + '/lib/pkgconfig')
         os.environ.setdefault('SDKROOT', subprocess.run(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], capture_output=True,
                                                         text=True).stdout.strip())
+        subprocess.run(['bash', 'scripts/seed-target.sh'], cwd=ROOT, check=True)
     # nuzky-analyze recognises an exported file again; with the CLI in the same build it gets the GPU too. Every target
     # of the workspace resolves the features `cargo test` does, so this adds only the app's binary to its build.
     subprocess.run(['cargo', 'build', '--locked', '--workspace', '--all-targets'], cwd=ROOT, check=True)

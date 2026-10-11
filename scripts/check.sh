@@ -14,6 +14,7 @@ if [ "$os" = Darwin ]; then
   export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-$(brew --prefix ffmpeg@8)/lib/pkgconfig}"
   export SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
   PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+  bash scripts/seed-target.sh || exit 1
 fi
 
 # One gate at a time per machine, whichever checkout it runs in: two at once take longer than one after the
