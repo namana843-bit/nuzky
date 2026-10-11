@@ -382,6 +382,7 @@ export async function send(text = useAgent.getState().draft.trim(), about: AiAbo
   } catch (e) {
     const text = errorText(e);
     fail(text.startsWith("NOT_INSTALLED") ? "NOT_INSTALLED" : "AGENT_FAILED", plainError(text));
+    void watchJobs();
   }
 }
 
@@ -399,7 +400,6 @@ export function choose(id: string, label: string) {
 
 export async function stop() {
   const { turn, status, jobs } = useAgent.getState();
-  // Between turns only what the agent left running is left to stop.
   const between = status === "idle" && jobs.some((j) => j.status === "running");
   if (!turn || (status !== "working" && !between)) return;
   useAgent.setState(between ? { jobs: jobs.map((j) => ({ ...j, cancel_requested: true })) } : { status: "stopping" });

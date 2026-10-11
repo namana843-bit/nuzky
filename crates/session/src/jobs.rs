@@ -30,11 +30,18 @@ pub struct JobState {
 }
 
 impl JobState {
-    fn json(&self) -> Value {
+    /// A finished analysis's result can be large, and polling progress does not need it.
+    fn summary(&self) -> Value {
         json!({"job_id": self.id, "kind": self.kind, "revision": self.stamp.revision,
             "session_epoch": self.stamp.session_epoch, "status": self.status,
             "progress": self.progress, "phase": self.phase, "cancel_requested": self.cancel.load(Ordering::Relaxed),
-            "owner": self.owner, "run_id": self.run_id, "result": self.result, "error": self.error})
+            "owner": self.owner, "run_id": self.run_id, "error": self.error})
+    }
+
+    fn json(&self) -> Value {
+        let mut job = self.summary();
+        job["result"] = json!(self.result);
+        job
     }
 }
 
@@ -189,14 +196,14 @@ impl Jobs {
         entries.values().map(|state| state.lock().unwrap()).filter(|s| s.status == "running").map(|s| s.kind).collect()
     }
 
-    /// The jobs of `owner`, oldest first: those running and those finished lately.
+    /// The jobs of `owner` without their results, oldest first: those running and those finished lately.
     pub fn owned_by(&self, owner: &str) -> Vec<Value> {
         let entries = self.entries.lock().unwrap();
         let mut jobs: Vec<_> = entries
             .values()
             .map(|state| state.lock().unwrap())
             .filter(|s| s.owner == owner)
-            .map(|s| (s.sequence, s.json()))
+            .map(|s| (s.sequence, s.summary()))
             .collect();
         jobs.sort_unstable_by_key(|(sequence, _)| *sequence);
         jobs.into_iter().map(|(_, job)| job).collect()
@@ -205,13 +212,14 @@ impl Jobs {
     /// A client disconnected: its jobs stop, unless it is part of a conversation.
     pub fn cancel_owner(&self, owner: &str) {
         let mut lifecycle = self.lifecycle.lock().unwrap();
-        if lifecycle.conversations.contains(owner) {
-            return;
+        let conversation = lifecycle.conversations.contains(owner);
+        if !conversation {
+            lifecycle.disconnected_clients.insert(owner.into());
         }
-        lifecycle.disconnected_clients.insert(owner.into());
         for state in self.entries.lock().unwrap().values() {
             let state = state.lock().unwrap();
-            if state.owner == owner && state.status == "running" {
+            // A reframe writes into the turn's run, which ends with the connection.
+            if state.owner == owner && state.status == "running" && (!conversation || state.kind == "reframe") {
                 state.cancel.store(true, Ordering::Relaxed);
             }
         }
@@ -307,5 +315,31 @@ mod tests {
         assert_eq!(result["status"], "cancelled");
         assert_eq!(result["result"], Value::Null);
         assert_eq!(result["revision"], 7);
+    }
+
+    #[test]
+    fn a_conversation_keeps_its_jobs_after_a_turn_except_a_reframe() {
+        let jobs = Jobs::default();
+        jobs.begin_conversation("chat");
+        let start = |kind| {
+            let stamp = Stamp { revision: 1, session_epoch: "epoch".into() };
+            let started = jobs.start("chat", None, kind, stamp, |cancel, _| {
+                while !cancel.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Ok(json!({}))
+            });
+            started.unwrap()["job_id"].as_str().unwrap().to_owned()
+        };
+        let export = start("export");
+        let reframe = start("reframe");
+        let cancelled = |id: &str| jobs.get(id, false).unwrap()["cancel_requested"] == true;
+        jobs.cancel_owner("chat");
+        assert!(!cancelled(&export));
+        assert!(cancelled(&reframe));
+        assert!(jobs.owned_by("chat").iter().all(|job| job.get("result").is_none()));
+        jobs.end_conversation("chat");
+        assert!(cancelled(&export));
+        jobs.shutdown();
     }
 }
