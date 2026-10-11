@@ -127,7 +127,7 @@ export function Hero() {
               <div className="absolute inset-0 overflow-hidden ring-1 ring-white/20">
                 <Image
                   src="/media/ugc.jpg"
-                  alt="A creator holding a serum bottle, talking to the camera"
+                  alt="A creator talking to the camera about a serum"
                   fill
                   loading="eager"
                   fetchPriority="high"

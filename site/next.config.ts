@@ -21,6 +21,7 @@ const markdown = [
 const config: NextConfig = {
   turbopack: { root: repoRoot },
   outputFileTracingRoot: repoRoot,
+  images: { formats: ["image/avif", "image/webp"] },
   rewrites: async () => ({ beforeFiles: markdown, afterFiles: [], fallback: [] }),
 };
 
