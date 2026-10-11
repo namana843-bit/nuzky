@@ -181,7 +181,8 @@ fn built_in_sounds_are_listed_and_added_with_their_credit() {
     assert_eq!(assets[0]["credit"]["title"], "Whoosh");
     assert_eq!(assets[0]["credit"]["license"], "cc0");
     let file = PathBuf::from(assets[0]["path"].as_str().unwrap());
-    assert!(file.starts_with(c.dir.join("data/nuzky/sounds")) && file.is_file(), "{file:?}");
+    // The temporary folder is a link on macOS (/var to /private/var); the sound is in its real path.
+    assert!(file.starts_with(c.dir.canonicalize().unwrap().join("data/nuzky/sounds")) && file.is_file(), "{file:?}");
     let clips: Vec<_> =
         disk["tracks"].as_array().unwrap().iter().flat_map(|t| t["clips"].as_array().unwrap()).collect();
     assert_eq!(clips.iter().map(|c| c["startUs"].as_i64().unwrap()).collect::<Vec<_>>(), [1_500_000, 4_000_000]);
