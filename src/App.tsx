@@ -201,7 +201,7 @@ function onJob(job: JobEvent) {
       toast({ kind: "success", text: "Export finished", action: job.output ? { label: "Show in folder", run: () => revealItemInDir(job.output!) } : undefined });
       useEditor.setState({ exportJobId: null });
     }
-    if (job.status === "failed") toast({ kind: "error", text: `Export failed: ${job.message}`, action: { label: "Details", run: () => useEditor.setState({ exportOpen: true }) } });
+    if (job.status === "failed") toast({ kind: "error", text: `Export failed: ${plainError(job.message ?? "")}`, action: { label: "Details", run: () => useEditor.setState({ exportOpen: true }) } });
   }
 }
 

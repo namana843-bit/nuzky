@@ -878,7 +878,7 @@ fn download_vad(cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathB
     model_download::download(&url, &models_dir().join(VAD_MODEL), VAD_INTEGRITY, cancel, |value| {
         rep.progress(value, Some("Downloading voice detector"))
     })
-    .map_err(|error| download_failed(error, "voice detector"))
+    .map_err(|error| download_failed(error, "speech model"))
 }
 
 /// A download that failed without saying why in a code (`CANCELLED`, `MODEL_INVALID`…) reads as one the person can

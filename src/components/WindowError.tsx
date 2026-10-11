@@ -1,6 +1,8 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { api } from "../lib/api";
 import { reportBug, type Say } from "../lib/diagnostics";
+import { LogsButton } from "./Feedback";
 import { Button } from "./ui";
 
 const log = (message: string) => void api.logUiError(message).catch(() => {});
@@ -32,10 +34,20 @@ export class WindowErrorBoundary extends Component<{ children: ReactNode }, { fa
             Your project is saved. Reload the window to keep editing.
           </p>
           {/* Toasts went with the rest of the window, so how reporting went shows here. */}
-          {this.state.said && (
-            <p role={this.state.said[0] === "error" ? "alert" : "status"} className={`mt-3 text-[13px] ${this.state.said[0] === "error" ? "text-danger" : "text-fg"}`}>
+          {this.state.said?.[0] === "success" && (
+            <p role="status" className="mt-3 flex gap-1.5 text-[13px] text-muted">
+              <CheckCircle2 size={16} className="mt-px shrink-0 text-ok" />
               {this.state.said[1]}
             </p>
+          )}
+          {this.state.said?.[0] === "error" && (
+            <div role="alert" className="mt-3 flex gap-1.5 text-[13px] text-danger">
+              <AlertCircle size={16} className="mt-px shrink-0" />
+              <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                <p>{this.state.said[1]}</p>
+                <LogsButton />
+              </div>
+            </div>
           )}
           <div className="mt-6 flex justify-end gap-2.5">
             <Button pill onClick={() => void reportBug((...said) => this.setState({ said }))}>
