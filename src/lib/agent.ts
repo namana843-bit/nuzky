@@ -37,7 +37,7 @@ export interface RunChange {
   atUs: number | null;
 }
 
-/** What a run that ended changed, sent just before it ends. */
+/** What a run that ended changed: sent just before it ends, and again with what the cut removed once counted. */
 interface RunSummary {
   runId: string;
   changes: RunChange[];
@@ -68,8 +68,9 @@ export type ChatItem =
       snap: Snapshot | null;
       stopped: boolean;
       changes: RunChange[] | null;
-      /** The run, when it cut something a recap can show. */
-      recapRun: string | null;
+      runId: string | null;
+      /** It cut something a recap can show. */
+      cut: boolean;
       undone?: boolean;
     }
   | { kind: "stopped" }
@@ -401,7 +402,8 @@ export function panelRunEnded(label: string, snap: Snapshot | null): boolean {
     snap,
     stopped: s.status === "stopping",
     changes: summary?.changes ?? null,
-    recapRun: summary?.cut ? summary.runId : null,
+    runId: summary?.runId ?? null,
+    cut: summary?.cut ?? false,
   };
   useAgent.setState({ items: [...s.items, run] });
   return true;
@@ -417,5 +419,11 @@ export function listenAgentEvents() {
   if (listening) return;
   listening = true;
   void listen<AgentEvent>("agent", (e) => onEvent(e.payload));
-  void listen<RunSummary>("run-summary", (e) => (pendingSummary = e.payload));
+  void listen<RunSummary>("run-summary", ({ payload }) => {
+    // The counts arrive after the run's card when they took longer than ending the run.
+    const { items } = useAgent.getState();
+    if (!items.some((it) => it.kind === "run" && it.runId === payload.runId)) return void (pendingSummary = payload);
+    const next = items.map((it) => (it.kind === "run" && it.runId === payload.runId ? { ...it, changes: payload.changes, cut: payload.cut } : it));
+    useAgent.setState({ items: next });
+  });
 }

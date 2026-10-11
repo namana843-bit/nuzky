@@ -432,8 +432,9 @@ impl ProjectSession {
         Ok((read(&versions.0)?, read(&versions.1)?))
     }
 
-    /// The files the main track plays in any kept version, so a take dropped since the import is still known.
-    pub fn kept_main_assets(&self) -> Result<Vec<String>> {
+    /// The files the main track plays in any kept version, in the order they first appear and as the newest of
+    /// those versions describes them, so a take dropped since the import, even from the library, is still known.
+    pub fn kept_main_assets(&self) -> Result<Vec<nuzky_engine::model::Asset>> {
         let versions: Vec<_> = {
             let inner = self.inner.lock().unwrap();
             let disk =
@@ -441,19 +442,22 @@ impl ProjectSession {
             let history = disk.as_ref().unwrap_or(&inner.history);
             history.versions.iter().map(|v| v.json.clone()).collect()
         };
-        let mut assets = HashSet::new();
+        let mut assets: Vec<nuzky_engine::model::Asset> = Vec::new();
         for json in versions {
             let project: Project =
                 serde_json::from_str(&json).context("HISTORY_CORRUPT: a kept project cannot be read")?;
             for clip in project.tracks.iter().filter(|t| t.id == nuzky_engine::edit::MAIN_TRACK).flat_map(|t| &t.clips)
             {
-                if let nuzky_engine::model::ClipContent::Media { asset_id, .. } = &clip.content {
-                    assets.insert(asset_id.clone());
+                if let nuzky_engine::model::ClipContent::Media { asset_id, .. } = &clip.content
+                    && let Some(asset) = project.asset(asset_id)
+                {
+                    match assets.iter_mut().find(|a| a.id == asset.id) {
+                        Some(known) => *known = asset.clone(),
+                        None => assets.push(asset.clone()),
+                    }
                 }
             }
         }
-        let mut assets: Vec<_> = assets.into_iter().collect();
-        assets.sort();
         Ok(assets)
     }
 

@@ -794,6 +794,10 @@ export type RecapInfo = {
   after: string,
   removed?: string | null,
   /**
+   * Passages cut; a recap has nothing to show without one.
+   */
+  cuts: number,
+  /**
    * How long the recap is with its end card.
    */
   durationUs: number,

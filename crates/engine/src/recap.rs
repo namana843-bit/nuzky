@@ -412,8 +412,8 @@ impl<'a> Painter<'a> {
         Text { image: image.image, w, h, pad, size: style.font_size }
     }
 
-    /// Pieces of text in a row on one baseline from `x`, `gap` pixels apart; returns where the row ends.
-    fn row(&mut self, draws: &mut Vec<Draw>, x: f32, baseline: f32, pieces: &[(String, TextStyle)], gap: f32) -> f32 {
+    /// Pieces of text in a row on one baseline from `x`, `gap` pixels apart.
+    fn row(&mut self, draws: &mut Vec<Draw>, x: f32, baseline: f32, pieces: &[(String, TextStyle)], gap: f32) {
         let mut at = x;
         for (i, (text, style)) in pieces.iter().enumerate() {
             let piece = self.text(text, style);
@@ -423,7 +423,6 @@ impl<'a> Painter<'a> {
             draws.push(piece.at(at, baseline));
             at += piece.ink();
         }
-        at
     }
 
     fn row_width(&mut self, pieces: &[(String, TextStyle)], gap: f32) -> f32 {

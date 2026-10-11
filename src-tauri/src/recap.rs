@@ -26,13 +26,16 @@ pub struct RecapInfo {
     pub after: String,
     #[cfg_attr(test, ts(optional = nullable))]
     pub removed: Option<String>,
+    /// Passages cut; a recap has nothing to show without one.
+    pub cuts: usize,
     /// How long the recap is with its end card.
     pub duration_us: i64,
     /// Files a cut touches that have no transcript.
     pub untranscribed: Vec<String>,
 }
 
-fn build(host: &Host, run_id: Option<&str>) -> Result<Recap> {
+/// The recap and the files its cuts touch that have no transcript.
+fn build(host: &Host, run_id: Option<&str>) -> Result<(Recap, Vec<String>)> {
     let (before, after) = match run_id {
         Some(id) => host.session.run_pair(id)?,
         None => {
@@ -58,9 +61,8 @@ pub async fn recap_info(
 ) -> Result<RecapInfo, String> {
     let host = host(&app, expected_epoch.as_deref())?;
     tauri::async_runtime::spawn_blocking(move || -> Result<RecapInfo> {
-        let recap = build(&host, run_id.as_deref())?;
-        let derived = nuzky_mcp::transcript::derive(&recap.before, &host.transcripts)?;
-        let untranscribed = nuzky_mcp::recap::untranscribed(&recap.before, &recap.cuts, &derived)
+        let (recap, missing) = build(&host, run_id.as_deref())?;
+        let untranscribed = missing
             .iter()
             .filter_map(|id| {
                 recap.before.asset(id).map(|a| {
@@ -76,6 +78,7 @@ pub async fn recap_info(
             before: nuzky_engine::recap::duration_text(totals.before_us),
             after: nuzky_engine::recap::duration_text(totals.after_us),
             removed: nuzky_mcp::recap::line(&totals),
+            cuts: recap.cuts.len(),
             duration_us: nuzky_engine::recap::duration_us(&recap, true),
             untranscribed,
         })
@@ -97,7 +100,7 @@ pub async fn start_recap(
     check_destination(&out, replace_existing)?;
     let host = host(&app, expected_epoch.as_deref())?;
     let source = host.clone();
-    let mut recap = tauri::async_runtime::spawn_blocking(move || build(&source, run_id.as_deref()))
+    let (mut recap, _) = tauri::async_runtime::spawn_blocking(move || build(&source, run_id.as_deref()))
         .await
         .map_err(|e| e.to_string())?
         .map_err(crate::err)?;

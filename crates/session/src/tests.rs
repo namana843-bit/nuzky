@@ -1200,8 +1200,9 @@ fn recap_kept_main_assets_includes_takes_that_left() {
     )
     .unwrap();
     s.edit(vec![EditCmd::RemoveAsset { asset_id: "take".into() }], None, Expect::default()).unwrap();
-    assert_eq!(s.kept_main_assets().unwrap(), ["take"]);
+    let ids = |assets: Vec<Asset>| assets.into_iter().map(|a| a.id).collect::<Vec<_>>();
+    assert_eq!(ids(s.kept_main_assets().unwrap()), ["take"]);
     drop(s);
     let readonly = ProjectSession::open(&f.0, Mode::ReadOnly, None).unwrap();
-    assert_eq!(readonly.kept_main_assets().unwrap(), ["take"]);
+    assert_eq!(ids(readonly.kept_main_assets().unwrap()), ["take"]);
 }

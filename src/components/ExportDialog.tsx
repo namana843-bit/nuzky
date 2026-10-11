@@ -300,7 +300,7 @@ export function ExportDialog() {
         ? recap.error
           ? "This recap cannot be made."
           : "Counting what was cut…"
-        : info.totals.afterUs >= info.totals.beforeUs
+        : info.cuts === 0
           ? "Nothing was cut out, so a recap has nothing to show."
           : null;
   const exportBlocked = what === "recap" ? recapBlocked : blocked;
@@ -398,7 +398,7 @@ export function ExportDialog() {
                 )}
                 <span className="text-right text-[13px] text-muted">Result</span>
                 <p className="tabular min-w-0 text-[13px] text-fg" aria-live="polite">
-                  {info && info.totals.afterUs >= info.totals.beforeUs ? (
+                  {info?.cuts === 0 ? (
                     <span className="text-muted">{recapRun ? "Nothing was cut in this run" : "Nothing was cut since the import"}</span>
                   ) : info ? (
                     <>

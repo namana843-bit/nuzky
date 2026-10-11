@@ -375,11 +375,11 @@ function RunCard({ item, index }: { item: Extract<ChatItem, { kind: "run" }>; in
       ) : (
         !item.snap && <p className="text-[12px] text-muted">Nothing in the project changed.</p>
       )}
-      {item.recapRun && !item.undone && (
+      {item.runId && item.cut && !item.undone && (
         <Button
           className="ml-6 h-7 self-start px-2.5 text-[12px]"
           title="A short vertical video of how this run cut the video"
-          onClick={() => openRecap(item.recapRun)}
+          onClick={() => openRecap(item.runId)}
         >
           <Clapperboard size={13} /> Export recap…
         </Button>

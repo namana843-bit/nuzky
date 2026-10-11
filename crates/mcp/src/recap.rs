@@ -5,34 +5,31 @@ use anyhow::Result;
 use nuzky_engine::{
     Project,
     edit::{EditCmd, Editor, MAIN_TRACK},
-    model::{AssetKind, ClipContent},
+    model::{Asset, AssetKind, ClipContent},
     recap::{Recap, RecapCut, RecapTotals, RecapWord},
 };
 use nuzky_session::{summary, transcripts::TranscriptStore};
 
 use crate::transcript::{self, Derived};
 
-/// The recording as imported: every video the main track plays now or played in a kept version (`main_assets`),
-/// whole, one after another in import order.
-pub fn raw_import(project: &Project, main_assets: &[String]) -> Result<Project> {
+/// The recording as imported: every video the main track plays now or played in a kept version (`kept`, in the
+/// order they first appear), whole, one after another, with the project's word corrections.
+pub fn raw_import(project: &Project, kept: &[Asset]) -> Result<Project> {
     let mut raw = Project::new(&project.name);
     raw.canvas = project.canvas.clone();
+    raw.word_corrections = project.word_corrections.clone();
     let mut editor = Editor::new(raw);
-    let assets: Vec<_> = project
-        .assets
-        .iter()
-        .filter(|a| {
-            a.kind == AssetKind::Video
-                && (main_assets.contains(&a.id)
-                    || project
-                        .tracks
-                        .iter()
-                        .filter(|t| t.id == MAIN_TRACK)
-                        .flat_map(|t| &t.clips)
-                        .any(|c| matches!(&c.content, ClipContent::Media { asset_id, .. } if asset_id == &a.id)))
-        })
-        .cloned()
-        .collect();
+    let playing =
+        project.tracks.iter().filter(|t| t.id == MAIN_TRACK).flat_map(|t| &t.clips).filter_map(|c| match &c.content {
+            ClipContent::Media { asset_id, .. } => project.asset(asset_id),
+            ClipContent::Text { .. } => None,
+        });
+    let mut assets: Vec<Asset> = Vec::new();
+    for asset in kept.iter().chain(playing).filter(|a| a.kind == AssetKind::Video) {
+        if !assets.iter().any(|a| a.id == asset.id) {
+            assets.push(project.asset(&asset.id).unwrap_or(asset).clone());
+        }
+    }
     let mut cmds = vec![EditCmd::AddAssets { assets: assets.clone() }];
     cmds.extend(assets.into_iter().map(|a| EditCmd::AddClip {
         asset_id: a.id,
@@ -58,12 +55,31 @@ pub fn untranscribed(before: &Project, cuts: &[RecapCut], derived: &Derived) -> 
         .collect()
 }
 
-pub fn recap(before: Project, after: Project, transcripts: &TranscriptStore) -> Result<Recap> {
-    let derived = transcript::derive(&before, transcripts)?;
-    Ok(build(before, after, derived))
+/// The recap of the cut from `before` to `after`, and the files it touches that have no transcript.
+pub fn recap(before: Project, after: Project, transcripts: &TranscriptStore) -> Result<(Recap, Vec<String>)> {
+    let derived = transcript::derive(&main_track(&before), transcripts)?;
+    let recap = build(before, after, &derived);
+    let missing = untranscribed(&recap.before, &recap.cuts, &derived);
+    Ok((recap, missing))
 }
 
-fn build(before: Project, after: Project, derived: Derived) -> Recap {
+/// Only the main track, heard whatever its volume, so the words counted are those of the cut recording and
+/// never an overlay's, and a muted take keeps its own.
+fn main_track(project: &Project) -> Project {
+    let mut main = project.clone();
+    main.tracks.retain(|t| t.id == MAIN_TRACK);
+    for track in &mut main.tracks {
+        track.muted = false;
+        for clip in &mut track.clips {
+            if let ClipContent::Media { volume, .. } = &mut clip.content {
+                *volume = 1.0;
+            }
+        }
+    }
+    main
+}
+
+fn build(before: Project, after: Project, derived: &Derived) -> Recap {
     let change = summary::cut(&before, &after);
     let mut ranges = Vec::new();
     for clip in before.tracks.iter().filter(|t| t.id == MAIN_TRACK).flat_map(|t| &t.clips) {
@@ -91,7 +107,7 @@ fn build(before: Project, after: Project, derived: Derived) -> Recap {
             _ => cuts.push(RecapCut { start_us, end_us, words: 0, retakes: 0 }),
         }
     }
-    let transcribed = untranscribed(&before, &cuts, &derived).is_empty();
+    let transcribed = untranscribed(&before, &cuts, derived).is_empty();
     let mut recap = Recap { before, after, cuts, words: Vec::new(), transcribed, tick: None, whoosh: None };
     if !transcribed {
         return recap;
@@ -222,7 +238,7 @@ mod tests {
             Word { start_us: 800_000, end_us: 1_200_000, text: "start".into(), probability: 1.0 },
             Word { start_us: 1_800_000, end_us: 2_200_000, text: "end".into(), probability: 1.0 },
         ];
-        let r = build(p.clone(), delete(&p, &[(1_000_000, 2_000_000)]), derived(&p, w));
+        let r = build(p.clone(), delete(&p, &[(1_000_000, 2_000_000)]), &derived(&p, w));
         assert_eq!(r.words.iter().map(|w| w.removed).collect::<Vec<_>>(), [true, false]);
         assert_eq!(r.cuts[0].words, 1);
         assert_eq!(line(&r.totals()).as_deref(), Some("Removed 1 word"));
@@ -236,10 +252,10 @@ mod tests {
         let groups = nuzky_analysis::retakes(&d.words).groups;
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].keep, 1);
-        let r = build(p.clone(), delete(&p, &[(2_000_000, 4_000_000)]), d);
+        let r = build(p.clone(), delete(&p, &[(2_000_000, 4_000_000)]), &d);
         assert_eq!(r.totals().retakes, Some(1));
         assert_eq!(line(&r.totals()).as_deref(), Some("Removed 4 words and 1 retake"));
-        let r = build(p.clone(), delete(&p, &[(0, 4_000_000)]), derived(&p, w));
+        let r = build(p.clone(), delete(&p, &[(0, 4_000_000)]), &derived(&p, w));
         assert_eq!(r.totals().retakes, Some(0));
     }
 
@@ -249,14 +265,14 @@ mod tests {
         let w = words("Měl jsem několik… Pak ale přišel domů.");
         let d = derived(&p, w);
         assert_eq!(nuzky_analysis::retakes(&d.words).unfinished.len(), 1);
-        let r = build(p.clone(), delete(&p, &[(0, 1_500_000)]), d);
+        let r = build(p.clone(), delete(&p, &[(0, 1_500_000)]), &d);
         assert_eq!(r.totals().retakes, Some(1));
         let p = project(&["take", "other"]);
-        let r = build(p.clone(), delete(&p, &[(0, 10_000_000)]), derived(&p, words("A whole take.")));
+        let r = build(p.clone(), delete(&p, &[(0, 10_000_000)]), &derived(&p, words("A whole take.")));
         assert_eq!(r.totals().retakes, Some(1));
         let mut p = project(&["other", "take"]);
         p.apply(EditCmd::AddPictureInPicture { asset_id: "take".into(), start_us: 0, duration_us: None }).unwrap();
-        let r = build(p.clone(), delete(&p, &[(10_000_000, 20_000_000)]), derived(&p, words("Hello.")));
+        let r = build(p.clone(), delete(&p, &[(10_000_000, 20_000_000)]), &derived(&p, words("Hello.")));
         assert_eq!(r.totals().retakes, Some(1), "an earlier overlay is not the gone main-track take");
     }
 
@@ -266,7 +282,7 @@ mod tests {
         let same = words("Dneska vám ukážu video.");
         let d = Derived::new(&p, HashMap::from([("take".into(), same.clone()), ("other".into(), same)]), vec![]);
         assert_eq!(nuzky_analysis::retakes(&d.words).groups.len(), 1);
-        let r = build(p.clone(), delete(&p, &[(0, 10_000_000)]), d);
+        let r = build(p.clone(), delete(&p, &[(0, 10_000_000)]), &d);
         assert_eq!(r.totals().retakes, Some(1));
     }
 
@@ -276,7 +292,7 @@ mod tests {
         let r = build(
             p.clone(),
             delete(&p, &[(1_000_000, 2_000_000), (4_000_000, 5_000_000)]),
-            derived(&p, words("Hello.")),
+            &derived(&p, words("Hello.")),
         );
         assert_eq!((r.totals().words, r.totals().retakes, r.totals().pauses), (Some(0), Some(0), Some(2)));
         assert_eq!(line(&r.totals()).as_deref(), Some("Removed 2 pauses"));
@@ -286,7 +302,7 @@ mod tests {
     fn recap_missing_cut_transcript_hides_all_counts() {
         let p = project(&["take", "other"]);
         let d = Derived::new(&p, HashMap::from([("take".into(), words("Hello."))]), vec!["other".into()]);
-        let r = build(p.clone(), delete(&p, &[(0, 1_000_000), (10_000_000, 11_000_000)]), d);
+        let r = build(p.clone(), delete(&p, &[(0, 1_000_000), (10_000_000, 11_000_000)]), &d);
         assert!(!r.transcribed);
         assert!(r.words.is_empty());
         assert!(r.cuts.iter().all(|c| c.words == 0 && c.retakes == 0));
@@ -304,12 +320,23 @@ mod tests {
         p.apply(EditCmd::AddPictureInPicture { asset_id: "overlay".into(), start_us: 0, duration_us: None }).unwrap();
         p.apply(EditCmd::AddClip { asset_id: "audio".into(), start_us: Some(0), track_id: None }).unwrap();
         p.canvas.fps = 60;
-        let r = raw_import(&p, &["left".into(), "current".into(), "audio".into()]).unwrap();
+        let mut dropped = p.assets[0].clone();
+        dropped.id = "dropped".into();
+        let kept = [p.assets[0].clone(), dropped, p.assets[1].clone(), p.assets[3].clone()];
+        p.word_corrections.push(nuzky_engine::model::WordCorrection {
+            asset_id: "current".into(),
+            source_start_us: 0,
+            original: "Wrong".into(),
+            text: "Right".into(),
+        });
+        let r = raw_import(&p, &kept).unwrap();
         assert_eq!(r.name, p.name);
         assert_eq!(r.canvas, p.canvas);
-        assert_eq!(r.assets.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["left", "current"]);
+        assert_eq!(r.word_corrections, p.word_corrections);
+        // A take removed from the library since is still part of the recording, as history describes it.
+        assert_eq!(r.assets.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["left", "dropped", "current"]);
         let clips = &r.tracks[0].clips;
-        assert_eq!(clips.len(), 2);
+        assert_eq!(clips.len(), 3);
         for (i, c) in clips.iter().enumerate() {
             assert_eq!((c.start_us, c.duration_us), (i as i64 * 10_000_000, 10_000_000));
             assert!(matches!(&c.content, ClipContent::Media { source_in_us: 0, speed, .. } if *speed == 1.0));
@@ -318,9 +345,27 @@ mod tests {
     }
 
     #[test]
+    fn recap_counts_the_main_track_words_even_muted_and_never_an_overlays() {
+        let mut p = project(&["take"]);
+        let other = serde_json::from_value(json!({
+            "id": "other", "name": "other", "path": "/other", "kind": "video", "durationUs": 10_000_000,
+            "width": 1080, "height": 1920, "fps": 30, "hasAudio": true, "rotation": 0, "mirror": false
+        }))
+        .unwrap();
+        p.apply(EditCmd::AddAssets { assets: vec![other] }).unwrap();
+        p.apply(EditCmd::AddPictureInPicture { asset_id: "other".into(), start_us: 0, duration_us: None }).unwrap();
+        if let ClipContent::Media { volume, .. } = &mut p.tracks[0].clips[0].content {
+            *volume = 0.0;
+        }
+        let sources = HashMap::from([("take".into(), words("Main take.")), ("other".into(), words("Overlay talk."))]);
+        let d = Derived::new(&main_track(&p), sources, vec![]);
+        assert_eq!(d.words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["Main", "take."]);
+    }
+
+    #[test]
     fn recap_line_numbers_and_plural_forms_match_totals() {
         let p = project(&["take"]);
-        let r = build(p.clone(), delete(&p, &[(0, 500_000), (2_000_000, 3_000_000)]), derived(&p, words("Hello.")));
+        let r = build(p.clone(), delete(&p, &[(0, 500_000), (2_000_000, 3_000_000)]), &derived(&p, words("Hello.")));
         assert_eq!(line(&r.totals()).as_deref(), Some("Removed 1 word and 1 pause"));
         let mut totals = r.totals();
         totals.words = Some(212);
@@ -347,12 +392,12 @@ mod tests {
         repeated.id = "repeated".into();
         repeated.start_us = 4_000_000;
         p.tracks[0].clips.push(repeated);
-        let r = build(p.clone(), delete(&p, &[(0, 1_000_000), (4_000_000, 5_000_000)]), derived(&p, vec![]));
+        let r = build(p.clone(), delete(&p, &[(0, 1_000_000), (4_000_000, 5_000_000)]), &derived(&p, vec![]));
         assert_eq!(
             r.cuts.iter().map(|c| (c.start_us, c.end_us)).collect::<Vec<_>>(),
             [(0, 1_000_000), (4_000_000, 5_000_000)]
         );
-        let gone = build(p.clone(), Project::new("empty"), derived(&p, vec![]));
+        let gone = build(p.clone(), Project::new("empty"), &derived(&p, vec![]));
         assert_eq!(gone.cuts.len(), 1);
         assert_eq!((gone.cuts[0].start_us, gone.cuts[0].end_us), (0, 8_000_000));
     }
@@ -391,7 +436,8 @@ mod tests {
             }],
         })
         .unwrap();
-        let r = recap(p.clone(), delete(&p, &[(0, 500_000)]), &store).unwrap();
+        let (r, missing) = recap(p.clone(), delete(&p, &[(0, 500_000)]), &store).unwrap();
+        assert!(missing.is_empty());
         assert_eq!(r.words[0].text, "Correct.");
         assert_eq!(r.totals().words, Some(1));
         std::fs::remove_dir_all(dir).unwrap();

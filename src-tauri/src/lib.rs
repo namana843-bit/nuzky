@@ -287,41 +287,44 @@ impl OpenSession {
                     SessionEvent::Saved { revision, error } => {
                         app.emit("saved", store::SavedEvent { revision, error }).ok();
                     }
-                    SessionEvent::RunSummary { run_id, mut changes } => {
-                        let host = current.host.clone();
-                        drop(current);
-                        let recap = host
-                            .session
-                            .run_pair(&run_id)
-                            .and_then(|(before, after)| nuzky_mcp::recap::recap(before, after, &host.transcripts));
-                        let cut = recap.as_ref().is_ok_and(|recap| !recap.cuts.is_empty());
-                        match recap {
-                            Ok(recap) => {
-                                if let Some(text) = nuzky_mcp::recap::line(&recap.totals()) {
-                                    let at = changes
-                                        .iter()
-                                        .position(|c| c.text.starts_with("Cut out "))
-                                        .or_else(|| {
-                                            changes.iter().position(|c| {
-                                                c.text.starts_with("Shortened the video ")
-                                                    || c.text.starts_with("Lengthened the video ")
-                                            })
-                                        })
-                                        .map_or(0, |i| i + 1);
-                                    changes.insert(
-                                        at,
-                                        nuzky_session::summary::RunChange { text, clip_ids: Vec::new(), at_us: None },
-                                    );
-                                }
+                    SessionEvent::RunSummary { run_id, changes } => {
+                        app.emit(
+                            "run-summary",
+                            serde_json::json!({ "runId": run_id, "changes": changes, "cut": false }),
+                        )
+                        .ok();
+                        // What the cut removed reads the history and the transcripts, so it follows a moment later,
+                        // never holding up the end of the run.
+                        let (host, app) = (current.host.clone(), app.clone());
+                        std::thread::spawn(move || {
+                            let recap = host
+                                .session
+                                .run_pair(&run_id)
+                                .and_then(|(before, after)| nuzky_mcp::recap::recap(before, after, &host.transcripts));
+                            let (recap, _) = match recap {
+                                Ok(recap) => recap,
+                                Err(error) => return log::warn!("Cannot count what run {run_id} cut: {error:#}"),
+                            };
+                            let mut changes = changes;
+                            if let Some(text) = nuzky_mcp::recap::line(&recap.totals()) {
+                                let after = |prefixes: &[&str]| {
+                                    changes.iter().position(|c| prefixes.iter().any(|p| c.text.starts_with(p)))
+                                };
+                                let at = after(&["Cut out "])
+                                    .or_else(|| after(&["Shortened the video ", "Lengthened the video "]))
+                                    .map_or(0, |i| i + 1);
+                                changes.insert(
+                                    at,
+                                    nuzky_session::summary::RunChange { text, clip_ids: Vec::new(), at_us: None },
+                                );
                             }
-                            Err(error) => log::warn!("Cannot build recap for run {run_id}: {error:#}"),
-                        }
-                        let current = state.session.lock().unwrap();
-                        if stopped.load(Ordering::Acquire) || !Arc::ptr_eq(&host, &current.host) {
-                            break;
-                        }
-                        app.emit("run-summary", serde_json::json!({ "runId": run_id, "changes": changes, "cut": cut }))
+                            let cut = !recap.cuts.is_empty();
+                            app.emit(
+                                "run-summary",
+                                serde_json::json!({ "runId": run_id, "changes": changes, "cut": cut }),
+                            )
                             .ok();
+                        });
                     }
                     SessionEvent::Run(run) => {
                         app.emit("run-changed", run.map(|run| run.label)).ok();

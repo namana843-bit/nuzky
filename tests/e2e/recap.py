@@ -88,7 +88,8 @@ def recap(r):
         wait(lambda: panel(r), 5)
         send(r, 'Cut the pause at the start and add captions')
         wait(lambda: agent(r)['status'] == 'idle' and 'run' in agent(r)['kinds'], 60)
-        card = panel(r)['text']
+        # What the cut removed is counted a moment after the run ends, then joins its card.
+        card = wait(lambda: (t := panel(r)['text']) and re.search(r'Removed \d+ words?', t) and t, 15) or panel(r)['text']
         removed = next((line.strip() for line in card.splitlines() if re.match(r'Removed \d+ words?', line.strip())), None)
         lengths = re.search(r'Shortened the video from ([\d.:]+ ?s?) to ([\d.:]+ ?s?)', card)
         r.check('the run card counts the words its cut removed', removed and lengths, card)
@@ -102,7 +103,7 @@ def recap(r):
         r.check('once the numbers are in, Export… is ready and no hint says it is still counting',
                 wait(lambda: not any('Counting' in h for h in r.s.run(hints)), 5), r.s.run(hints))
         r.shot('recap-dialog')
-        run_id = r.s.run("return window.__nuzky.agent.getState().items.find((i) => i.kind === 'run').recapRun")
+        run_id = r.s.run("return window.__nuzky.agent.getState().items.find((i) => i.kind === 'run').runId")
         first = info(r, run_id)
         video = make(r, 'run-recap.mp4', run_id, True)
         duration, size, codecs = probe(video)
