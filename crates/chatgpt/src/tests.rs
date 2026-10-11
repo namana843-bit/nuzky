@@ -314,6 +314,9 @@ impl Drop for FakeOpenAi {
 }
 
 fn read_request(stream: &mut TcpStream) -> (String, String, String) {
+    // On macOS an accepted socket keeps the listener's non-blocking mode, and a read before the data
+    // arrives would fail.
+    stream.set_nonblocking(false).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut bytes = Vec::new();
     let mut buffer = [0; 4096];
