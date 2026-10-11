@@ -232,8 +232,9 @@ def ai_panel_jobs(r):
             {'status': r.s.run(status), 'agent': agent(r)})
     click(r, 'Stop')
     r.check('and Stop stops it', wait(lambda: 'Exporting' not in r.s.run(status) and not r.s.run(stop), 5), r.s.run(status))
-    left = sorted(p.name for p in fake.iterdir() if p.name.startswith(('export-', '.nuzky-part')))
-    r.check('the stopped exports left no file behind', left == [exported[0].name] if exported else False, left)
+    left = lambda: sorted(p.name for p in fake.iterdir() if p.name.startswith(('export-', '.nuzky-part')))
+    # The panel lets go of a stopped job at once; the export may still be removing its part.
+    r.check('the stopped exports left no file behind', bool(exported) and wait(lambda: left() == [exported[0].name], 10), left())
     r.check('no error toast along the way', not r.errors(), r.errors())
 
 
