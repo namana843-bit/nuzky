@@ -168,7 +168,8 @@ useEditor.subscribe((s, prev) => {
     if (Math.abs(cover.timeUs - s.timeUs) > 1) showFrame(format);
     return;
   }
-  if (showing || s.timeUs === prev.timeUs || s.timeUs === synced) return;
+  // A new snapshot can clamp the playhead to a shorter video; that is no frame the user chose either.
+  if (showing || s.snap !== prev.snap || s.timeUs === prev.timeUs || s.timeUs === synced) return;
   synced = null;
   // Playback stopped as the editor opened: where it stopped is no frame the user chose.
   if (s.playing || prev.playing) {
