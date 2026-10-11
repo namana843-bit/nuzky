@@ -78,6 +78,7 @@ impl Engine {
         let renderer = move || {
             let mut renderer = Renderer::new()?;
             log::info!("Preview renderer on {}", renderer.adapter_name());
+            crate::diagnostics::set_graphics(renderer.adapter_name());
             renderer.use_proxies(proxies.clone());
             // Clips with a background show as recorded until their person outline is made.
             renderer.use_mattes(proxies.clone(), Pending::Original);

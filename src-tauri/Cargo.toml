@@ -31,6 +31,7 @@ tauri = { version = "2.12.1", features = [] }
 tauri-plugin-dialog = "2.8.1"
 tauri-plugin-opener = "2.7.0"
 env_logger = "0.11"
+jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 tungstenite = "0.30"
 cpal = "0.18.2"
 rtrb = "0.4"
@@ -62,4 +63,6 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std"
 # Speech recognition on the GPU through Vulkan, verified on Linux so far.
 [target.'cfg(target_os = "linux")'.dependencies]
 nuzky-analysis = { workspace = true, features = ["gpu"] }
+
+[target.'cfg(unix)'.dependencies]
 libc = "0.2.190"

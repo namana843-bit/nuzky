@@ -87,6 +87,7 @@ impl Reporter {
             }
             Err(_) if cancelled => self.event.status = "cancelled",
             Err(e) => {
+                log::error!("{} failed: {e:#}", self.event.label);
                 self.event.status = "failed";
                 self.event.message = Some(format!("{e:#}"));
             }
@@ -207,7 +208,7 @@ fn ensure_mattes(state: &AppState, project: &Project) {
                     }
                 })
             }))
-            .unwrap_or_else(|p| Err(anyhow::anyhow!("Finding the person crashed: {}", panic_text(&p))));
+            .unwrap_or_else(|p| Err(crashed(&p)));
             let cancelled = flag.load(Ordering::Relaxed);
             if result.is_err() && !cancelled {
                 app.state::<AppState>().matte_failed.lock().unwrap().insert(asset.path.clone());
@@ -273,7 +274,7 @@ fn ensure_voice(state: &AppState, project: &Project) {
                     Ok(())
                 })
             }))
-            .unwrap_or_else(|p| Err(anyhow::anyhow!("Cleaning the voice crashed: {}", panic_text(&p))));
+            .unwrap_or_else(|p| Err(crashed(&p)));
             let cancelled = flag.load(Ordering::Relaxed);
             if result.is_err() && !cancelled {
                 app.state::<AppState>().audio_failed.lock().unwrap().insert(path);
@@ -329,7 +330,7 @@ fn ensure_proxies(state: &AppState, project: &Project) {
                         Ok(())
                     })
                 }))
-                .unwrap_or_else(|p| Err(anyhow::anyhow!("Preparing the preview crashed: {}", panic_text(&p))));
+                .unwrap_or_else(|p| Err(crashed(&p)));
                 let cancelled = flag.load(Ordering::Relaxed);
                 if result.is_err() && !cancelled {
                     skip(path);
@@ -433,7 +434,7 @@ pub fn start_export(
                     rep.progress(p.fraction, Some(p.phase.label()));
                 })
             }))
-            .unwrap_or_else(|p| Err(anyhow::anyhow!("Export crashed: {}", panic_text(&p))));
+            .unwrap_or_else(|p| Err(crashed(&p)));
             let cancelled = cancel.load(Ordering::Relaxed);
             let done = result.is_ok() && !cancelled;
             rep.finish(result.map(|_| Some(out.to_string_lossy().into_owned())), cancelled);
@@ -548,7 +549,8 @@ pub fn start_vision_models(app: AppHandle, repair: Option<bool>, set: Option<Str
         };
         let mut rep = Reporter::new(&worker_app, &job_id, "vision-models", label.into());
         let list = vision_set(set.as_deref());
-        let result = crate::cover::download_models(list, repair == Some(true), phase, &cancel, &mut rep);
+        let result = crate::cover::download_models(list, repair == Some(true), phase, &cancel, &mut rep)
+            .map_err(|error| download_failed(error, &label.to_lowercase()));
         let done = result.is_ok();
         rep.finish(result.map(|()| None), cancel.load(Ordering::Relaxed));
         unregister(&worker_app, &job_id);
@@ -675,7 +677,7 @@ pub fn start_reframe(
                 .to_string(),
             ))
         }))
-        .unwrap_or_else(|p| Err(anyhow::anyhow!("Reframe crashed: {}", panic_text(&p))));
+        .unwrap_or_else(|p| Err(crashed(&p)));
         rep.finish(result, cancel.load(Ordering::Relaxed));
         unregister(&worker, &job);
     });
@@ -739,7 +741,7 @@ fn start_speech(app: AppHandle, request: SpeechRequest, expected_epoch: Option<&
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_speech_job(&host, assets, &request, &cancel, &mut rep)
         }))
-        .unwrap_or_else(|p| Err(anyhow::anyhow!("Speech recognition crashed: {}", panic_text(&p))));
+        .unwrap_or_else(|p| Err(crashed(&p)));
         rep.finish(result, cancel.load(Ordering::Relaxed));
         unregister(&worker_app, &job_id);
     });
@@ -866,6 +868,7 @@ fn download_model(id: &str, cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::
     model_download::download(&url, &model_path(id), integrity, cancel, |value| {
         rep.progress(value, Some("Downloading speech model"))
     })
+    .map_err(|error| download_failed(error, "speech model"))
 }
 
 /// Voice activity detection model; skipping non-speech stops Whisper from inventing
@@ -875,6 +878,17 @@ fn download_vad(cancel: &AtomicBool, rep: &mut Reporter) -> anyhow::Result<PathB
     model_download::download(&url, &models_dir().join(VAD_MODEL), VAD_INTEGRITY, cancel, |value| {
         rep.progress(value, Some("Downloading voice detector"))
     })
+    .map_err(|error| download_failed(error, "voice detector"))
+}
+
+/// A download that failed without saying why in a code (`CANCELLED`, `MODEL_INVALID`…) reads as one the person can
+/// act on: the connection or the disk.
+fn download_failed(error: anyhow::Error, what: &str) -> anyhow::Error {
+    let text = error.to_string();
+    let code = text
+        .split_once(':')
+        .is_some_and(|(code, _)| code.len() > 3 && code.bytes().all(|b| b.is_ascii_uppercase() || b == b'_'));
+    if code { error } else { error.context(format!("DOWNLOAD_FAILED: {what}")) }
 }
 
 /// A raw recording and the finished video the creator cut from it.
@@ -915,7 +929,7 @@ pub fn start_style_learning(app: &AppHandle, pairs: Vec<StylePair>) -> Result<St
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 learn_pairs(&app, &job_id, &pairs, &cache, &cancel, &mut rep)
             }))
-            .unwrap_or_else(|p| Err(anyhow::anyhow!("Learning crashed: {}", panic_text(&p))));
+            .unwrap_or_else(|p| Err(crashed(&p)));
             let cancelled = cancel.load(Ordering::Relaxed);
             rep.finish(result.map(|()| None), cancelled);
             unregister(&app, &job_id);
@@ -1008,7 +1022,7 @@ pub fn start_timeline_learning(app: &AppHandle, paths: Vec<String>) -> Result<St
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 learn_timelines(&app, &job_id, &paths, &cache, &cancel, &mut rep)
             }))
-            .unwrap_or_else(|p| Err(anyhow::anyhow!("Learning crashed: {}", panic_text(&p))));
+            .unwrap_or_else(|p| Err(crashed(&p)));
             let cancelled = cancel.load(Ordering::Relaxed);
             rep.finish(result.map(Some), cancelled);
             unregister(&app, &job_id);
@@ -1095,11 +1109,10 @@ pub(crate) fn check_cancelled(cancel: &AtomicBool) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
-    p.downcast_ref::<&str>()
-        .map(|s| s.to_string())
-        .or_else(|| p.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "unknown error".into())
+/// A job that panicked. What the panic said and where is in the log (`diagnostics`); people read that Nuzky hit a bug.
+pub(crate) fn crashed(p: &Box<dyn std::any::Any + Send>) -> anyhow::Error {
+    let text = p.downcast_ref::<&str>().copied().or_else(|| p.downcast_ref::<String>().map(String::as_str));
+    anyhow::anyhow!("CRASHED: {}", text.unwrap_or("unknown error"))
 }
 #[cfg(test)]
 mod tests {

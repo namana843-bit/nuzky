@@ -1,6 +1,7 @@
 import { useState, type MouseEvent } from "react";
-import { AtSign, Bug, Lightbulb, MessageSquare } from "lucide-react";
+import { AtSign, Bug, ClipboardCopy, FolderOpen, Lightbulb, MessageSquare } from "lucide-react";
 import { api, errorText, type FeedbackKind } from "../lib/api";
+import { copyDiagnostics, openLogs, reportBug } from "../lib/diagnostics";
 import { useEditor } from "../lib/store";
 import { IconButton, Menu, type MenuEntry } from "./ui";
 
@@ -10,10 +11,16 @@ function open(kind: FeedbackKind) {
   api.openFeedback(kind).catch((e) => useEditor.getState().toast({ kind: "error", text: `Couldn't open the browser: ${errorText(e)}` }));
 }
 
-/** Each opens a page in the browser; a GitHub issue comes prefilled with this version and system, and nothing is sent until the user submits it there. */
+/**
+ * The reports open a GitHub issue form in the browser with this version and system filled in; Report a bug also copies
+ * the diagnostics to paste there. Nothing is sent until the user submits the form.
+ */
 const feedbackMenu = (): MenuEntry[] => [
-  { label: "Report a bug…", icon: <Bug size={15} />, run: () => open("bug") },
+  { label: "Report a bug…", icon: <Bug size={15} />, run: () => void reportBug() },
   { label: "Share an idea…", icon: <Lightbulb size={15} />, run: () => open("idea") },
+  "separator",
+  { label: "Copy diagnostics", icon: <ClipboardCopy size={15} />, run: () => void copyDiagnostics() },
+  { label: "Open logs folder", icon: <FolderOpen size={15} />, run: openLogs },
   "separator",
   { label: "Message me on X…", icon: <AtSign size={15} />, run: () => open("message") },
 ];
@@ -66,5 +73,14 @@ export function FeedbackButton() {
         />
       )}
     </div>
+  );
+}
+
+/** Under a failure: the log says what went wrong, for a bug report. */
+export function LogsButton() {
+  return (
+    <button type="button" onClick={openLogs} className="-mx-1.5 rounded-md px-1.5 py-0.5 text-[12px] font-semibold text-accent transition-colors duration-[120ms] ease-out hover:bg-white/[.08]">
+      Open logs folder
+    </button>
   );
 }

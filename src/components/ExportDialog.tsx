@@ -8,6 +8,7 @@ import { formatLabel } from "../lib/presets";
 import { useCover } from "../lib/cover";
 import { currentEpoch, projectDuration, useEditor } from "../lib/store";
 import { CoverExport } from "./cover/CoverExport";
+import { LogsButton } from "./Feedback";
 import { FormatShape } from "./home/Home";
 import { US, formatTime } from "../lib/time";
 import type { Canvas, Delivery, ExportRequest, RecapInfo } from "../lib/types";
@@ -530,7 +531,10 @@ export function ExportDialog() {
           {failed && (
             <div className="flex items-start gap-2 rounded-xl bg-danger/10 p-3 text-[13px] text-danger" role="alert">
               <AlertCircle size={16} className="mt-px shrink-0" />
-              <span>Export failed: {plainError(failed)}</span>
+              <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+                <span>Export failed: {plainError(failed)}</span>
+                <LogsButton />
+              </div>
             </div>
           )}
           {job?.status === "cancelled" && <p className="text-[12px] text-muted">Export cancelled. The partial file was removed.</p>}

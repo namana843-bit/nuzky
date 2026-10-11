@@ -6,6 +6,7 @@ import { SPEECH_LANGUAGES, setSpeechLanguage, useSpeech } from "../../lib/speech
 import { useEditor } from "../../lib/store";
 import type { JobEvent, SpeechModel } from "../../lib/types";
 import { Button, Field, ProgressBar } from "../ui";
+import { LogsButton } from "../Feedback";
 
 /** A native select drawn as a white 9 % field with a chevron, like the font picker. */
 function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
@@ -103,12 +104,16 @@ export function SpeechJobCard({ job }: { job: JobEvent }) {
   );
 }
 
+/** Why the last run failed; the button above it runs it again. */
 export function JobError({ job }: { job: JobEvent | undefined }) {
   if (job?.status !== "failed") return null;
   return (
-    <p className="flex gap-1.5 text-[12px] text-danger" role="alert">
+    <div className="flex gap-1.5 text-[12px] text-danger" role="alert">
       <AlertCircle size={14} className="mt-px shrink-0" />
-      {plainError(job.message ?? "")}
-    </p>
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-1">
+        <p>{plainError(job.message ?? "")}</p>
+        <LogsButton />
+      </div>
+    </div>
   );
 }

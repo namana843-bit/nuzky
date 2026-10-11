@@ -143,6 +143,10 @@ export type Boot = {
    * False when `NUZKY_NO_UPDATE_CHECK=1`: Nuzky then never asks whether a newer version exists.
    */
   updateChecks: boolean,
+  /**
+   * The Nuzky that ran before this one ended without quitting.
+   */
+  crashed: boolean,
 };
 
 /**

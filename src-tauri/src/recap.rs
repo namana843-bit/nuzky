@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     AppState,
-    jobs::{Reporter, check_destination, panic_text, register, unregister},
+    jobs::{Reporter, check_destination, crashed, register, unregister},
 };
 
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -142,7 +142,7 @@ pub async fn start_recap(
                 },
             )
         }))
-        .unwrap_or_else(|p| Err(anyhow::anyhow!("Recap export crashed: {}", panic_text(&p))));
+        .unwrap_or_else(|p| Err(crashed(&p)));
         rep.finish(result.map(|_| Some(out.to_string_lossy().into_owned())), cancel.load(Ordering::Relaxed));
         unregister(&worker, &job_id);
     });

@@ -134,6 +134,7 @@ impl Jobs {
                             state.result = Some(output);
                         }
                         Err(error) => {
+                            log::error!("Agent {kind} job failed: {error:#}");
                             state.status = "failed";
                             state.phase = "failed";
                             state.error = Some(format!("{error:#}"));

@@ -147,8 +147,13 @@ export const api = {
   /** A newer released version, or null when this one is the latest. */
   checkForUpdate: () => invoke<string | null>("check_for_update"),
   openReleasePage: () => invoke<void>("open_release_page"),
-  /** A prefilled GitHub issue for a bug or an idea, or the author's X profile, in the browser. */
+  /** The issue form for a bug or an idea with this version and system filled in, or the author's X profile, in the browser. */
   openFeedback: (kind: FeedbackKind) => invoke<void>("open_feedback", { kind }),
+  /** The version, system, graphics and the end of the log, without folders, typed text or secrets. */
+  diagnostics: () => invoke<string>("diagnostics"),
+  openLogs: () => invoke<void>("open_logs"),
+  /** Writes an error of the interface into the log. */
+  logUiError: (message: string) => invoke<void>("log_ui_error", { message }),
   styleView: () => invoke<StyleView>("style_view"),
   styleAct: (action: StyleAction) => invoke<StyleView>("style_act", { action }),
   /** Learns from 1 to 3 recordings, each with the video cut from it, as a `style` job. */
@@ -189,6 +194,7 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   NO_WORDS: "Transcribe the timeline first, then try again.",
   OUTPUT_EXISTS: "A file with that name appeared while exporting. Export again to replace it or choose another name.",
   DESTINATION_EXISTS: "A file with that name already exists.",
+  NOT_WRITABLE: "Nuzky may not save files in that folder. Export to another folder, or allow saving there and try again.",
   UNKNOWN_VERSION: "That version is no longer kept. Open the list of versions again.",
   RUN_UNAVAILABLE: "The project as it was before or after this AI run is no longer kept, so its recap can't be made.",
   HISTORY_CORRUPT: "That version could not be read, so the project is unchanged.",
@@ -197,6 +203,8 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   NOT_INSTALLED: (detail) => sentence(detail.replace(/\.$/, "")) + ". Install it and sign in from a terminal.",
   APP_CLOSED: "Nuzky is closing, so this stopped.",
   JOB_FAILED: "The task stopped unexpectedly. Try again.",
+  CRASHED: "Nuzky hit a bug and stopped. Try again, and if it happens again, report it from Send feedback.",
+  DOWNLOAD_FAILED: (detail) => `The ${detail.split(":")[0]} could not be downloaded. Check the internet connection and free disk space, then try again.`,
   MODEL_INVALID: "The model did not download completely. Try again to download it anew.",
   MEDIA_MISSING: (detail) => `${detail.split(/[\\/]/).pop()} is missing. Put the file back where it was, then try again.`,
   VISION_UNAVAILABLE:

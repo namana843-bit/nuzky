@@ -6,7 +6,8 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { api, errorText, plainError } from "./lib/api";
 import { setLimits } from "./lib/limits";
 import { onReframeJob } from "./lib/reframe";
-import { useSpeech } from "./lib/speech";
+import { retrySpeech, useSpeech } from "./lib/speech";
+import { reportBug } from "./lib/diagnostics";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, runWasDiscarded, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
 import { US, formatDuration } from "./lib/time";
 import type { JobEvent, ProjectSummary, Snapshot, Transport } from "./lib/types";
@@ -175,16 +176,23 @@ function onJob(job: JobEvent) {
   if (job.kind === "cover" || job.kind === "vision-models") onCoverJob(job);
   if (job.kind === "reframe") onReframeJob(job);
   if (job.kind === "captions" && job.status === "done") toast({ kind: "success", text: `Added ${job.output ?? "captions"}` });
-  if (job.kind === "captions" && job.status === "failed") toast({ kind: "error", text: `Captions failed: ${job.message}` });
+  // The panel shows the failure too, with Open logs folder.
+  const retry = { label: "Try again", run: retrySpeech };
+  if (job.kind === "captions" && job.status === "failed") toast({ kind: "error", text: `Captions failed: ${plainError(job.message ?? "")}`, action: retry });
   if (job.kind === "transcript" && job.status === "done") toast({ kind: "success", text: `Transcript ready: ${job.output ?? "words"}` });
-  if (job.kind === "transcript" && job.status === "failed") toast({ kind: "error", text: `Transcript failed: ${job.message}` });
-  if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}` });
-  if (job.kind === "proxy" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${job.message}. The preview plays the original file, which can stutter.` });
+  if (job.kind === "transcript" && job.status === "failed") toast({ kind: "error", text: `Transcript failed: ${plainError(job.message ?? "")}`, action: retry });
+  if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}` });
+  if (job.kind === "proxy" && job.status === "failed")
+    toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}. The preview plays the original file, which can stutter.` });
   if (job.kind === "matte" && job.status === "failed")
     toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}. The clip shows as recorded; choose None for its background to export it.` });
   // The cover editor reports its own model downloads.
   if (job.kind === "vision-models" && job.label === "Person model" && job.status === "failed")
-    toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}` });
+    toast({
+      kind: "error",
+      text: `${job.label} failed: ${plainError(job.message ?? "")}`,
+      action: { label: "Try again", run: () => api.startVisionModels(false, "background").catch((e) => toast({ kind: "error", text: plainError(errorText(e)) })) },
+    });
   // A cover shows the background once the person behind whom it goes is found.
   if (job.kind === "matte" && job.status === "done") useCover.setState((s) => ({ masks: s.masks + 1 }));
   // The dialog shows the result itself; with it closed, a toast reports it.
@@ -383,9 +391,19 @@ async function startEditor() {
     startupNoticeShown = true;
     useEditor.getState().toast({ kind: "warning", text: boot.startupNotice });
   }
+  // The project opens as Nuzky last saved it, about a second after the last edit; an unfinished AI edit asks itself.
+  if (boot.crashed && !crashNoticeShown) {
+    crashNoticeShown = true;
+    useEditor.getState().toast({
+      kind: "warning",
+      text: "Nuzky closed unexpectedly. Your project is as it was last saved.",
+      action: { label: "Report a bug…", run: () => void reportBug() },
+    });
+  }
 }
 
 let startupNoticeShown = false;
+let crashNoticeShown = false;
 
 /** Until the editor has a project: "Starting", or why starting failed with ways to go on. */
 function BootScreen() {

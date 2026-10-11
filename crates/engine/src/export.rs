@@ -239,7 +239,15 @@ pub(crate) fn write_beside(
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(_) => break path,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e).context("Cannot reserve temporary export file"),
+            Err(e) => {
+                use std::io::ErrorKind::{PermissionDenied, ReadOnlyFilesystem};
+                let why = if matches!(e.kind(), PermissionDenied | ReadOnlyFilesystem) {
+                    "NOT_WRITABLE: cannot write to the export folder"
+                } else {
+                    "Cannot reserve temporary export file"
+                };
+                return Err(e).context(why);
+            }
         }
     };
     let result = write(&tmp).and_then(|()| publish(&tmp, out, replace_existing, cancel));

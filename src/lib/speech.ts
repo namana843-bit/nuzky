@@ -110,10 +110,13 @@ export function useTranscriptView(): { view: TranscriptView | null; error: strin
 /** How captions look: their style with its font, and the entry and exit animation of every caption. */
 export type CaptionLook = { style: TextStyle; animIn: Animation | null; animOut: Animation | null };
 
+let lastSpeech: { captions: CaptionLook | null; refresh: boolean } | null = null;
+
 /** Starts recognition for the transcript, of every heard file with `refresh`, or for captions in `captions`. */
 export async function startSpeech(captions: CaptionLook | null, refresh = false) {
   // Captions change the project; a transcript only reads it.
   if (captions && aiLocked()) return;
+  lastSpeech = { captions, refresh };
   const { model, language, captionWords } = useSpeech.getState();
   // Taken before waiting, so a project opened meanwhile refuses the request instead of running it.
   const epoch = currentEpoch();
@@ -127,6 +130,11 @@ export async function startSpeech(captions: CaptionLook | null, refresh = false)
   } catch (e) {
     useEditor.getState().toast({ kind: "error", text: errorText(e) });
   }
+}
+
+/** Starts the last transcript or captions again as they were asked for, after a failure. */
+export function retrySpeech() {
+  if (lastSpeech) void startSpeech(lastSpeech.captions, lastSpeech.refresh);
 }
 
 /**
