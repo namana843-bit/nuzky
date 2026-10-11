@@ -3,7 +3,7 @@ import json, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from e2e.ai_panel import agent, click, panel, send, setup
-from e2e.harness import MODELS, flow, link_models, press, wait
+from e2e.harness import MODELS, flow, link_models, press, wait, webdriver
 
 MODEL = 'ggml-large-v3-turbo-q5_0.bin'
 VAD = 'ggml-silero-v5.1.2.bin'
@@ -65,6 +65,19 @@ def dialog(r):
         return {open: !!d?.open, count: document.querySelectorAll(arguments[0]).length, text: d?.innerText ?? '',
                 focused: !!d && document.activeElement === d,
                 question: window.__nuzky.store.getState().speechModelQuestion};""", DIALOG)
+
+
+def small_window(r, name, selector):
+    """Screenshots the smallest window and says whether `selector` is wholly inside it."""
+    webdriver('POST', r.s.path + '/window/rect', {'width': 1024, 'height': 640})
+    wait(lambda: r.s.run('return window.innerWidth') <= 1030, 5)
+    time.sleep(0.4)
+    inside = r.s.run("""const b = document.querySelector(arguments[0]).getBoundingClientRect();
+        return b.width > 0 && b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight;""", selector)
+    r.shot(name)
+    webdriver('POST', r.s.path + '/window/rect', {'width': 1440, 'height': 900})
+    wait(lambda: r.s.run('return window.innerWidth') >= 1400, 5)
+    return inside
 
 
 def speech_job(r):
@@ -129,6 +142,8 @@ def speech_model(r):
             return h.innerText.includes('Downloading speech model') && /[1-9][0-9]*%/.test(h.innerText)
                 && h.querySelector('button[aria-label="Stop downloading the speech model"]')?.textContent.trim() === 'Stop';"""))
         r.shot('downloading')
+        r.check('in a 1024 x 640 window the download and its Stop still fit the top bar',
+                small_window(r, 'downloading-small', 'header button[aria-label="Stop downloading the speech model"]'))
         job_id = speech_job(r)['id']
         started = time.monotonic()
         click(r, 'Stop downloading the speech model', 'header')
@@ -148,6 +163,7 @@ def speech_model(r):
         before_track = r.track()
         send(r, PROMPT)
         r.check('the next turn asks before resuming', wait(lambda: dialog(r)['open'], 15))
+        r.check('in a 1024 x 640 window the dialog fits', small_window(r, 'dialog-small', DIALOG))
         click(r, 'Download', DIALOG)
         r.check('Download closes the question', wait(lambda: not dialog(r)['open'] and dialog(r)['question'] is None, 3))
         r.check('the download finishes and the agent completes without more input',
