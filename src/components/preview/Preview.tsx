@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Pause, Play, SkipBack, SkipForward, Smartphone } from "lucide-react";
 import { api } from "../../lib/api";
 import { useCover } from "../../lib/cover";
+import { useReels } from "../../lib/reels";
 import { projectDuration, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import type { SafeArea } from "../../lib/types";
 import { CoverBar, CoverStage } from "../cover/CoverStage";
+import { CropGuide, ReelBar } from "../reels/ReelBar";
 import { IconButton } from "../ui";
 import { LayerOverlay } from "./LayerOverlay";
 import { RatioMenu } from "./RatioMenu";
@@ -112,6 +114,9 @@ export function Preview() {
   const engineError = useEditor((s) => s.engineError);
   // The cover editor shows the cover here in place of the video.
   const cover = useCover((s) => s.open);
+  // Choosing reels shows what Center crop keeps, and the clips cannot be moved.
+  const reels = useReels((s) => s.open);
+  const crop = useReels((s) => s.framing === "crop");
   const { togglePlay, seek } = useEditor.getState();
   const boxRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -160,7 +165,8 @@ export function Preview() {
                 WebKitGTK a blurred shadow on this box left the canvas black. */}
             <div className="absolute inset-0 overflow-hidden bg-black shadow-[0_0_0_1px_rgb(255_255_255/.07)]">
               <canvas ref={canvasRef} className="h-full w-full" style={{ imageRendering: "auto" }} />
-              {showSafe && area && canvas && <SafeZone area={area} width={canvas.width} height={canvas.height} />}
+              {showSafe && area && canvas && !reels && <SafeZone area={area} width={canvas.width} height={canvas.height} />}
+              {reels && crop && canvas && <CropGuide width={canvas.width} height={canvas.height} />}
               {empty && !engineError && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-6 text-center">
                   <p className="text-[13px] text-fg">Your video appears here</p>
@@ -176,12 +182,12 @@ export function Preview() {
               )}
             </div>
             {/* Outside the clipped frame so handles of a layer larger than the canvas stay reachable. */}
-            {!empty && !engineError && canvas && fit.w > 0 && <LayerOverlay width={fit.w} height={fit.h} bleed={{ x: (box.w - fit.w) / 2, y: (box.h - fit.h) / 2 }} />}
+            {!empty && !engineError && canvas && fit.w > 0 && !reels && <LayerOverlay width={fit.w} height={fit.h} bleed={{ x: (box.w - fit.w) / 2, y: (box.h - fit.h) / 2 }} />}
           </div>
         </div>
       </div>
       <div className="flex shrink-0 justify-center px-5 py-2.5 @max-[460px]:px-2">
-        {cover ? <CoverBar format={cover} /> : <div className="bar grid h-11 w-full max-w-[620px] grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-full pl-[18px] pr-1.5">
+        {cover ? <CoverBar format={cover} /> : reels ? <ReelBar /> : <div className="bar grid h-11 w-full max-w-[620px] grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-full pl-[18px] pr-1.5">
           <Timecode duration={duration} />
           <div className="flex items-center gap-2.5">
             <IconButton round label="Go to start (Home)" onClick={() => seek(0)} disabled={empty}>

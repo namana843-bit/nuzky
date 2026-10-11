@@ -4,7 +4,7 @@ import { open as pickFiles } from "@tauri-apps/plugin-dialog";
 import { api, errorText, plainError } from "./api";
 import { allClips, blobUrl, stopAiRun, switchProject, useEditor } from "./store";
 import type { Collection, Library, LibraryProject, Project, Said, Snapshot } from "./types";
-import { MEDIA_EXTENSIONS, importFailures } from "../components/panel/assets";
+import { MEDIA_EXTENSIONS, VIDEO_EXTENSIONS, importFailures } from "../components/panel/assets";
 
 type Sort = "opened" | "name";
 const SORT_KEY = "nuzky.homeSort";
@@ -17,6 +17,8 @@ export interface PendingSwitch {
   run: () => Promise<Snapshot>;
   /** Where to put the playhead once it is open. */
   atUs?: number;
+  /** What to show once it is open, such as Reels from a long video. */
+  then?: () => void;
 }
 
 interface LibraryState {
@@ -265,6 +267,7 @@ async function runSwitch(pending: PendingSwitch) {
   }
   useEditor.setState({ timeUs: 0 });
   showEditor(pending.atUs);
+  pending.then?.();
   // A project started while a collection is shown belongs to it.
   const path = useEditor.getState().snap?.path;
   if (pending.verb === "start" && filter !== "all" && path) await api.setCollection([path], filter).catch(failed);
@@ -279,9 +282,12 @@ export async function resolveSwitch(choice: "keep" | "undo" | "cancel") {
   if (await stopAiRun(choice === "undo")) await finishSwitch(pending);
 }
 
-export function openProject(p: Pick<LibraryProject, "path" | "name">, atUs?: number) {
-  if (useEditor.getState().snap?.path === p.path) return showEditor(atUs);
-  switchTo({ what: `open “${p.name}”`, verb: "open", run: () => api.openProject(p.path), atUs });
+export function openProject(p: Pick<LibraryProject, "path" | "name">, atUs?: number, then?: () => void) {
+  if (useEditor.getState().snap?.path === p.path) {
+    showEditor(atUs);
+    return then?.();
+  }
+  switchTo({ what: `open “${p.name}”`, verb: "open", run: () => api.openProject(p.path), atUs, then });
 }
 
 /** An empty untitled project open now takes the format instead of leaving a second empty file. */
@@ -297,7 +303,7 @@ export function newProject(width: number, height: number) {
 }
 
 /** A project of these videos, in this order, in the format of the first one. */
-export function newProjectFromMedia(paths: string[]) {
+export function newProjectFromMedia(paths: string[], then?: () => void) {
   switchTo({
     what: "start a new project",
     verb: "start",
@@ -306,12 +312,19 @@ export function newProjectFromMedia(paths: string[]) {
       if (result.failed.length > 0) toast({ kind: "error", text: importFailures(result.failed) });
       return result.snapshot;
     },
+    then,
   });
 }
 
 export async function pickVideosForNewProject() {
   const picked = await pickFiles({ multiple: true, filters: [{ name: "Video, audio and images", extensions: MEDIA_EXTENSIONS }] });
   if (picked && picked.length > 0) newProjectFromMedia(Array.isArray(picked) ? picked : [picked]);
+}
+
+/** Reels from a long video: a project of the one video picked, opened on finding its reels. */
+export async function pickVideoForReels(then: () => void) {
+  const picked = await pickFiles({ multiple: false, filters: [{ name: "Video", extensions: VIDEO_EXTENSIONS }] });
+  if (typeof picked === "string") newProjectFromMedia([picked], then);
 }
 
 export async function openProjectFile() {

@@ -1,7 +1,9 @@
 import { Blend, Captions, Film, Music, Palette, ScrollText, Type } from "lucide-react";
 import { useCover } from "../../lib/cover";
+import { useReels } from "../../lib/reels";
 import { useEditor, type PanelTab } from "../../lib/store";
 import { CoverFrames } from "../cover/CoverFrames";
+import { ReelTrim } from "../reels/ReelTrim";
 import { AiLock, TabPanel, tabIds, tabListKeys } from "../ui";
 import { AudioTab } from "./AudioTab";
 import { CaptionsTab } from "./CaptionsTab";
@@ -29,6 +31,16 @@ export function LeftPanel({ width }: { width: number }) {
   const setTab = (id: PanelTab) => useEditor.setState({ panelTab: id });
   // In the cover editor the library's place holds the frames for the cover; the tabs act on the video.
   const cover = useCover((s) => s.open);
+  // Choosing reels, it holds the words of the reel shown, to trim.
+  const reels = useReels((s) => s.open);
+  if (reels)
+    return (
+      <aside className="pane flex shrink-0 flex-col overflow-hidden" style={{ width }} aria-label="Reel">
+        <AiLock>
+          <ReelTrim />
+        </AiLock>
+      </aside>
+    );
   if (cover)
     return (
       <aside className="pane flex shrink-0 flex-col overflow-hidden" style={{ width }} aria-label="Cover frames">

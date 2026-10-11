@@ -4,7 +4,7 @@ import { useEditor } from "../../lib/store";
 import { changeStyle, loadStyle, useStyle } from "../../lib/style";
 import { when } from "../../lib/time";
 import type { StyleConfidence, StyleFrozen, StyleRule, StyleSource, StyleView, Suggestion } from "../../lib/types";
-import { Button, IconButton, Menu, type MenuEntry } from "../ui";
+import { Bars, Button, IconButton, Menu, type MenuEntry } from "../ui";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -15,17 +15,6 @@ function clock(us: number) {
 }
 
 const LEVEL = { high: ["High", 3], medium: ["Medium", 2], low: ["Low", 1] } as const;
-
-/** Three bars, as many lit as the confidence is high. */
-function Bars({ lit }: { lit: number }) {
-  return (
-    <span aria-hidden className="flex h-3 shrink-0 items-end gap-[2px]">
-      {[5, 8, 11].map((h, i) => (
-        <span key={h} className={`w-[3px] rounded-[1px] ${i < lit ? "bg-fg/85" : "bg-white/20"}`} style={{ height: h }} />
-      ))}
-    </span>
-  );
-}
 
 function Confidence({ c }: { c: StyleConfidence }) {
   const [label, lit] = LEVEL[c.level];

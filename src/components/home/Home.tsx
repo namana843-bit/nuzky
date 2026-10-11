@@ -10,6 +10,7 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
+  GalleryVerticalEnd,
   Film,
   Info,
   LayoutGrid,
@@ -40,6 +41,7 @@ import {
   openProjectFile,
   onlyPristine,
   periodOf,
+  pickVideoForReels,
   pickVideosForNewProject,
   refreshLibrary,
   renameCollection,
@@ -51,6 +53,7 @@ import {
   useSaidSearch,
 } from "../../lib/library";
 import { FORMATS } from "../../lib/presets";
+import { openReelsToFind } from "../../lib/reels";
 import { useAgent } from "../../lib/agent";
 import { useDock } from "../../lib/dock";
 import { useEditor } from "../../lib/store";
@@ -76,6 +79,7 @@ function newProjectItems(): MenuEntry[] {
     ...FORMATS.map((f) => ({ label: f.label, shortcut: f.hint, icon: <FormatShape width={f.width} height={f.height} size={14} />, run: () => newProject(f.width, f.height) })),
     "separator" as const,
     { label: "From videos…", shortcut: "First video's format", icon: <Film size={15} />, run: () => void pickVideosForNewProject() },
+    { label: "Reels from a long video…", shortcut: "AI finds the moments", icon: <GalleryVerticalEnd size={15} />, run: () => void pickVideoForReels(openReelsToFind) },
   ];
 }
 

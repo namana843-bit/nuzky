@@ -34,6 +34,8 @@ import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
 import { useSounds } from "./lib/sounds";
 import { addProjects, listenStyle, loadStyle, useStyle } from "./lib/style";
 import { closeCover, deleteText, onCoverJob, useCover } from "./lib/cover";
+import { candidateOf, closeReels, onReelsJob, openReelsToFind, playEnding, toggleReelPlay, useReels } from "./lib/reels";
+import { ReelList } from "./components/reels/ReelList";
 import { LearnDialog } from "./components/style/LearnDialog";
 
 const isMedia = (path: string) => MEDIA_EXTENSIONS.includes(path.split(".").pop()?.toLowerCase() ?? "");
@@ -117,6 +119,21 @@ function useShortcuts() {
           return;
         }
       }
+      // Choosing reels plays the current reel; undo, redo and frame steps work as in the editor, the clip keys rest.
+      const reels = useReels.getState();
+      if (reels.open && !((mod && (key === "z" || key === "y")) || ((key === "arrowleft" || key === "arrowright") && !onRange))) {
+        const reel = candidateOf(s.snap?.project, reels.current);
+        if (key === "escape") closeReels();
+        else if (key === " " && !usesSpace(target)) {
+          e.preventDefault();
+          if (!e.repeat) {
+            suppressSpaceRelease();
+            toggleReelPlay();
+          }
+        } else if (key === "home" && reel && !onRange) s.seek(reel.startUs);
+        else if (key === "end" && !onRange) playEnding();
+        return;
+      }
       if (key === " ") {
         if (usesSpace(target)) return;
         e.preventDefault();
@@ -176,6 +193,7 @@ function onJob(job: JobEvent) {
   useEditor.setState({ jobs: { ...useEditor.getState().jobs, [job.id]: job } });
   if (job.kind === "cover" || job.kind === "vision-models") onCoverJob(job);
   if (job.kind === "reframe") onReframeJob(job);
+  if (job.kind === "reels") onReelsJob(job);
   if (job.kind === "captions" && job.status === "done") toast({ kind: "success", text: `Added ${job.output ?? "captions"}` });
   // The panel shows the failure too, with Open logs folder. In another project the toast goes.
   const retry = { label: "Try again", run: () => retrySpeech(job.id), valid: () => canRetrySpeech(job.id) };
@@ -375,7 +393,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __nuzky: { importPaths, store: useEditor, cover: useCover, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, addProjects, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds },
+    __nuzky: { importPaths, store: useEditor, cover: useCover, reels: useReels, openReelsToFind, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, addProjects, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds },
   });
 
 async function startEditor() {
@@ -480,6 +498,8 @@ export default function App() {
   const launcherOpen = useEditor((s) => s.launcherOpen);
   // Learning from videos opens from Your style, the top bar or a toast, anywhere.
   const learnOpen = useStyle((s) => s.learnOpen);
+  // Choosing reels: the candidates in the timeline's place, the preview wide without the inspector.
+  const reels = useReels((s) => s.open);
   const dock = useDockLayout();
   const win = useWindowSize();
   // A column docked at either edge narrows the editor; in the inspector's place the panel is the inspector's width.
@@ -516,7 +536,7 @@ export default function App() {
                 className="relative -mx-0.5"
               />
               <Preview />
-              {!(dock.open && dock.mode === "inspector") && (
+              {!reels && !(dock.open && dock.mode === "inspector") && (
                 <>
                   <Splitter
                     what="inspector"
@@ -545,7 +565,7 @@ export default function App() {
               className="relative -my-0.5"
             />
             <div className="shrink-0 px-1.5 pb-1.5">
-              <Timeline height={panes.timeline} />
+              {reels ? <ReelList height={panes.timeline} /> : <Timeline height={panes.timeline} />}
             </div>
           </div>
           {dock.open && dock.mode === "right" && <DockedAiPanel side="right" width={dock.width} />}

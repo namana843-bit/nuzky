@@ -79,7 +79,7 @@ function formatBytes(b: number) {
 }
 
 /** Tab and Shift+Tab cycle through the dialog's controls, so focus never leaves it for the editor behind. */
-function loadOptions(canvas: Canvas): ExportRequest {
+function loadOptions(canvas: Canvas, asked: Delivery | null): ExportRequest {
   const short = Math.min(canvas.width, canvas.height);
   const fallback: ExportRequest = {
     resolution: RESOLUTIONS.some((r) => r.id === short) ? short : 1080,
@@ -91,7 +91,7 @@ function loadOptions(canvas: Canvas): ExportRequest {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<ExportRequest> | null;
     const options = { ...fallback, ...(saved?.resolution && { resolution: saved.resolution }), ...(saved?.quality && { quality: saved.quality }) };
     // The preset comes back where it applies; a project in another format starts from its own settings.
-    const preset = PRESETS.find((p) => p.id === saved?.preset)?.id;
+    const preset = asked ?? PRESETS.find((p) => p.id === saved?.preset)?.id;
     return preset && fits(preset, canvas) ? { ...options, ...presetOptions(preset, canvas), quality: options.quality } : options;
   } catch {
     return fallback;
@@ -131,8 +131,9 @@ export function ExportDialog() {
 
   // Options start from the project each time the dialog opens; preset, resolution and quality are remembered.
   useEffect(() => {
-    const canvas = useEditor.getState().snap?.project.canvas;
-    if (open && canvas) setOptions(loadOptions(canvas));
+    const { snap, exportPreset } = useEditor.getState();
+    if (open && snap) setOptions(loadOptions(snap.project.canvas, exportPreset));
+    if (open && exportPreset) useEditor.setState({ exportPreset: null });
     if (open) setWhat(useCover.getState().open ? "cover" : "video");
   }, [open]);
 
