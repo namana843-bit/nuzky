@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 
 // Keep in step with RUNTIME_VERSION in crates/vision/src/runtime.rs.
 export const VERSION = '1.28.3';
-// github.com/microsoft/onnxruntime release v1.28.3 (commit 0d68ff6b3b72b04aac578decd6c4c45d322bb962), MIT.
+// The commit of github.com/microsoft/onnxruntime release v1.28.3, MIT.
+export const COMMIT = '0d68ff6b3b72b04aac578decd6c4c45d322bb962';
 const PINS = {
   'linux-x64': {
     asset: `onnxruntime-linux-x64-${VERSION}.tgz`,
@@ -41,18 +42,20 @@ export function depsDir() {
 
 const sha256 = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
-/** Returns `{dir, library, notices}`; downloads only when the checked copy is missing. */
+/** Returns `{dir, url, sha256, library, notices}`; downloads only when the checked copy is missing. */
 export async function fetchOnnxRuntime() {
   const pin = PINS[`${process.platform}-${process.arch}`];
   if (!pin) throw new Error(`No ONNX Runtime build is pinned for ${process.platform}-${process.arch}.`);
   const deps = depsDir();
   const dir = path.join(deps, `onnxruntime-${VERSION}`);
-  const result = { dir, library: path.join(dir, pin.library[1]), notices: NOTICES.map((n) => path.join(dir, n)) };
+  const url = `https://github.com/microsoft/onnxruntime/releases/download/v${VERSION}/${pin.asset}`;
+  const result = {
+    dir, url, sha256: pin.sha256, library: path.join(dir, pin.library[1]), notices: NOTICES.map((n) => path.join(dir, n)),
+  };
   if (existsSync(path.join(dir, '.ready'))) return result;
   mkdirSync(deps, { recursive: true });
   const archive = path.join(deps, pin.asset);
   if (!existsSync(archive) || sha256(archive) !== pin.sha256) {
-    const url = `https://github.com/microsoft/onnxruntime/releases/download/v${VERSION}/${pin.asset}`;
     console.error(`> ${url}`);
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Downloading ${url}: HTTP ${response.status}`);

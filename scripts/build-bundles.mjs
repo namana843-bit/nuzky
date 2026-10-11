@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { VERSION as ORT_VERSION, fetchOnnxRuntime } from './fetch-onnxruntime.mjs';
+import { COMMIT as ORT_COMMIT, VERSION as ORT_VERSION, fetchOnnxRuntime } from './fetch-onnxruntime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
@@ -12,8 +12,11 @@ const bundle = path.join(target, 'release', 'bundle');
 mkdirSync(bundle, { recursive: true });
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: 'inherit' });
 const output = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim();
+const { version } = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
 const config = { bundle: {} };
 let bundles;
+// Where the source of the FFmpeg in the installer is, for build-info.
+let ffmpegSource;
 // ONNX Runtime ships beside the app and is opened only when covers run (crates/vision/src/runtime.rs).
 const ort = await fetchOnnxRuntime();
 const ortNotices = Object.fromEntries(ort.notices.map((n) => [n, `licenses/onnxruntime/${path.basename(n)}`]));
@@ -26,6 +29,9 @@ switch (process.platform) {
       dependencies.push(lib + output('pkg-config', ['--modversion', lib]).split('.')[0]);
     }
     config.bundle.linux = { deb: { depends: dependencies, section: 'video' } };
+    const avcodec = dependencies.find((name) => name.startsWith('libavcodec'));
+    const [source, sourceVersion] = output('dpkg-query', ['-W', '-f=${source:Package} ${source:Version}', avcodec]).split(' ');
+    ffmpegSource = `FFmpeg in the AppImage: Ubuntu's ${source} ${sourceVersion}, source https://launchpad.net/ubuntu/+source/${source}/${sourceVersion} (apt-get source ${source}=${sourceVersion}). The .deb uses the system's.`;
     // Resources land in usr/lib/Nuzky in both the AppImage and the deb, where the app looks.
     config.bundle.resources = { [ort.library]: path.basename(ort.library), ...ortNotices };
     // Allow the bundler's own AppImages to run on hosts without mounted FUSE.
@@ -41,7 +47,10 @@ switch (process.platform) {
   case 'win32': {
     bundles = 'nsis';
     const ffmpeg = process.env.FFMPEG_DIR;
-    if (!ffmpeg) throw new Error('Run scripts/setup-windows-deps.ps1 in this terminal first.');
+    const tag = process.env.FFMPEG_BTBN_TAG;
+    if (!ffmpeg || !tag) throw new Error('Run scripts/setup-windows-deps.ps1 in this terminal first.');
+    const [, commit] = path.basename(ffmpeg).match(/-g([0-9a-f]+)-/);
+    ffmpegSource = `FFmpeg ${path.basename(ffmpeg)} from https://github.com/BtbN/FFmpeg-Builds/releases/tag/${tag}: FFmpeg commit https://github.com/FFmpeg/FFmpeg/commit/${commit}, built by https://github.com/BtbN/FFmpeg-Builds/tree/${tag}, whose scripts pin the source of every library in it.`;
     const dlls = readdirSync(path.join(ffmpeg, 'bin')).filter(name => name.endsWith('.dll'));
     if (!dlls.some(name => name.startsWith('avcodec-'))) throw new Error('FFmpeg DLLs missing.');
     config.bundle.resources = Object.fromEntries(dlls.map(name => [path.join(ffmpeg, 'bin', name), name]));
@@ -71,7 +80,10 @@ run(process.execPath, ['node_modules/@tauri-apps/cli/tauri.js', 'build', '--bund
 if (process.platform === 'darwin') {
   const app = path.join(bundle, 'macos', 'Nuzky.app');
   run('python3', ['scripts/bundle-macos-libs.py', app, ort.library]);
-  const { version } = JSON.parse(readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+  // It lists where each copied library came from, so it names the exact Homebrew FFmpeg.
+  const libs = readFileSync(path.join(app, 'Contents/Resources/bundled-libraries.txt'), 'utf8');
+  const [, formula, cellar] = libs.match(/\/Cellar\/([^/]+)\/([^/]+)\/lib\/libavcodec\./);
+  ffmpegSource = `FFmpeg from Homebrew's ${formula} ${cellar}, source https://ffmpeg.org/releases/ffmpeg-${cellar.replace(/_\d+$/, '')}.tar.xz. Bundled libraries:\n${libs.trim()}`;
   mkdirSync(path.join(bundle, 'dmg'), { recursive: true });
   const stage = mkdtempSync(path.join(target, 'dmg-stage-'));
   try {
@@ -84,11 +96,13 @@ if (process.platform === 'darwin') {
   }
 }
 const info = [
+  `Nuzky ${version}, commit ${output('git', ['rev-parse', 'HEAD'])}; its release carries the source as Nuzky_${version}_source.tar.gz`,
   `Platform: ${process.platform} ${process.arch}`,
   output('rustc', ['--version']),
   output('ffmpeg', ['-version']),
-  `ONNX Runtime ${ORT_VERSION} (scripts/fetch-onnxruntime.mjs pins the official release archive)`,
-  'FFmpeg redistribution/source checklist: docs/BUILDING.md',
+  ffmpegSource,
+  `ONNX Runtime ${ORT_VERSION} from ${ort.url} (SHA-256 ${ort.sha256}), source https://github.com/microsoft/onnxruntime/tree/${ORT_COMMIT} with the dependencies its cmake/deps.txt pins.`,
+  'The rest of the corresponding source is collected by hand: docs/BUILDING.md, Redistribution.',
 ];
 // Formulae only: the bundled libraries come from them, and a cask from an untrusted tap makes plain `brew list` fail.
 if (process.platform === 'darwin') info.push(output('brew', ['list', '--formula', '--versions']));

@@ -187,4 +187,23 @@ mod tests {
         let long = format!(r#"{{"version":"1.0.0-{}"}}"#, "a".repeat(40));
         assert!(newer(&long, &current).is_err());
     }
+
+    /// The release tag must be `v` plus tauri.conf.json's version (release.yml), which latest.json then announces
+    /// to installed copies; the crates report Cargo.toml's and the website package.json's.
+    #[test]
+    fn every_package_has_the_same_version() {
+        let parse = |text: &str| serde_json::from_str::<serde_json::Value>(text).unwrap();
+        let tauri = parse(include_str!("../tauri.conf.json"));
+        let npm = parse(include_str!("../../package.json"));
+        let lock = parse(include_str!("../../package-lock.json"));
+        let cargo = env!("CARGO_PKG_VERSION");
+        for (file, version) in [
+            ("src-tauri/tauri.conf.json", &tauri["version"]),
+            ("package.json", &npm["version"]),
+            ("package-lock.json", &lock["version"]),
+            ("package-lock.json", &lock["packages"][""]["version"]),
+        ] {
+            assert_eq!(version.as_str(), Some(cargo), "{file} has version {version}, Cargo.toml has {cargo}");
+        }
+    }
 }
