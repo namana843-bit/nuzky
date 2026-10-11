@@ -130,8 +130,18 @@ export function DisabledHint() {
   useEffect(() => {
     const onKey = () => (keyboard.current = true);
     const onPointer = () => (keyboard.current = false);
-    const onFocus = (e: FocusEvent) => show(e.target instanceof HTMLElement ? e.target : null);
-    const hide = () => setHint(null);
+    // A focused control that becomes enabled, or gets another reason, while it has focus updates its hint.
+    const changes = new MutationObserver((records) => show(records[0].target as HTMLElement));
+    const onFocus = (e: FocusEvent) => {
+      const el = e.target instanceof HTMLElement ? e.target : null;
+      changes.disconnect();
+      if (el) changes.observe(el, { attributes: true, attributeFilter: ["aria-disabled", "title"] });
+      show(el);
+    };
+    const hide = () => {
+      changes.disconnect();
+      setHint(null);
+    };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("pointerdown", onPointer, true);
     window.addEventListener("focusin", onFocus);
@@ -143,6 +153,7 @@ export function DisabledHint() {
       window.removeEventListener("focusin", onFocus);
       window.removeEventListener("focusout", hide);
       window.removeEventListener("scroll", hide, true);
+      changes.disconnect();
     };
   }, []);
   if (!hint) return null;
