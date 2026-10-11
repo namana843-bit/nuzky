@@ -106,5 +106,14 @@ const info = [
 ];
 // Formulae only: the bundled libraries come from them, and a cask from an untrusted tap makes plain `brew list` fail.
 if (process.platform === 'darwin') info.push(output('brew', ['list', '--formula', '--versions']));
-if (process.platform === 'linux') info.push(output('dpkg-query', ['-W']));
+if (process.platform === 'linux') {
+  // linuxdeploy copied these libraries from Ubuntu's packages; docs/BUILDING.md fetches their source by this list.
+  const appdir = path.join(bundle, 'appimage', 'Nuzky.AppDir');
+  const libs = output('find', [appdir, '-type', 'f', '-name', '*.so*', '-not', '-path', '*/usr/lib/Nuzky/*', '-printf', '%f\n']);
+  const owners = output('dpkg', ['-S', ...new Set(libs.split('\n').map((name) => `*/${name}`))]).split('\n')
+    .flatMap((line) => line.slice(0, line.lastIndexOf(': ')).split(', '));
+  const sources = output('dpkg-query', ['-W', '-f=${source:Package} ${source:Version}\n', ...new Set(owners)]);
+  info.push(`Ubuntu source packages of the libraries in the AppImage:\n${[...new Set(sources.split('\n'))].sort().join('\n')}`);
+  info.push(output('dpkg-query', ['-W']));
+}
 writeFileSync(path.join(bundle, `build-info-${process.platform}.txt`), info.join('\n') + '\n');
