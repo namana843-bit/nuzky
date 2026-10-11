@@ -124,6 +124,13 @@ def recap(r):
         changed = changed_share(drawn, shown)
         r.check('the recap ends on the finished cut as the renderer draws it', changed < 0.01, f'{changed:.3%} of pixels differ')
         frame(r, video, duration - 0.5, 'recap-end-card')
+        # A file imported after the run is a source too: its recap never replaces it.
+        take = r.work / 'new-take.mp4'
+        take.write_bytes((FIXTURES / 'talk.mp4').read_bytes())
+        r.import_media(take)
+        refused = r.s.call('window.__nuzky.api.startRecap(arguments[0], arguments[1], true, arguments[2], true)', str(take), run_id, r.state()['epoch'])
+        r.check("a run's recap refuses to replace a file the project imported since",
+                not refused['ok'] and take.read_bytes() == (FIXTURES / 'talk.mp4').read_bytes(), refused)
         r.s.run("document.querySelector('[role=dialog] button[aria-label^=Close], [role=dialog] button[aria-label^=Hide]')?.click()")
 
         # An agent in a terminal shortens a pause and nothing else.

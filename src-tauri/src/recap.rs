@@ -101,8 +101,11 @@ pub async fn start_recap(
         .await
         .map_err(|e| e.to_string())?
         .map_err(crate::err)?;
-    nuzky_engine::export::check_source_path(&recap.before, &out).map_err(crate::err)?;
-    nuzky_engine::export::check_source_path(&recap.after, &out).map_err(crate::err)?;
+    // A recap of an older run must not replace a file imported since, either.
+    let now = host.session.state().map_err(crate::err)?.project;
+    for project in [&recap.before, &recap.after, &now] {
+        nuzky_engine::export::check_source_path(project, &out).map_err(crate::err)?;
+    }
     let id = format!("export:{}", new_id());
     let state = app.state::<AppState>();
     let current = crate::lock_session(&state.session, expected_epoch.as_deref())?;
