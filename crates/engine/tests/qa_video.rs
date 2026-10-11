@@ -754,7 +754,6 @@ fn captions_in_a_small_preview_match_the_export_scaled_down_by_ffmpeg() {
         .filter(|y| reference[y * row..(y + 1) * row].as_chunks::<4>().0.iter().any(|px| px[0].abs_diff(128) > 40))
         .collect();
     let band = lit[0] * row..(lit[lit.len() - 1] + 1) * row;
-    // Shrinking text rendered for the full frame gave 4.7: jagged outline edges.
     let error = mae(&preview[band.clone()], &reference[band]);
     assert!(error < 4.0, "caption pixel MAE={error}");
 }
