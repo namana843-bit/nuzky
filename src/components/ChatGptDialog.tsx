@@ -129,7 +129,6 @@ export function ChatGptDialog() {
 
   useEffect(() => {
     if (!open) return;
-    // Closing returns focus to what opened the dialog.
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;

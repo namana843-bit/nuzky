@@ -237,6 +237,7 @@ struct ServerState {
     refresh_error: Option<(u16, Value)>,
     revoke_status: u16,
     denied: bool,
+    cancel_on_exchange: Option<Arc<AtomicBool>>,
     plan: bool,
     expires_in: u64,
     generation: u64,
@@ -252,6 +253,7 @@ impl Default for ServerState {
             refresh_error: None,
             revoke_status: 200,
             denied: false,
+            cancel_on_exchange: None,
             plan: true,
             expires_in: 3600,
             generation: 0,
@@ -378,6 +380,9 @@ fn serve(method: &str, url: &Url, body: &str, issuer: &str, s: &mut ServerState)
                 }
             } else {
                 assert_eq!(form["grant_type"], "authorization_code");
+                if let Some(cancel) = &s.cancel_on_exchange {
+                    cancel.store(true, Ordering::Relaxed);
+                }
                 let auth = s.authorize.last().unwrap();
                 assert_eq!(form["code"], "test-code");
                 assert_eq!(form["redirect_uri"], auth["redirect_uri"]);
@@ -603,4 +608,55 @@ fn chatgpt_pre_cancelled_sign_in_returns_within_a_second() {
     assert!(start.elapsed() < Duration::from_secs(1));
     assert!(!f.tokens_path().exists());
     assert!(f.server.state.lock().unwrap().token_requests.is_empty());
+}
+
+#[test]
+fn chatgpt_cancel_during_the_exchange_stores_no_tokens_but_keeps_the_client() {
+    let f = Flow::new();
+    let cancel = Arc::new(AtomicBool::new(false));
+    f.server.state.lock().unwrap().cancel_on_exchange = Some(cancel.clone());
+    let mut browser = None;
+    let error = f
+        .app()
+        .sign_in(false, &cancel, |url| {
+            let url = url.to_owned();
+            browser = Some(thread::spawn(move || ureq::get(&url).call().map(|_| ())));
+            Ok(())
+        })
+        .unwrap_err();
+    browser.unwrap().join().unwrap().unwrap();
+    assert!(error.to_string().starts_with("CANCELLED"), "{error}");
+    assert!(!f.tokens_path().exists());
+    let reg: Value = serde_json::from_slice(&fs::read(f.dir.0.join("chatgpt.json")).unwrap()).unwrap();
+    assert_eq!(reg["client_id"], CLIENT);
+}
+
+#[test]
+fn chatgpt_listener_drops_a_stalled_connection() {
+    let listener = Listener::bind().unwrap();
+    let port = Url::parse(&listener.redirect_uri().unwrap()).unwrap().port().unwrap();
+    let stalled = thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        for _ in 0..30 {
+            if stream.write_all(b"G").is_err() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    });
+    thread::sleep(Duration::from_millis(100));
+    let browser = thread::spawn(move || {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.write_all(b"GET /auth/callback?state=s HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+        let mut page = String::new();
+        stream.read_to_string(&mut page).unwrap();
+        page
+    });
+    let start = Instant::now();
+    let request = listener.next(Instant::now() + Duration::from_secs(20), &AtomicBool::new(false)).unwrap();
+    assert!(start.elapsed() < Duration::from_secs(3), "waited {:?}", start.elapsed());
+    assert_eq!(request.query, "state=s");
+    request.reply(200, listener::PAGE_DONE);
+    assert!(browser.join().unwrap().contains(listener::PAGE_DONE));
+    stalled.join().unwrap();
 }

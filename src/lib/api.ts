@@ -244,7 +244,7 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   SIGN_IN_FAILED: (detail) => sentence(detail.replace(/\.$/, "")) + ".",
   WRONG_ACCOUNT: (detail) => `That's another ChatGPT account. ${detail}`,
   KEYCHAIN_UNAVAILABLE:
-    "Nuzky keeps your ChatGPT sign-in in the system keychain and couldn't use it. Allow Nuzky when the system asks; on Linux, start GNOME Keyring or KWallet. Then try again.",
+    "Nuzky keeps your ChatGPT sign-in in the system keychain and couldn't use it. Allow Nuzky when the system asks. On Linux, start GNOME Keyring or KWallet, then restart Nuzky.",
 };
 
 /**

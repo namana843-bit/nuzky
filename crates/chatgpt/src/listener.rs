@@ -72,14 +72,15 @@ impl Request {
     }
 }
 
-/// The target of a GET, such as `/auth/callback?code=…`. A connection that sends nothing within two
-/// seconds, such as a browser's spare one, is dropped.
+/// The target of a GET, such as `/auth/callback?code=…`. A connection that has not sent its whole
+/// request within two seconds, such as a browser's spare one or a slow local process, is dropped.
 fn read_target(mut stream: &TcpStream) -> Option<String> {
     stream.set_nonblocking(false).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+    let deadline = Instant::now() + Duration::from_secs(2);
     let mut request = Vec::new();
     let mut chunk = [0u8; 2048];
     while !request.windows(4).any(|w| w == b"\r\n\r\n") && request.len() < MAX_REQUEST {
+        stream.set_read_timeout(Some(deadline.checked_duration_since(Instant::now())?)).ok()?;
         let read = stream.read(&mut chunk).ok().filter(|&read| read > 0)?;
         request.extend_from_slice(&chunk[..read]);
     }

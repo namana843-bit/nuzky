@@ -74,6 +74,7 @@ export async function signOut() {
     useChatGpt.setState({ error: text });
     if (!useChatGpt.getState().open) useEditor.getState().toast({ kind: "error", text: `Signing out of ChatGPT failed. ${text}` });
   } finally {
-    useChatGpt.setState({ action: null });
+    // A sign-in started meanwhile keeps its own state.
+    if (useChatGpt.getState().action === "signingOut") useChatGpt.setState({ action: null });
   }
 }

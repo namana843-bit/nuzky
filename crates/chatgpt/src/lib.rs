@@ -12,7 +12,7 @@ mod store;
 mod tests;
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -138,8 +138,10 @@ impl ChatGpt {
             // Asked again only when the user chose to allow the plan after an earlier sign-in did not.
             consent: hint_tokens.as_ref().is_some_and(|t| !t.plan()),
         };
-        open(&oauth::authorize_url(&self.issuer, &request, &attempt))
-            .context("SIGN_IN_FAILED: Could not open the browser")?;
+        // The launcher's error quotes the address, which can hold the last ID token, so it goes nowhere.
+        if open(&oauth::authorize_url(&self.issuer, &request, &attempt)).is_err() {
+            bail!("SIGN_IN_FAILED: Could not open the browser");
+        }
 
         let deadline = Instant::now() + SIGN_IN_TIMEOUT;
         loop {
@@ -156,7 +158,7 @@ impl ChatGpt {
                     bail!("SIGN_IN_DENIED: Signing in to ChatGPT was cancelled in the browser.");
                 }
                 Ok(Callback::Code { code, client_id }) => {
-                    let result = self.finish(&reg, another_account, &attempt, &client_id, &code);
+                    let result = self.finish(&reg, another_account, &attempt, &client_id, &code, cancel);
                     request.reply(200, if result.is_ok() { listener::PAGE_DONE } else { listener::PAGE_FAILED });
                     return result;
                 }
@@ -173,8 +175,19 @@ impl ChatGpt {
         attempt: &Attempt,
         client_id: &str,
         code: &str,
+        cancel: &AtomicBool,
     ) -> Result<Status> {
         let http = self.http();
+        if saved.client_id.is_none() {
+            // A first registration keeps its client before the exchange, so a retry after a failed
+            // exchange signs in to it instead of registering Nuzky again.
+            let _lock = store::lock(&self.dir)?;
+            let mut reg = Registration::load_or_create(&self.dir)?;
+            if reg.client_id.is_none() {
+                reg.client_id = Some(client_id.into());
+                reg.save(&self.dir)?;
+            }
+        }
         let response = oauth::exchange(&http, &self.issuer, client_id, code, attempt).map_err(|error| match error {
             TokenError::Refused { code, description } => {
                 anyhow!(
@@ -199,6 +212,10 @@ impl ChatGpt {
             .context("SIGN_IN_FAILED: ChatGPT did not let Nuzky stay signed in")?;
 
         let _lock = store::lock(&self.dir)?;
+        // Cancel, another sign-in or a sign-out meanwhile wins over this answer.
+        if cancel.load(Ordering::Relaxed) {
+            bail!("CANCELLED: Signing in was cancelled.");
+        }
         let mut reg = Registration::load_or_create(&self.dir)?;
         if let Ok(Some(old)) = self.vault.load(&reg.host_id)
             && old.client_id != tokens.client_id
