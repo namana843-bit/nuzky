@@ -166,7 +166,6 @@ useEditor.subscribe((s, prev) => {
   }
   if (s.timeUs === prev.timeUs || s.timeUs === synced) return;
   synced = null;
-  if (!cover) return;
   if (s.aiRun) {
     // The frame stays the agent's; the playhead goes back to it and the lock says why.
     aiLocked();
@@ -200,7 +199,7 @@ const WIDE_FRAME: Transform = { ...DEFAULT_TRANSFORM, scale: 1.4, x: -1 / 6, y: 
 const WIDE_TEXT = { x: 1 / 6, y: -0.1, maxWidth: 760 };
 
 /** A new cover from the frame at `timeUs`: the frame fills the thumbnail as it would on the canvas. */
-export function newCover(format: ThumbnailFormat, project: Project, timeUs: number): Thumbnail {
+function newCover(format: ThumbnailFormat, project: Project, timeUs: number): Thumbnail {
   const wide = format === "youtube_16x9" && isVertical(project);
   const cutOut = wide && !!useCover.getState().models?.downloaded;
   return {
@@ -249,8 +248,8 @@ export function chooseFrame(format: ThumbnailFormat, timeUs: number, coalesce?: 
 }
 
 /**
- * A text in the look of `preset`, sized for the format: on a cover in the upper part where the apps leave it
- * free, on a YouTube thumbnail of a vertical video beside the person.
+ * A text in the look of `preset`, sized for the format: on a cover in the lower middle, on a YouTube thumbnail of a
+ * vertical video beside the person.
  */
 export function presetText(format: ThumbnailFormat, preset: (typeof COVER_PRESETS)[number], wide = false, text = "YOUR HOOK"): ThumbnailText {
   // The presets are sized for the 1080 px wide cover; a YouTube thumbnail is seen smaller, about two thirds.
@@ -258,7 +257,7 @@ export function presetText(format: ThumbnailFormat, preset: (typeof COVER_PRESET
   return {
     text,
     style: { ...preset.style, fontSize: Math.round(preset.style.fontSize * k), strokeWidth: preset.style.strokeWidth * k, ...(wide ? { maxWidth: WIDE_TEXT.maxWidth } : {}) },
-    // On a cover in the lower middle, under the face of a talking head and inside the Reels safe area.
+    // Under the face of a talking head and inside the Reels safe area.
     transform: { ...DEFAULT_TRANSFORM, ...(wide ? { x: WIDE_TEXT.x, y: WIDE_TEXT.y } : { y: format === "youtube_16x9" ? -0.2 : 0.12 }) },
     behind: false,
   };
@@ -344,14 +343,21 @@ export async function mask(timeUs: number) {
   }
 }
 
+/** A model download asked for whose job id has not arrived yet, so a second click does not ask again. */
+let startingModels = false;
+
 /**
- * Downloads the cover models without picking, e.g. for Behind person, then does `then`; after a damaged model, all of
- * them are checked. A download already running is the one to wait for.
+ * Downloads the cover models without picking, e.g. for Behind person, then does `then` unless another project opened
+ * meanwhile; after a damaged model, all of them are checked. A download already running is the one to wait for.
  */
 export async function downloadModels(then?: () => void) {
   const { damaged: repair, modelsJob } = useCover.getState();
-  if (then) useCover.setState({ afterModels: then });
-  if (modelsJob && useEditor.getState().jobs[modelsJob]?.status === "running") return;
+  if (then) {
+    const epoch = currentEpoch();
+    useCover.setState({ afterModels: () => currentEpoch() === epoch && then() });
+  }
+  if (startingModels || (modelsJob && useEditor.getState().jobs[modelsJob]?.status === "running")) return;
+  startingModels = true;
   useCover.setState({ failed: null, damaged: false });
   try {
     const id = await api.startVisionModels(repair);
@@ -361,6 +367,8 @@ export async function downloadModels(then?: () => void) {
     if (job && job.status !== "running") onCoverJob(job);
   } catch (e) {
     useCover.setState({ failed: plainError(errorText(e)), afterModels: null });
+  } finally {
+    startingModels = false;
   }
 }
 

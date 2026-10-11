@@ -280,6 +280,9 @@ export function coverAiBlocked(): string | null {
 export function makeCoverWithAi() {
   if (coverAiBlocked()) return;
   const start = () => {
+    // The agent may have started answering while the models downloaded.
+    const blocked = coverAiBlocked();
+    if (blocked) return useEditor.getState().toast({ kind: "info", text: `Make it with AI did not start. ${blocked}.` });
     useAgent.setState({ thumbnail: true });
     useDock.setState({ open: true });
     void send("", "project");

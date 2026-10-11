@@ -148,7 +148,8 @@ export function CoverStage({ format, box }: { format: ThumbnailFormat; box: { w:
     : [];
   const latest = useRef(layers);
   latest.current = layers;
-  const cover = () => thumbnailOf(useEditor.getState().snap?.project, format);
+  // A drag can start on a draft text while selecting it is still making the cover.
+  const cover = () => thumbnailOf(useEditor.getState().snap?.project, format) ?? shown?.cover;
   const source: LayerSource = {
     canvas: { width: tw, height: th },
     bounds: layers,

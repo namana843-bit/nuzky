@@ -90,6 +90,11 @@ def thumbnail(r):
           && !buttons.find((b) => b.textContent.trim() === 'Pick for me')?.classList.contains('btn-prominent');"""))
     time.sleep(2)
     r.shot('cover-draft')
+    r.seek(2_000_000)
+    chosen = wait(lambda: cover(r), 5)
+    r.check('choosing a frame on the timeline saves the draft at that frame', chosen and abs(chosen['timeUs'] - 2_000_000) < 50_000, chosen)
+    r.key('z', ctrlKey=True)
+    r.check('Undo takes the made draft back', wait(lambda: cover(r) is None, 5))
     click(r, 'Back to video', 'header')
     r.check('Back to video leaves the cover editor', wait(lambda: r.s.run(
         "return !document.querySelector('[data-testid=cover-stage]') && !!document.querySelector('section[aria-label=Preview] canvas')"), 5))
@@ -106,12 +111,14 @@ def thumbnail(r):
     if not missing or not restored['ok'] or not json.loads(restored['value'])['downloaded']:
         r.shot('cover-models-missing')
         raise RuntimeError('Cannot safely test the models job without all fixture models restored')
-    click(r, 'Make it with AI', '[data-testid=cover-frames]')
+    # A double click while the download is being asked for still lets the AI make the cover once the models are there.
+    r.s.run("""const b = [...document.querySelectorAll('[data-testid=cover-frames] button')].find((b) => b.textContent.trim() === 'Make it with AI');
+        b.click(); b.click();""")
     r.shot('make-a-thumbnail-models')
     checked = job(r, 'vision-models:', 60)
     hooked = wait(lambda: all((cover(r, f) or {}).get('texts', [{}])[0].get('text') == 'MY HOOK'
                   for f in ('cover_9x16', 'youtube_16x9')) and r.s.run("return window.__nuzky.agent.getState().status === 'idle'"), 60)
-    r.check('Make it with AI checks the restored models then runs the agent on both covers',
+    r.check('Make it with AI, clicked twice, checks the restored models then runs the agent on both covers',
             checked and checked['status'] == 'done' and hooked and (r.work / 'fake/runs.jsonl').exists(), checked)
     undo = click(r, 'Undo', 'aside[aria-label=AI]')
     r.check('the models-first AI run undoes back to the empty draft', undo == 'false' and wait(lambda: cover(r) is None
@@ -199,6 +206,14 @@ def thumbnail(r):
         cover(r, 'youtube_16x9') and r.s.run("""return [...document.querySelectorAll('[role=dialog] h2')].some((h) => h.textContent === 'Export cover')
           && document.querySelector('[role=dialog] [aria-label="Cover format"] button[aria-pressed=true]')?.textContent === '16:9 YouTube';"""), 5))
     r.key('Escape')
+    r.key('z', ctrlKey=True)
+    unsaved = wait(lambda: cover(r, 'youtube_16x9') is None, 5)
+    # The hook of the draft sits beside the person, a sixth right of the middle and a tenth above it.
+    r.s.run(DRAG, 1 / 6, -0.1, 40)
+    dragged = wait(lambda: (c := cover(r, 'youtube_16x9')) and c['texts'][0]['transform']['y'] > -0.08 and c, 5)
+    r.check('dragging a text of the unsaved draft saves the YouTube thumbnail and moves the text', unsaved and dragged, dragged)
+    r.key('z', ctrlKey=True)
+    wait(lambda: (c := cover(r, 'youtube_16x9')) and c['texts'][0]['transform']['y'] < -0.09, 5)
     r.key('z', ctrlKey=True)
     unsaved = wait(lambda: cover(r, 'youtube_16x9') is None, 5)
     click(r, 'I QUIT SUGAR', '[aria-label="Texts on the cover"]')
