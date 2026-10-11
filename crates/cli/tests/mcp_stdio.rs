@@ -1149,7 +1149,6 @@ fn activity_and_changes_find_what_happens_and_page_without_repeats_over_stdio() 
     c.finish();
 }
 
-/// Polls a job until `done` says it is finished or `timeout` passes; returns the last state.
 /// 16-bit mono WAV at 48 kHz: the RIFF header, the format chunk and the samples.
 fn wav_bytes(samples: &[i16]) -> Vec<u8> {
     let mut bytes = b"RIFF".to_vec();
@@ -1164,6 +1163,7 @@ fn wav_bytes(samples: &[i16]) -> Vec<u8> {
     bytes
 }
 
+/// Polls a job until `done` says it is finished or `timeout` passes; returns the last state.
 fn wait_job(c: &mut Client, job: &Value, timeout: Duration, done: impl Fn(&Value) -> bool) -> Value {
     let deadline = std::time::Instant::now() + timeout;
     loop {

@@ -56,7 +56,8 @@ impl Part<'_> {
     }
 }
 
-/// A word, or the part of it one stretch shows, with how much of it is heard and thrown away.
+/// A word, or the part of it one stretch shows, with how much of it is heard and how much each cut
+/// threw away.
 struct Span<'a> {
     asset: &'a str,
     start: i64,
@@ -64,13 +65,13 @@ struct Span<'a> {
     x0: f64,
     x1: f64,
     heard: i64,
-    thrown: i64,
-    cut: Option<usize>,
+    thrown: Vec<(usize, i64)>,
 }
 
 impl Span<'_> {
-    fn split(&self) -> bool {
-        self.heard >= SPLIT_US && self.thrown >= SPLIT_US
+    /// Whether `cut`, or any cut when `None`, split the word into a heard and a thrown-away part.
+    fn split(&self, cut: Option<usize>) -> bool {
+        self.heard >= SPLIT_US && self.thrown.iter().any(|&(by, us)| cut.is_none_or(|cut| cut == by) && us >= SPLIT_US)
     }
 }
 
@@ -135,7 +136,6 @@ pub fn draw(
             put(&mut pixels, width, x, y, colour);
         }
     }
-    // A solid line where heard sound meets thrown-away sound, dashed between two thrown-away stretches.
     for k in 1..parts.len() {
         let x = x_of(k);
         if matches!(parts[k - 1], Part::Heard { .. }) != matches!(parts[k], Part::Heard { .. }) {
@@ -150,7 +150,6 @@ pub fn draw(
         }
     }
 
-    // The range's start, each cut's time at its first line, and the range's end, where they fit.
     let cut_x = cuts.iter().enumerate().map(|(i, t)| {
         let k = parts.iter().position(|part| matches!(part, Part::Thrown { cut, .. } if *cut == i));
         (k.map_or(0, x_of) + 4, *t)
@@ -173,7 +172,7 @@ pub fn draw(
     let mut fonts = TextRenderer::new();
     let mut rows = [0f64; WORD_ROWS];
     for span in &placed {
-        let colour = match (span.split(), span.heard) {
+        let colour = match (span.split(None), span.heard) {
             (true, _) => WORD_SPLIT,
             (false, 0) => WORD_THROWN,
             _ => WORD,
@@ -190,7 +189,7 @@ pub fn draw(
             font_family: None,
             font_size: 12.0,
             color: format!("#{:02x}{:02x}{:02x}", colour[0], colour[1], colour[2]),
-            bold: span.split(),
+            bold: span.split(None),
             stroke_width: 0.0,
             stroke_color: "#000000".into(),
             background: None,
@@ -207,8 +206,7 @@ pub fn draw(
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let split: Vec<&str> =
-                placed.iter().filter(|s| s.cut == Some(i) && s.split()).map(|s| s.text.trim()).collect();
+            let split: Vec<&str> = placed.iter().filter(|s| s.split(Some(i))).map(|s| s.text.trim()).collect();
             json!({"t_us": t, "split_words": split})
         })
         .collect();
@@ -320,7 +318,7 @@ fn place_words<'a>(
                         let (ws, we) = (word.start_us.max(s0), word.end_us.min(s1));
                         let (start, text) = (word.start_us, word.text.as_str());
                         let (x0, x1) = (x(ws), x(we));
-                        spans.push(Span { asset, start, text, x0, x1, heard: we - ws, thrown: 0, cut: None });
+                        spans.push(Span { asset, start, text, x0, x1, heard: we - ws, thrown: Vec::new() });
                     }
                 }
             }
@@ -331,7 +329,7 @@ fn place_words<'a>(
                     let (ws, we) = (word.start_us.max(*from), word.end_us.min(*to));
                     let (start, text) = (word.start_us, word.text.as_str());
                     let (x0, x1) = (x(ws), x(we));
-                    spans.push(Span { asset, start, text, x0, x1, heard: 0, thrown: we - ws, cut: Some(*cut) });
+                    spans.push(Span { asset, start, text, x0, x1, heard: 0, thrown: vec![(*cut, we - ws)] });
                 }
             }
         }
@@ -343,8 +341,7 @@ fn place_words<'a>(
             Some(last) if (last.asset, last.start) == (span.asset, span.start) && span.x0 - last.x1 <= 1.0 => {
                 last.x1 = last.x1.max(span.x1);
                 last.heard += span.heard;
-                last.thrown += span.thrown;
-                last.cut = last.cut.or(span.cut);
+                last.thrown.extend(span.thrown);
             }
             _ => placed.push(span),
         }
