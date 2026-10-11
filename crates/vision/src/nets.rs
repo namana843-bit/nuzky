@@ -427,7 +427,7 @@ mod tests {
     }
 
     /// The face models on two stills, without the renderer, so it also runs under an emulated CPU
-    /// without AVX: scripts/check.sh runs it with `qemu-x86_64-static -cpu Nehalem`.
+    /// without AVX: .github/workflows/checks.yml runs it with `qemu-x86_64-static -cpu Nehalem`.
     #[test]
     #[ignore = "Requires tmp-test/face-open.png, face-blink.png and the models; run with XDG_DATA_HOME=$PWD/tmp-test/xdg/data"]
     fn the_face_models_tell_open_eyes_from_a_blink() {

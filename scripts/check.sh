@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Local gate after every merge to main until the first release, before every merge from then on, and before every
-# release. GitHub runs the faster part of it on every pull request (.github/workflows/checks.yml); the tests with
-# media and models, the check without AVX2, the audits and the UI flows run only here. A pull request that changes
-# only the website in site/ and no dependencies skips it (AGENTS.md). On macOS it runs everything except the check without AVX2, which needs x86-64 Linux.
-# Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py and cargo-deny.
+# Local gate before every merge to main and before every release. GitHub runs the Linux checks, the dependency
+# audits and the check without AVX2 on every non-draft pull request and push to main (.github/workflows/checks.yml).
+# The full tests with media and models and the UI flows run here, on Linux and macOS. A pull request that changes
+# only the website or only Markdown documentation skips it (AGENTS.md says when).
+# Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py.
 # A rerun after a failure skips the builds, clippy and Rust tests that passed for the same state; NUZKY_CHECK_FRESH=1
 # starts fresh.
 set -uo pipefail
@@ -34,8 +34,8 @@ SECONDS=0
 
 resume=tmp-test/check-resume
 mkdir -p "$resume"
-# After a failure, a rerun skips only the expensive checks below that already passed. Guards, installs, fixtures,
-# audits and the media and UI step always run. A passed check counts again only for the same bytes of every file
+# After a failure, a rerun skips only the expensive checks below that already passed. Guards, installs, fixtures
+# and the media and UI step always run. A passed check counts again only for the same bytes of every file
 # (tracked or untracked, ignored ones aside), toolchain, build variables and FFmpeg. A separate index snapshots the
 # working tree without touching the real one; the empty attribute source and the two settings keep git from
 # normalizing line endings.
@@ -100,29 +100,6 @@ isolated() {
   env XDG_DATA_HOME="$data" XDG_CACHE_HOME="$cache" XDG_RUNTIME_DIR="$runtime" "$@"
 }
 
-# ONNX Runtime is opened at run time, never linked, so Nuzky starts on CPUs without AVX2. Both programs
-# must reach main under an emulated Nehalem and the face models must run there.
-without_avx2() (
-  # A program that dies under qemu would leave a core dump in the checkout.
-  ulimit -c 0
-  # The same build as scripts/repro.py: every target of the workspace resolves the features `cargo test` does,
-  # so it adds only the app's binary instead of building the Nuzky crates again.
-  cargo build --locked --workspace --all-targets || return 1
-  for program in nuzky-app nuzky; do
-    # `mcp` without a project reaches main and refuses with INVALID_ARGUMENTS and exit code 1.
-    local said
-    said=$(qemu-x86_64-static -cpu Nehalem "target/debug/$program" mcp 2>&1)
-    [[ $said == *INVALID_ARGUMENTS* ]] || {
-      echo "$program does not start on a CPU without AVX2: $said" >&2
-      return 1
-    }
-  done
-  # Selecting the whole workspace reuses the test build; `-p nuzky-vision` alone resolves other features and
-  # builds the engine and its dependencies a second time. The filters match tests in nuzky-vision only.
-  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="qemu-x86_64-static -cpu Nehalem" \
-    isolated cargo test --locked --workspace --lib -- --include-ignored runtime:: the_face_models
-)
-
 # The Rust tests with media and the UI flows spend their time waiting for speech recognition on the GPU, the app
 # and real time, each with about a tenth of the CPU, so they run side by side. The flows' report follows the tests'.
 media_tests_and_flows() {
@@ -152,16 +129,8 @@ step "Clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
 step "ONNX Runtime" node scripts/fetch-onnxruntime.mjs
 step "Rust tests" isolated cargo test --workspace --locked
 step "Test media and models" scripts/fixtures.sh
-if [ "$os" != Darwin ]; then
-  step "Starts and finds faces without AVX2" without_avx2
-fi
-step "npm audit" npm audit --audit-level=high
-step "Rust advisories and licences" cargo deny --locked check advisories licenses
 step "Rust tests with media and models, and the UI flows" media_tests_and_flows
 
 : >"$resume/passed"
 echo
 echo "check passed in $((SECONDS / 60))m $((SECONDS % 60))s"
-if [ "$os" = Darwin ]; then
-  echo "On macOS it left out the check without AVX2, which needs x86-64 Linux."
-fi

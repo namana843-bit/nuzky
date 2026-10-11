@@ -26,18 +26,16 @@ The rules for code changes are in [AGENTS.md](AGENTS.md), for people and coding 
 
 The first build compiles FFmpeg bindings, wgpu and whisper.cpp; compiling the tests in a clean checkout takes about 7 minutes.
 
-The full local gate also needs the tools for the UI flows and the dependency audits. On Fedora or Nobara:
+The full local gate also needs the tools for the UI flows. On Fedora or Nobara:
 
 ```sh
-sudo dnf install gamescope webkitgtk6.0 espeak-ng python3-pillow python3-xlib qemu-user-static-x86
-cargo install --locked cargo-deny@0.20.2
+sudo dnf install gamescope webkitgtk6.0 espeak-ng python3-pillow python3-xlib
 ```
 
-On macOS the gate runs everything but the check without AVX2, which needs x86-64 Linux. Besides the build dependencies from [docs/BUILDING.md](docs/BUILDING.md) it needs:
+On macOS, besides the build dependencies from [docs/BUILDING.md](docs/BUILDING.md), it needs:
 
 ```sh
 brew install flock espeak-ng ffmpeg-full
-cargo install --locked cargo-deny@0.20.2
 python3 -m pip install --user Pillow numpy
 ```
 
@@ -49,7 +47,7 @@ python3 -m pip install --user Pillow numpy
 | Rust tests by name | `cargo test --workspace <name>` (`-p <crate>` builds most dependencies again with other features) |
 | Tests that need media and models | `scripts/fixtures.sh`, then `XDG_DATA_HOME=$PWD/tmp-test/xdg/data cargo test --workspace <name> -- --ignored` |
 | A UI flow in the real app | `python3 scripts/repro.py <flow>` (`--list` shows them) |
-| Everything | `scripts/check.sh` (tens of minutes) |
+| Everything local (GitHub runs the audits and the check without AVX2) | `scripts/check.sh` (tens of minutes) |
 
 `scripts/repro.py` runs the app with its own data folders, so it never touches your projects, and out of your way: in a headless gamescope on Linux, off screen and never in front on macOS. Run the CLI and `nuzky mcp` by hand from the terminal where you exported the variables above, so they use the same folders and find that app.
 
@@ -65,7 +63,7 @@ NUZKY_WRITE_TYPES=1 cargo test --workspace --locked typescript_types
 
 - Branch from a fresh `main`, keep one change per pull request, and rebase before opening it.
 - Fill in the template: the problem, the solution and how you verified it. A change you can see needs a screenshot from `tmp-test/repro/<flow>/`; motion needs a short video.
-- GitHub runs lint, both builds and the Rust tests on every pull request that is not a draft (`.github/workflows/checks.yml`). While the repository is private, it runs them only on pull requests with the `ci` label. The maintainer runs `scripts/check.sh` with the UI flows on the exact commit before merging. Run the flows your change touches before you send it.
+- GitHub runs lint, both builds, the Rust tests and the dependency audits on every pull request that is not a draft (`.github/workflows/checks.yml`). The maintainer runs `scripts/check.sh` with the UI flows on the exact commit before merging. Run the flows your change touches before you send it.
 - A change of behaviour or keys goes into [docs/INTERACTION.md](docs/INTERACTION.md) in the same pull request, a visual change into [DESIGN.md](DESIGN.md).
 
 By contributing you agree that your contribution is licensed under GPL-3.0-or-later, like the rest of Nuzky.

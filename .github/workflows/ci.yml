@@ -1,8 +1,10 @@
 name: Build and test
 
-# The three-system build with installers runs for a release tag (through release.yml) and on request.
-# Pull requests run checks.yml on Linux, and scripts/check.sh is the full local gate.
+# The macOS build runs on every push to main; all three systems build installers for release tags
+# (through release.yml) and on request. checks.yml runs Linux checks; scripts/check.sh adds the local gate.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   workflow_call:
 
@@ -14,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
+        os: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["macos-14"]') || fromJSON('["ubuntu-24.04", "macos-14", "windows-2022"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
