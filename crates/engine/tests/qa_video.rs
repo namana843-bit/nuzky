@@ -711,3 +711,50 @@ fn crop_follows_the_picture_as_shown_after_exif_rotation_and_mirroring() {
         assert!(error < 3.0, "orientation {orientation}: pixel MAE={error}");
     }
 }
+
+#[test]
+fn captions_in_a_small_preview_match_the_export_scaled_down_by_ffmpeg() {
+    use nuzky_engine::edit::{CaptionSegment, EditCmd};
+    if !available() {
+        return;
+    }
+    let d = dir("preview-captions");
+    // Grey, so the black outline shows like it does over a video.
+    let grey = d.join("grey.png");
+    ff(&["-f", "lavfi", "-i", "color=0x808080:s=1080x1920", "-frames:v", "1"], &grey);
+    let mut p = project(&grey, 1_000_000);
+    let style = TextStyle {
+        font_family: None,
+        font_size: 110.0,
+        color: "#ffffff".into(),
+        bold: true,
+        stroke_width: 11.0,
+        stroke_color: "#000000".into(),
+        background: None,
+        max_width: None,
+        highlight: None,
+        keywords: None,
+    };
+    let segment = CaptionSegment { start_us: 0, end_us: 1_000_000, text: "Poslední dva".into(), words: Vec::new() };
+    p.apply(EditCmd::AddCaptions { segments: vec![segment], style, anim_in: None, anim_out: None }).unwrap();
+    let mut renderer = Renderer::new().unwrap();
+    let export = d.join("export.rgba");
+    std::fs::write(&export, renderer.render(&p, 500_000, 1080, 1920, Wait::Exact, false).unwrap()).unwrap();
+    // The preview of a vertical video beside the library, the inspector and the AI panel in a 1080p window.
+    let (w, h) = (296, 526);
+    let preview = renderer.render(&p, 500_000, w, h, Wait::Exact, false).unwrap();
+    let reference = d.join("reference.rgba");
+    let scale = format!("scale={w}:{h}:flags=area");
+    let input = ["-f", "rawvideo", "-pix_fmt", "rgba", "-s", "1080x1920", "-i", export.to_str().unwrap()];
+    ff(&[&input[..], &["-vf", &scale, "-f", "rawvideo", "-pix_fmt", "rgba"]].concat(), &reference);
+    let reference = std::fs::read(&reference).unwrap();
+    // Only the rows of the caption: the plain frame around it would hide any difference.
+    let row = w as usize * 4;
+    let lit: Vec<usize> = (0..h as usize)
+        .filter(|y| reference[y * row..(y + 1) * row].as_chunks::<4>().0.iter().any(|px| px[0].abs_diff(128) > 40))
+        .collect();
+    let band = lit[0] * row..(lit[lit.len() - 1] + 1) * row;
+    // Shrinking text rendered for the full frame gave 4.7: jagged outline edges.
+    let error = mae(&preview[band.clone()], &reference[band]);
+    assert!(error < 4.0, "caption pixel MAE={error}");
+}
