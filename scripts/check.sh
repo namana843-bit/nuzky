@@ -4,6 +4,8 @@
 # media and models, the check without AVX2, the audits and the UI flows run only here. A pull request that changes
 # only the website in site/ and no dependencies skips it (AGENTS.md). On macOS it runs everything except the check without AVX2, which needs x86-64 Linux.
 # Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py and cargo-deny.
+# A rerun after a failure skips the builds, clippy and Rust tests that passed for the same state; NUZKY_CHECK_FRESH=1
+# starts fresh.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 os=$(uname -s)
@@ -30,9 +32,35 @@ fi
 # The time reported at the end leaves out the wait.
 SECONDS=0
 
+resume=tmp-test/check-resume
+mkdir -p "$resume"
+# After a failure, a rerun skips only the expensive checks below that already passed. Guards, installs, fixtures,
+# audits and the media and UI step always run. A passed check counts again only for the same bytes of every file
+# (tracked or untracked, ignored ones aside), toolchain, build variables and FFmpeg. A separate index snapshots the
+# working tree without touching the real one; the empty attribute source and the two settings keep git from
+# normalizing line endings.
+resumable='|Frontend lint|Frontend types and build|Website build|Clippy|Rust tests|'
+cp "$(git rev-parse --git-path index)" "$PWD/$resume/index"
+export GIT_INDEX_FILE=$PWD/$resume/index GIT_ATTR_SOURCE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+tree=$(git -c core.autocrlf=false -c core.attributesFile=/dev/null add -A && git write-tree) || exit 1
+unset GIT_INDEX_FILE GIT_ATTR_SOURCE
+state=$( {
+  echo "$tree"; uname -sm; rustc -V; cargo -V; node -v; npm -v; ffmpeg -version | head -1; cat .cargo/config.toml
+  env | LC_ALL=C sort | grep -E '^(RUST|CARGO|PKG_CONFIG|SDKROOT|PATH=|CC|CXX|CFLAGS|LDFLAGS|MACOSX_)'
+} 2>&1 | git hash-object --stdin)
+if [ "${NUZKY_CHECK_FRESH:-0}" = 1 ] || [ "$state" != "$(cat "$resume/state" 2>/dev/null)" ]; then
+  : >"$resume/passed"
+  printf '%s\n' "$state" >"$resume/state"
+fi
+
 step() {
   local name=$1 started=$SECONDS
   shift
+  if [[ $resumable == *"|$name|"* ]] && grep -Fxq "$name" "$resume/passed"; then
+    echo
+    echo "==> $name skipped (already passed for this state)"
+    return
+  fi
   echo
   echo "==> $name"
   # The steps do not inherit the lock, so a process one of them leaves behind cannot hold it.
@@ -41,6 +69,7 @@ step() {
     echo "check FAILED at: $name ($((SECONDS - started))s)" >&2
     exit 1
   fi
+  printf '%s\n' "$name" >>"$resume/passed"
   echo "<== $name passed ($((SECONDS - started))s)"
 }
 
@@ -130,6 +159,7 @@ step "npm audit" npm audit --audit-level=high
 step "Rust advisories and licences" cargo deny --locked check advisories licenses
 step "Rust tests with media and models, and the UI flows" media_tests_and_flows
 
+: >"$resume/passed"
 echo
 echo "check passed in $((SECONDS / 60))m $((SECONDS % 60))s"
 if [ "$os" = Darwin ]; then
