@@ -4,12 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { Captions, Plus, Scissors, Sparkles, Upload } from "lucide-react";
 import { AgentPanel } from "./AgentPanel";
 import { EditorMock, type EditorFocus } from "./EditorMock";
-import { Fit } from "./Fit";
+import { Fit, type FitView } from "./Fit";
 import { usePlaying } from "@/lib/playing";
 
 // `side` places the tooltip where it covers nothing the tab is showing. Without it the
-// tooltip goes below the hotspot, or above it in the lower half.
-type Spot = { x: number; y: number; title: string; text: string; side?: "left" | "right" | "above" };
+// tooltip goes below the hotspot, or above it in the lower half. A phone has no room for hotspots
+// and shows `view`, the part of the editor the spot talks about, with the text in a card below.
+type Spot = { x: number; y: number; title: string; text: string; side?: "left" | "right" | "above"; view: FitView };
 type Tab = { id: EditorFocus; label: string; icon: typeof Scissors; summary: string; spots: Spot[] };
 
 // Hotspot positions are in the editor's own 1200 × 740 space.
@@ -20,9 +21,9 @@ const tabs: Tab[] = [
     icon: Scissors,
     summary: "A timeline, a live preview and an inspector, laid out the way you already know.",
     spots: [
-      { x: 500, y: 656, title: "Magnetic timeline", text: "Clips snap together and every cut lands on the exact frame, even in phone video." },
-      { x: 306, y: 280, title: "Your media", text: "Drop in video, sound and images. Phone footage opens the right way up." },
-      { x: 934, y: 292, title: "Inspector", text: "Scale, opacity, volume and speed, each with a value you can type." },
+      { x: 500, y: 656, title: "Magnetic timeline", text: "Clips snap together and every cut lands on the exact frame, even in phone video.", view: { x: 440, y: 640, w: 360 } },
+      { x: 306, y: 280, title: "Your media", text: "Drop in video, sound and images. Phone footage opens the right way up.", view: { x: 156, y: 245, w: 320 } },
+      { x: 934, y: 292, title: "Inspector", text: "Scale, opacity, volume and speed, each with a value you can type.", view: { x: 1064, y: 270, w: 300 } },
     ],
   },
   {
@@ -31,9 +32,9 @@ const tabs: Tab[] = [
     icon: Captions,
     summary: "Whisper writes the captions on your computer and puts each line on the timeline as a clip.",
     spots: [
-      { x: 680, y: 344, title: "Captions in one click", text: "One click transcribes the speech. The spoken word lights up as it plays.", side: "above" },
-      { x: 236, y: 573, title: "A clip per line", text: "Fix a word or move a line right on the timeline." },
-      { x: 934, y: 482, title: "Caption styles", text: "Bold, Clean or Pop, or make your own." },
+      { x: 680, y: 344, title: "Captions in one click", text: "One click transcribes the speech. The spoken word lights up as it plays.", side: "above", view: { x: 620, y: 280, w: 380 } },
+      { x: 236, y: 573, title: "A clip per line", text: "Fix a word or move a line right on the timeline.", view: { x: 250, y: 650, w: 310 } },
+      { x: 934, y: 482, title: "Caption styles", text: "Bold, Clean or Pop, or make your own.", view: { x: 1064, y: 400, w: 300 } },
     ],
   },
   {
@@ -42,8 +43,8 @@ const tabs: Tab[] = [
     icon: Sparkles,
     summary: "Claude Code or Codex edits the open project while you watch. One undo takes the whole run back.",
     spots: [
-      { x: 854, y: 110, title: "Your agent, in the app", text: "Connect Claude Code or Codex in one click. Any other MCP client works too.", side: "left" },
-      { x: 854, y: 428, title: "One undo", text: "Every change the agent made goes back in one step.", side: "left" },
+      { x: 854, y: 110, title: "Your agent, in the app", text: "Connect Claude Code or Codex in one click. Any other MCP client works too.", side: "left", view: { x: 1024, y: 250, w: 350 } },
+      { x: 854, y: 428, title: "One undo", text: "Every change the agent made goes back in one step.", side: "left", view: { x: 1024, y: 420, w: 350 } },
     ],
   },
   {
@@ -52,8 +53,8 @@ const tabs: Tab[] = [
     icon: Upload,
     summary: "Export for Reels, TikTok or YouTube in one click. The file looks exactly like the preview.",
     spots: [
-      { x: 380, y: 300, title: "Same renderer", text: "The same renderer draws the preview and the export.", side: "left" },
-      { x: 820, y: 360, title: "Made for Reels and TikTok", text: "1080 × 1920 at 30 fps, with the sound as loud as the rest of the feed.", side: "right" },
+      { x: 380, y: 300, title: "Same renderer", text: "The same renderer draws the preview and the export.", side: "left", view: { x: 600, y: 370, w: 900 } },
+      { x: 820, y: 360, title: "Made for Reels and TikTok", text: "1080 × 1920 at 30 fps, with the sound as loud as the rest of the feed.", side: "right", view: { x: 600, y: 370, w: 450 } },
     ],
   },
 ];
@@ -112,7 +113,10 @@ export function Showcase() {
   const [auto, setAuto] = useState(true);
   // The pointer or keyboard focus is on a hotspot, so the one the visitor is reading stays open.
   const [held, setHeld] = useState(false);
+  // The visitor took the cards on a phone in hand, so the tour stops and the cards lead.
+  const [manual, setManual] = useState(false);
   const section = useRef<HTMLElement>(null);
+  const cards = useRef<HTMLDivElement>(null);
   const playing = usePlaying(section, 0.35);
   const tab = tabs[active];
 
@@ -127,7 +131,7 @@ export function Showcase() {
 
   // Walks through the hotspots of the open tab, then on to the next tab. A tab the visitor
   // picked keeps cycling its own hotspots.
-  const running = !held && playing;
+  const running = !held && !manual && playing;
   useEffect(() => {
     if (!running) return;
     const id = window.setTimeout(() => {
@@ -145,6 +149,22 @@ export function Showcase() {
     setActive(i);
     setSpot(0);
   };
+
+  // While the tour runs, the cards follow it; once the visitor swipes them, the open spot follows the cards.
+  useEffect(() => {
+    const row = cards.current;
+    const card = row?.children[spot] as HTMLElement | undefined;
+    if (!row || !card || manual) return;
+    row.scrollTo({ left: card.offsetLeft - (row.children[0] as HTMLElement).offsetLeft, behavior: "smooth" });
+  }, [spot, manual]);
+
+  const follow = (row: HTMLDivElement) => {
+    if (!manual) return;
+    const all = [...row.children] as HTMLElement[];
+    const off = (c: HTMLElement) => Math.abs(c.offsetLeft - all[0].offsetLeft - row.scrollLeft);
+    setSpot(all.reduce((best, c, i) => (off(c) < off(all[best]) ? i : best), 0));
+  };
+  const takeOver = () => setManual(true);
 
   const current = tab.spots[spot];
 
@@ -182,9 +202,15 @@ export function Showcase() {
           aria-labelledby={`tab-${tab.id}`}
           className="w-full"
         >
-          <Fit width={1200} height={740} waves="glow" className="mx-auto">
+          <Fit
+            width={1200}
+            height={740}
+            waves="glow"
+            view={current.view}
+            className="mx-auto max-md:overflow-hidden max-md:rounded-[18px] max-md:ring-1 max-md:ring-white/10"
+          >
             <div className="relative size-full rounded-[14px] shadow-[0_50px_140px_rgb(0_0_0/0.9),0_0_0_1px_rgb(255_255_255/0.08)]">
-              <EditorMock focus={tab.id} />
+              <EditorMock focus={tab.id} framed />
               {tab.id === "agent" && (
                 <div className="absolute bottom-1.5 right-1.5 top-[84px] w-[340px] animate-[fade-up_240ms_ease-out] shadow-[0_30px_60px_rgb(0_0_0/0.55)]">
                   <AgentPanel compact className="h-full ring-white/[0.12]" />
@@ -243,8 +269,29 @@ export function Showcase() {
           </Fit>
         </div>
 
-        <div className="flex flex-col items-center gap-4 pt-3">
-          <p key={tab.id} className="min-h-[1.5em] text-[17px] text-muted animate-[fade-up_240ms_ease-out]">
+        <div className="flex w-full flex-col items-center gap-4 md:pt-3">
+          <div
+            key={`cards-${tab.id}`}
+            ref={cards}
+            onScroll={(e) => follow(e.currentTarget)}
+            onPointerDown={takeOver}
+            onWheel={takeOver}
+            onKeyDown={takeOver}
+            className="no-scrollbar relative -mx-5 flex snap-x snap-mandatory scroll-px-5 gap-2.5 self-stretch overflow-x-auto px-5 md:hidden"
+          >
+            {tab.spots.map((s, i) => (
+              <div key={s.title} className="surface flex w-[86%] shrink-0 snap-start flex-col gap-1.5 rounded-[20px] px-[18px] py-4 text-left">
+                <span className="flex items-baseline justify-between gap-3 text-[15px] font-semibold">
+                  {s.title}
+                  <span className="text-[12px] font-medium tabular-nums text-muted">
+                    {i + 1} / {tab.spots.length}
+                  </span>
+                </span>
+                <span className="text-[14px] leading-[1.45] text-fg/75">{s.text}</span>
+              </div>
+            ))}
+          </div>
+          <p key={tab.id} className="min-h-[1.5em] text-[17px] text-muted animate-[fade-up_240ms_ease-out] max-md:hidden">
             {tab.summary}
           </p>
           {/* The open tab's bar fills one step per hotspot. */}
