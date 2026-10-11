@@ -32,7 +32,7 @@ import { fitSizes, viewSizes } from "@/lib/fit";
 
 export type EditorFocus = "edit" | "captions" | "agent" | "export";
 
-const tiles = ["tile-1", "tile-2", "tile-3", "tile-4", "tile-5", "tile-6", "reel-concert", "reel-coffee", "strip-5"];
+const tiles = ["tile-1", "tile-2", "tile-3", "tile-4", "tile-5", "tile-6", "tile-7", "tile-8", "tile-9"];
 const durations = ["0:12", "0:34", "1:08", "0:07", "0:21", "0:45", "0:16", "0:09", "0:52"];
 
 function Pane({ className = "", children }: { className?: string; children: React.ReactNode }) {
@@ -273,10 +273,10 @@ export function EditorMock({ focus = "edit", framed = false }: { focus?: EditorF
             </div>
             <div className={dim(focus !== "captions")}>
               {[
-                [0, 250, "IMG_2041.MOV", "clip-a"],
-                [250, 320, "IMG_2044.MOV", "reel-hike"],
-                [570, 230, "IMG_2047.MOV", "strip-2"],
-                [800, 300, "IMG_2052.MOV", "strip-6"],
+                [0, 250, "IMG_2041.MOV", "timeline-1"],
+                [250, 320, "IMG_2044.MOV", "timeline-2"],
+                [570, 230, "IMG_2047.MOV", "timeline-3"],
+                [800, 300, "IMG_2052.MOV", "timeline-4"],
               ].map(([x, w, l, img], i) => (
                 <Clip
                   key={l}

@@ -46,7 +46,7 @@ export function Steps() {
         <Step n={3} title="Export anywhere" text="Vertical for Reels and TikTok, widescreen for YouTube, any size up to 4K. The file matches the preview.">
           <div className="flex flex-col items-center gap-3.5">
             <div className="relative h-[196px] w-[110px] ring-1 ring-white/15">
-              <Image src="/media/export-file.jpg" alt="" fill sizes="110px" className="object-cover" />
+              <Image src="/media/reel-hike.jpg" alt="" fill sizes="110px" className="object-cover" />
             </div>
             <span className="flex h-[30px] items-center gap-1.5 rounded-full bg-white/[0.075] px-3 text-[12px] font-medium">
               <CircleCheck className="size-3.5 text-ok" />
