@@ -78,9 +78,14 @@ def job(r, prefix, timeout):
 def thumbnail(r):
     webdriver('POST', r.s.path + '/window/rect', {'width': 1440, 'height': 900})
     time.sleep(1)
+    # Opened while playing: the playback stops, and where it stops is no frame the user chose.
+    r.s.run("window.__nuzky.store.getState().togglePlay()")
+    wait(lambda: r.s.run("return window.__nuzky.store.getState().playing"), 5)
     r.check('the Cover tile opens the cover editor', click(r, 'Make a cover') == 'false'
             and wait(lambda: r.s.run("return !!document.querySelector('[data-testid=cover-stage]')"), 5))
-    r.check('nothing is made before a change', cover(r) is None)
+    time.sleep(1)
+    r.check('nothing is made before a change, also when the editor opens during playback',
+            cover(r) is None and not r.s.run("return window.__nuzky.store.getState().playing"))
     r.check('the cover editor names its view and offers Back to video and Export cover in the top bar', r.s.run("""
         const h = document.querySelector('header'); const buttons = [...h.querySelectorAll('button')].map((b) => b.textContent.trim());
         return h.textContent.includes('Cover') && buttons.includes('Back to video') && buttons.includes('Export cover');"""))

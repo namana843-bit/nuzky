@@ -129,13 +129,17 @@ export function closeCover() {
 
 /** The playhead time the cover editor set itself, which is not the user choosing a frame. */
 let synced: number | null = null;
+/** The cover editor is moving the playhead itself: the seek tells the subscription before `synced` is set. */
+let showing = false;
 
 /** Moves the playhead to the frame of the cover of `format`, or before it has one, of the other format's cover. */
 function showFrame(format: ThumbnailFormat) {
   const project = useEditor.getState().snap?.project;
   const cover = thumbnailOf(project, format) ?? thumbnailOf(project, otherFormat(format));
   if (!cover) return;
+  showing = true;
   useEditor.getState().seek(cover.timeUs);
+  showing = false;
   synced = useEditor.getState().timeUs;
 }
 
@@ -164,8 +168,13 @@ useEditor.subscribe((s, prev) => {
     if (Math.abs(cover.timeUs - s.timeUs) > 1) showFrame(format);
     return;
   }
-  if (s.timeUs === prev.timeUs || s.timeUs === synced) return;
+  if (showing || s.timeUs === prev.timeUs || s.timeUs === synced) return;
   synced = null;
+  // Playback stopped as the editor opened: where it stopped is no frame the user chose.
+  if (s.playing || prev.playing) {
+    showFrame(format);
+    return;
+  }
   if (s.aiRun) {
     // The frame stays the agent's; the playhead goes back to it and the lock says why.
     aiLocked();
