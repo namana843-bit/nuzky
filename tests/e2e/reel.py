@@ -4,6 +4,7 @@ sentence, no fillers or long pauses, every kept phrase whole, captions inside th
 Instagram and TikTok take as it is."""
 import array, difflib, json, math, re, subprocess, time, unicodedata
 
+from e2e.export import DIALOG, PICK, open_presets
 from e2e.harness import (ANALYZE, FIXTURES, MODELS, Bridge, flow, link_models, preview_crop, preview_rect, wait)
 
 TAKES = [FIXTURES / f'reel-{n}.mp4' for n in (1, 2, 3)]
@@ -227,12 +228,15 @@ def rough_cut(r, bridge, truths):
     # The Reels preset in the export dialog, as the user picks it.
     r.key('e', ctrlKey=True)
     time.sleep(0.8)
-    picked = r.s.run("""const b = [...document.querySelectorAll('[role=dialog] button')].find((b) => b.textContent.includes('Reels'));
-        if (!b) return null; b.click(); return true;""")
+    reels = next((i for i in open_presets(r) or [] if i['text'].startswith('Reels & TikTok')), None)
+    if reels and not reels['disabled']:
+        r.s.run(PICK, 'Reels & TikTok')
     time.sleep(0.5)
     r.shot('export-dialog')
-    dialog = r.s.run("return document.querySelector('[role=dialog]')?.textContent ?? ''")
-    r.check('the export dialog offers the Reels & TikTok preset', picked and '1080' in dialog and '1920' in dialog, dialog[:300])
+    preset = r.s.run("return document.querySelector('[role=dialog] button[aria-haspopup=menu]')?.getAttribute('aria-label')")
+    dialog = r.s.run(DIALOG)
+    r.check('the export dialog offers the Reels & TikTok preset', preset == 'Preset: Reels & TikTok' and '1080×1920' in dialog,
+            [reels, preset, dialog[:300]])
     r.key('Escape')
 
     out = r.work / 'reel.mp4'
