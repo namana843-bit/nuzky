@@ -1,10 +1,8 @@
 name: Checks
 
-# Lint, types, both builds and the Rust tests on Linux for every pull request. scripts/check.sh adds the
-# tests with media and models, the dependency audits and the UI flows, which need a desktop session.
-# Actions minutes are free on a public repository. While the repository is private they are capped, so a
-# pull request runs these checks only when it has the "ci" label: open it with the label, or add the
-# label and push. Drafts are checked once they are marked ready for review.
+# Lint, types, both builds, Rust tests, dependency audits and the check without AVX2 on Linux for every
+# non-draft pull request and push to main. Public-repository runners are free. scripts/check.sh adds
+# the full tests with media and models and the UI flows locally.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -22,10 +20,7 @@ permissions:
 jobs:
   checks:
     name: Checks
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'ci') ||
-      !github.event.repository.private && !github.event.pull_request.draft
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -46,7 +41,17 @@ jobs:
           key: checks-ffmpeg-v1-${{ hashFiles('Cargo.toml') }}
       - name: Install Linux dependencies
         run: bash scripts/setup-ubuntu-deps.sh
+      - name: Install QEMU
+        run: sudo apt-get install -y qemu-user-static
       - run: npm ci
+      - run: npm audit --audit-level=high
+      - name: Rust advisories and licences
+        run: |
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/cargo-deny.tar.gz" \
+            https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+          echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  $RUNNER_TEMP/cargo-deny.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/cargo-deny.tar.gz" -C "$HOME/.cargo/bin" --strip-components=1
+          cargo deny --locked check advisories licenses
       - run: npm run lint
       - run: npm run build
       - run: npm run site:build
@@ -55,3 +60,40 @@ jobs:
       - name: ONNX Runtime
         run: node scripts/fetch-onnxruntime.mjs
       - run: cargo test --workspace --locked --no-fail-fast
+      # The same files and checksums as scripts/fixtures.sh, only what the check without AVX2 needs.
+      - name: Face models and stills
+        run: |
+          models=tmp-test/xdg/data/nuzky/models
+          mkdir -p "$models"
+          while read -r file sha url; do
+            curl --fail --location --silent --show-error --output "$models/$file" "$url"
+            echo "$sha  $models/$file" | sha256sum --check
+          done <<'MODELS'
+          yunet-2026may.onnx ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0 https://media.githubusercontent.com/media/opencv/opencv_zoo/26cc381e4d2594bb9f47a26eb8fd96c94a13660d/models/face_detection_yunet/face_detection_yunet_2026may.onnx
+          face-landmarks-v2.onnx 6fc4bae7e3e2c5c0870e8d1b764839c7dcefee7e96c874b454da8be514e19f47 https://raw.githubusercontent.com/tomasmach/nuzky-models/a4f7e3c99e0b1b971d69595a1c3efb64fbc18730/face-landmarks-v2.onnx
+          face-blendshapes-v2.onnx 74029fcef4076695dd1129d9c45a3d766532745868bd1eb3cc1deff87e7d6d66 https://raw.githubusercontent.com/tomasmach/nuzky-models/a4f7e3c99e0b1b971d69595a1c3efb64fbc18730/face-blendshapes-v2.onnx
+          MODELS
+          curl --fail --location --silent --show-error --range 0-10485759 --max-filesize 10485760 \
+            --output tmp-test/.epps-2019-10-04.mp4 \
+            https://images-assets.nasa.gov/video/iss061m2627771232_Live_Interviews_Jeanette_Epps_191004/iss061m2627771232_Live_Interviews_Jeanette_Epps_191004~large.mp4
+          echo "0ceeb3bc5a834bbbc470b876ef959cf364da57d36a34b2b288704914202af105  tmp-test/.epps-2019-10-04.mp4" | sha256sum --check
+          ffmpeg -v error -y -ss 8.984 -i tmp-test/.epps-2019-10-04.mp4 -frames:v 1 \
+            -vf 'crop=396:704:447:8,scale=1080:1920:flags=lanczos,format=rgb24' tmp-test/face-open.png
+          ffmpeg -v error -y -ss 9.151 -i tmp-test/.epps-2019-10-04.mp4 -frames:v 1 \
+            -vf 'crop=396:704:447:8,scale=1080:1920:flags=lanczos,format=rgb24' tmp-test/face-blink.png
+      # ONNX Runtime is opened at run time, never linked, so Nuzky starts on CPUs without AVX2.
+      - name: Starts and finds faces without AVX2
+        env:
+          XDG_DATA_HOME: ${{ github.workspace }}/tmp-test/xdg/data
+          XDG_CACHE_HOME: ${{ github.workspace }}/tmp-test/xdg/cache
+          XDG_RUNTIME_DIR: ${{ runner.temp }}/nuzky-runtime
+        run: |
+          ulimit -c 0
+          mkdir -p "$XDG_RUNTIME_DIR"
+          cargo build --locked --workspace --all-targets
+          for program in nuzky-app nuzky; do
+            said=$(qemu-x86_64-static -cpu Nehalem "target/debug/$program" mcp 2>&1) || true
+            [[ $said == *INVALID_ARGUMENTS* ]] || { echo "$program does not start on a CPU without AVX2: $said" >&2; exit 1; }
+          done
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER="qemu-x86_64-static -cpu Nehalem" \
+            cargo test --locked --workspace --lib -- --include-ignored runtime:: the_face_models

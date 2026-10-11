@@ -1,4 +1,4 @@
-# `cargo deny check advisories licenses` runs in scripts/check.sh.
+# `cargo deny --locked check advisories licenses` runs in .github/workflows/checks.yml.
 # Nuzky ships as GPL-3.0-or-later, so every Rust dependency needs a licence that can be combined with it.
 [graph]
 targets = ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"]
