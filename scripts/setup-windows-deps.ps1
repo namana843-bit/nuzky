@@ -15,6 +15,8 @@ if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $sha25
     throw "FFmpeg checksum mismatch: delete $archive and retry."
 }
 $env:FFMPEG_DIR = Join-Path $deps $name
+# scripts/build-bundles.mjs names the build in build-info, where its source comes from.
+$env:FFMPEG_BTBN_TAG = $tag
 if (!(Test-Path "$env:FFMPEG_DIR/include/libavcodec/avcodec.h")) {
     Expand-Archive $archive -DestinationPath $deps -Force
 }
@@ -31,6 +33,7 @@ if (!(Get-Command cmake -ErrorAction SilentlyContinue)) {
 $env:Path = "$env:FFMPEG_DIR\bin;$env:LIBCLANG_PATH;$env:Path"
 if ($env:GITHUB_ENV) {
     "FFMPEG_DIR=$env:FFMPEG_DIR" >> $env:GITHUB_ENV
+    "FFMPEG_BTBN_TAG=$tag" >> $env:GITHUB_ENV
     "LIBCLANG_PATH=$env:LIBCLANG_PATH" >> $env:GITHUB_ENV
     "$env:FFMPEG_DIR\bin" >> $env:GITHUB_PATH
     $env:LIBCLANG_PATH >> $env:GITHUB_PATH
