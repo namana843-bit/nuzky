@@ -11,6 +11,7 @@ import { reportBug } from "./lib/diagnostics";
 import { currentEpoch, deleteSelection, deleteSide, duplicateSelection, openExport, projectDuration, runWasDiscarded, splitAtPlayhead, undoAction, useEditor } from "./lib/store";
 import { US, formatDuration } from "./lib/time";
 import type { JobEvent, ProjectSummary, Snapshot, Transport } from "./lib/types";
+import { ChatGptDialog } from "./components/ChatGptDialog";
 import { ConnectAgentDialog } from "./components/ConnectAgentDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { Inspector } from "./components/inspector/Inspector";
@@ -567,6 +568,7 @@ export default function App() {
       {launcherOpen && !home && <Launcher />}
       <ExportDialog />
       <ConnectAgentDialog />
+      <ChatGptDialog />
       {learnOpen && <LearnDialog />}
       <SwitchDialog />
       {/* On the home screen they sit at the grid's left edge, clear of the sidebar; in the editor, clear of a panel docked left. */}

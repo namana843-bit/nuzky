@@ -1,6 +1,7 @@
 mod agent_panel;
 mod audio_out;
 mod caption_styles;
+mod chatgpt;
 mod connect;
 mod cover;
 mod diagnostics;
@@ -1150,6 +1151,10 @@ pub fn run() {
             diagnostics::diagnostics,
             diagnostics::open_logs,
             diagnostics::log_ui_error,
+            chatgpt::chatgpt_status,
+            chatgpt::chatgpt_sign_in,
+            chatgpt::chatgpt_cancel_sign_in,
+            chatgpt::chatgpt_sign_out,
         ])
         .build(context)
         .expect("error while building Nuzky")

@@ -154,6 +154,7 @@ fn generate() -> String {
     types.visit::<crate::sounds::SoundSettings>();
     types.visit::<crate::jobs::StyleTimelineResult>();
     types.visit::<nuzky_mcp::style::TimelinePlan>();
+    types.visit::<nuzky_chatgpt::Status>();
     let mut out = HEADER.to_string();
     for declaration in types.by_name.values() {
         out.push('\n');

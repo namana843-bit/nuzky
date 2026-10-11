@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CaptionPreset, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelFraming, ReelsMade, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CaptionPreset, ChatGptStatus, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelFraming, ReelsMade, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -42,6 +42,12 @@ export const api = {
   agentSetup: (setup: AgentSetup) => invoke<string>("agent_setup", { setup }),
   agentAccess: () => invoke<AgentAccess>("agent_access"),
   setAgentAccess: (on: boolean, atLaunch: boolean) => invoke<AgentAccess>("set_agent_access", { on, atLaunch }),
+  /** Renews the sign-in first when it is about to expire. */
+  chatgptStatus: () => invoke<ChatGptStatus>("chatgpt_status"),
+  /** Opens the browser and answers once it came back, was cancelled or waited 5 minutes. */
+  chatgptSignIn: (anotherAccount: boolean) => invoke<ChatGptStatus>("chatgpt_sign_in", { anotherAccount }),
+  chatgptCancelSignIn: () => invoke<void>("chatgpt_cancel_sign_in"),
+  chatgptSignOut: () => invoke<ChatGptStatus>("chatgpt_sign_out"),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
   /** A new project with the media on its timeline, in the format of the first picture. */
@@ -233,6 +239,12 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   KEY_MISSING: "Add your Freesound API key under Where to search, the sliders button beside the search field.",
   INVALID_KEY: "A Freesound API key has only letters and digits. Copy it again from Freesound.",
   NOT_LEARNED: "What was learned is gone. Learn from the projects again.",
+  SIGN_IN_DENIED: "Signing in was cancelled in the browser. Continue with ChatGPT to try again.",
+  SIGN_IN_TIMEOUT: "Nuzky stopped waiting for the browser after 5 minutes. Continue with ChatGPT to try again.",
+  SIGN_IN_FAILED: (detail) => sentence(detail.replace(/\.$/, "")) + ".",
+  WRONG_ACCOUNT: (detail) => `That's another ChatGPT account. ${detail}`,
+  KEYCHAIN_UNAVAILABLE:
+    "Nuzky keeps your ChatGPT sign-in in the system keychain and couldn't use it. Allow Nuzky when the system asks. On Linux, start GNOME Keyring or KWallet, then restart Nuzky.",
 };
 
 /**
