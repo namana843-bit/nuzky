@@ -209,8 +209,14 @@ def thumbnail(r):
     moved = wait(lambda: (t := cover(r)['texts'][0]['transform'])['y'] < y - 0.02 and t, 5)
     r.check('dragging the hook moves it up', moved, {'before': y, 'after': cover(r)['texts'][0]['transform']})
 
-    # The other format shows the hook without saving; export and selecting its row each make that draft.
-    click(r, '16:9 YouTube')
+    # The other format, made from the Export dialog with the playhead elsewhere, shows the hook without saving: the
+    # editor moving the playhead to the cover's frame chooses nothing. Export and selecting its row each make that draft.
+    click(r, 'Back to video', 'header')
+    r.seek(1_000_000)
+    r.key('e', ctrlKey=True)
+    click(r, 'Cover', '[aria-label="What to export"]')
+    click(r, '16:9 YouTube', '[aria-label="Cover format"]')
+    click(r, 'Make the thumbnail', '[role=dialog]')
     draft = wait(lambda: (v := shown(r)) and abs(v['width'] / v['height'] - 16 / 9) < 0.01
                  and not v['waiting'] and v['revision'] == v['now'] and v['green'] > 0.002 and v, 120)
     r.check('16:9 shows the other cover hook as an unsaved draft', draft and cover(r, 'youtube_16x9') is None
