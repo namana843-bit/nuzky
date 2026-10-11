@@ -211,24 +211,26 @@ impl ChatGpt {
         let tokens = Tokens::issued(client_id, id_token, response, now())
             .context("SIGN_IN_FAILED: ChatGPT did not let Nuzky stay signed in")?;
 
-        let _lock = store::lock(&self.dir)?;
-        // Cancel, another sign-in or a sign-out meanwhile wins over this answer.
-        if cancel.load(Ordering::Relaxed) {
-            bail!("CANCELLED: Signing in was cancelled.");
-        }
-        let mut reg = Registration::load_or_create(&self.dir)?;
-        if let Ok(Some(old)) = self.vault.load(&reg.host_id)
-            && old.client_id != tokens.client_id
-        {
-            // Another account's session ends on ChatGPT's side too, rather than staying open unused.
+        let (status, replaced) = {
+            let _lock = store::lock(&self.dir)?;
+            // Cancel, or another sign-in started meanwhile, wins over this answer.
+            if cancel.load(Ordering::Relaxed) {
+                bail!("CANCELLED: Signing in was cancelled.");
+            }
+            let mut reg = Registration::load_or_create(&self.dir)?;
+            let replaced = self.vault.load(&reg.host_id).ok().flatten().filter(|old| old.client_id != tokens.client_id);
+            self.vault.save(&reg.host_id, &tokens)?;
+            reg.client_id = Some(tokens.client_id.clone());
+            reg.subject = Some(identity.subject);
+            reg.email = identity.email;
+            reg.save(&self.dir)?;
+            (Status::SignedIn { email: reg.email, plan: tokens.plan() }, replaced)
+        };
+        // Another account's session ends on ChatGPT's side too, rather than staying open unused.
+        if let Some(old) = replaced {
             oauth::revoke(&http, &self.issuer, &old.client_id, &old.refresh_token);
         }
-        self.vault.save(&reg.host_id, &tokens)?;
-        reg.client_id = Some(tokens.client_id.clone());
-        reg.subject = Some(identity.subject);
-        reg.email = identity.email;
-        reg.save(&self.dir)?;
-        Ok(Status::SignedIn { email: reg.email, plan: tokens.plan() })
+        Ok(status)
     }
 
     /// Ends the session on ChatGPT's side and removes the tokens. The account stays known, so the

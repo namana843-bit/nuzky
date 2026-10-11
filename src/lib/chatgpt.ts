@@ -43,7 +43,8 @@ export async function signIn(anotherAccount = false) {
   useChatGpt.setState({ action: "signingIn", error: null });
   try {
     const status = await api.chatgptSignIn(anotherAccount);
-    if (mine !== attempt) return;
+    // Cancelled too late to stop it: the sign-in happened, so the dialog shows what is stored now.
+    if (mine !== attempt) return void check();
     useChatGpt.setState({ status, action: null });
     if (!useChatGpt.getState().open && status.state === "signedIn")
       useEditor.getState().toast(
