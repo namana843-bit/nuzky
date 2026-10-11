@@ -110,31 +110,36 @@ fn serve(target: Target) -> Result<()> {
     let server = Server { target: target.clone(), tools: Arc::new(catalog()?) };
     let runtime =
         tokio::runtime::Builder::new_multi_thread().enable_all().build().context("MCP_FAILED: starting runtime")?;
-    let result = runtime.block_on(async {
-        let (input, mut writer) = tokio::io::duplex(64 * 1024);
-        let closing = target.clone();
-        let reader = tokio::spawn(async move {
-            let result = tokio::io::copy(&mut tokio::io::stdin(), &mut writer).await;
-            // rmcp drains handlers on EOF before waiting() returns; waits must stop before that drain.
-            match closing.as_ref() {
-                Target::Local(backend) => backend.close(),
-                #[cfg(unix)]
-                Target::App(remote) => remote.close(),
-                #[cfg(unix)]
-                Target::Current(current) => {
-                    if let Some(remote) = current.remote.lock().unwrap().as_ref() {
-                        remote.close();
-                    }
+    let (input, mut writer) = tokio::io::duplex(64 * 1024);
+    let (handle, closing) = (runtime.handle().clone(), target.clone());
+    // Its own thread: a read the runtime started would keep the runtime from shutting down while stdin stays open.
+    std::thread::spawn(move || {
+        use std::io::Read;
+        use tokio::io::AsyncWriteExt;
+        let mut buffer = [0; 8192];
+        while let Ok(read @ 1..) = std::io::stdin().read(&mut buffer) {
+            if handle.block_on(writer.write_all(&buffer[..read])).is_err() {
+                break;
+            }
+        }
+        // rmcp gives the calls in flight 5 s once its input ends; a job wait must end before that.
+        match closing.as_ref() {
+            Target::Local(backend) => backend.close(),
+            #[cfg(unix)]
+            Target::App(remote) => remote.close(),
+            #[cfg(unix)]
+            Target::Current(current) => {
+                if let Some(remote) = current.remote.lock().unwrap().as_ref() {
+                    remote.close();
                 }
             }
-            result
-        });
-        let result = match server.serve((input, tokio::io::stdout())).await {
+        }
+    });
+    let result = runtime.block_on(async {
+        match server.serve((input, tokio::io::stdout())).await {
             Ok(service) => service.waiting().await.context("MCP_FAILED: transport").map(|_| ()),
             Err(error) => Err(error).context("MCP_FAILED: initialization"),
-        };
-        reader.abort();
-        result
+        }
     });
     match target.as_ref() {
         Target::Local(backend) => {
