@@ -240,13 +240,11 @@ impl Jobs {
         Ok(state.json())
     }
 
-    pub fn wait_for(&self, client: &str, id: &str, timeout: Duration) -> Result<Value> {
+    /// `closed`: the waiting connection ended. A conversation's jobs outlive it, but its open run must not wait.
+    pub fn wait_for(&self, client: &str, id: &str, timeout: Duration, closed: &AtomicBool) -> Result<Value> {
         let deadline = Instant::now() + timeout;
         loop {
-            let ended = {
-                let lifecycle = self.lifecycle.lock().unwrap();
-                lifecycle.closing || lifecycle.disconnected_clients.contains(client)
-            };
+            let ended = self.lifecycle.lock().unwrap().closing || closed.load(Ordering::Acquire);
             let state = self.get_for(Some(client), id, false)?;
             if ended || state["status"] != "running" || state["cancel_requested"] == true || Instant::now() >= deadline
             {
@@ -356,6 +354,9 @@ mod tests {
     fn job_wait_timeout_completion_and_stop() {
         for stop in ["cancel", "disconnect", "shutdown", "run"] {
             let jobs = Arc::new(Jobs::default());
+            // A conversation's job outlives its turn's connection, yet that connection's wait must end with it.
+            jobs.begin_conversation("client");
+            let closed = AtomicBool::new(false);
             let (tx, rx) = std::sync::mpsc::channel();
             let job = jobs
                 .start("client", Some("run"), "test", Stamp { revision: 1, session_epoch: "e".into() }, move |_, _| {
@@ -365,27 +366,31 @@ mod tests {
                 .unwrap();
             let id = job["job_id"].as_str().unwrap();
             let at = Instant::now();
-            assert_eq!(jobs.wait_for("client", id, Duration::from_secs(1)).unwrap()["status"], "running");
+            assert_eq!(jobs.wait_for("client", id, Duration::from_secs(1), &closed).unwrap()["status"], "running");
             assert!(at.elapsed() >= Duration::from_secs(1) && at.elapsed() < Duration::from_millis(1500));
             std::thread::scope(|scope| {
-                let waiting = scope.spawn(|| jobs.wait_for("client", id, Duration::from_secs(30)).unwrap());
+                let waiting = scope.spawn(|| jobs.wait_for("client", id, Duration::from_secs(30), &closed).unwrap());
                 std::thread::sleep(Duration::from_millis(50));
                 let at = Instant::now();
                 match stop {
                     "cancel" => {
                         jobs.get(id, true).unwrap();
                     }
-                    "disconnect" => jobs.cancel_owner("client"),
+                    "disconnect" => {
+                        jobs.cancel_owner("client");
+                        closed.store(true, Ordering::Release);
+                    }
                     "shutdown" => jobs.begin_shutdown(),
                     _ => jobs.cancel_run("run"),
                 }
                 waiting.join().unwrap();
                 assert!(at.elapsed() < Duration::from_millis(250));
             });
+            jobs.get(id, true).unwrap();
             tx.send(()).unwrap();
             jobs.shutdown();
             let at = Instant::now();
-            assert_eq!(jobs.wait_for("client", id, Duration::from_secs(30)).unwrap()["status"], "cancelled");
+            assert_eq!(jobs.wait_for("client", id, Duration::from_secs(30), &closed).unwrap()["status"], "cancelled");
             assert!(at.elapsed() < Duration::from_millis(50));
         }
     }
@@ -433,7 +438,8 @@ mod tests {
         progress.set("rendering", Some(0.75));
         assert!(matches!(rx.recv().unwrap(), SessionEvent::Job { progress: 0.75, .. }));
         release.send(()).unwrap();
-        jobs.wait_for("client", job["job_id"].as_str().unwrap(), Duration::from_secs(1)).unwrap();
+        jobs.wait_for("client", job["job_id"].as_str().unwrap(), Duration::from_secs(1), &AtomicBool::new(false))
+            .unwrap();
         jobs.shutdown();
         assert!(matches!(rx.recv().unwrap(), SessionEvent::Job { status: "done", progress: 1.0, .. }));
     }

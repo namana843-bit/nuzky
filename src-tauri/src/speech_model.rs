@@ -81,10 +81,8 @@ pub fn ask(app: &AppHandle, cancel: &AtomicBool, progress: &Progress) -> anyhow:
             }
             ours.and_then(|ours| ours.downloaded)
         };
-        match downloaded {
-            Some(done) => progress.set("downloading_speech_model", Some(done)),
-            None => progress.set("waiting_for_user", None),
-        }
+        // The download's own job shows its percentage; this one's would make remaining_s the download's alone.
+        progress.set(if downloaded.is_some() { "downloading_speech_model" } else { "waiting_for_user" }, None);
         std::thread::sleep(Duration::from_millis(100));
     }
 }

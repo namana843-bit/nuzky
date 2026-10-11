@@ -272,7 +272,12 @@ impl Backend {
                 if matches!(a.action, JobAction::Wait) {
                     let timeout = a.timeout_s.unwrap_or(25);
                     ensure!(timeout <= 30, "INVALID_ARGUMENTS: timeout_s is at most 30");
-                    self.host.jobs.wait_for(&self.client.id, &a.job_id, std::time::Duration::from_secs(timeout))
+                    self.host.jobs.wait_for(
+                        &self.client.id,
+                        &a.job_id,
+                        std::time::Duration::from_secs(timeout),
+                        &self.closed,
+                    )
                 } else {
                     self.host.jobs.get_for(Some(&self.client.id), &a.job_id, matches!(a.action, JobAction::Cancel))
                 }
@@ -807,7 +812,7 @@ impl Backend {
         if !assets.is_empty() {
             match (transcript::models(&name), ask) {
                 (Ok(paths), _) => model_paths = Some(paths),
-                // The app asks the user inside the job, so the agent polls for the answer instead of retrying.
+                // The app asks the user inside the job, so the agent waits for the answer instead of retrying.
                 (Err(error), Some(ask)) if error.to_string().starts_with("MODEL_MISSING") => {
                     if let Some(reason) = self.model_refused.lock().unwrap().clone() {
                         anyhow::bail!(reason);
