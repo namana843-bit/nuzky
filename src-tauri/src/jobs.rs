@@ -267,18 +267,28 @@ fn ensure_sound(state: &AppState, project: &Project) {
             let spawned = std::thread::Builder::new().name(kind.into()).spawn(move || {
                 let (app, id) = (worker, job);
                 let mut rep = Reporter::new(&app, &id, "audio", format!("{label} in {}", asset.name));
+                // A step no clip needs any more, as cleaning once Clean voice is off while Reduce echo stays, is
+                // left out, or stops as if cancelled; what is still needed starts again after the job.
+                let needed = |chain: &Chain| {
+                    app.state::<AppState>().project().is_ok_and(|open| {
+                        wanted_sound(&open, kind).get(&asset.id).is_some_and(|chains| chains.contains(chain))
+                    })
+                };
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     for (index, (chain, output)) in work.iter().enumerate() {
-                        // A step no clip needs any more, as cleaning once Clean voice is off, is left out.
-                        let needed = app.state::<AppState>().project().is_ok_and(|open| {
-                            wanted_sound(&open, kind).get(&asset.id).is_some_and(|chains| chains.contains(chain))
-                        });
-                        if !needed {
+                        if !needed(chain) {
                             continue;
                         }
                         path = output.clone();
                         check_cancelled(&flag)?;
+                        let mut asked = Instant::now();
                         let progress = |p| {
+                            if asked.elapsed() > Duration::from_millis(500) {
+                                asked = Instant::now();
+                                if !needed(chain) {
+                                    flag.store(true, Ordering::Relaxed);
+                                }
+                            }
                             check_cancelled(&flag)?;
                             rep.progress((index as f32 + p) / work.len() as f32, None);
                             Ok(())
