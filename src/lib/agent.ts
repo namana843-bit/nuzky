@@ -59,7 +59,8 @@ export interface Choice {
 
 export type ChatItem =
   | { kind: "user"; text: string; context: string | null }
-  | { kind: "agent"; text: string }
+  /** `ended`: a tool call the panel does not show came after it, so the agent's next words are a new message. */
+  | { kind: "agent"; text: string; ended?: boolean }
   | { kind: "steps"; steps: Step[] }
   | { kind: "options"; id: string; question: string | null; options: Choice[]; chosen: string | null }
   | {
@@ -350,12 +351,18 @@ function onEvent(e: AgentEvent) {
   const items = [...s.items];
   const last = items[items.length - 1];
   if (e.type === "text") {
-    if (last?.kind === "agent") items[items.length - 1] = { kind: "agent", text: last.text + e.text };
+    if (last?.kind === "agent" && !last.ended) items[items.length - 1] = { kind: "agent", text: last.text + e.text };
     else items.push({ kind: "agent", text: e.text });
     useAgent.setState({ items });
   } else if (e.type === "tool") {
     const name = toolName(e.name);
-    if (HIDDEN.has(name)) return;
+    if (HIDDEN.has(name)) {
+      if (last?.kind === "agent" && !last.ended) {
+        items[items.length - 1] = { ...last, ended: true };
+        useAgent.setState({ items });
+      }
+      return;
+    }
     if (name === OFFER) {
       const offer = offered(e.input);
       if (offer && !items.some((it) => it.kind === "options" && it.id === e.id)) useAgent.setState({ items: [...items, { kind: "options", id: e.id, chosen: null, ...offer }] });
