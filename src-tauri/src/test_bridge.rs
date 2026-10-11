@@ -429,6 +429,7 @@ fn key_code(key: &str) -> Result<(u16, String)> {
         "Tab" => special(48, '\t'),
         "space" => special(49, ' '),
         "Right" => special(124, '\u{f703}'),
+        "Up" => special(126, '\u{f700}'),
         _ if key.chars().count() == 1 => Ok((0, key.to_owned())),
         _ => bail!("no key {key:?}"),
     }

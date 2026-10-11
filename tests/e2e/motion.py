@@ -11,6 +11,7 @@ from e2e.home import resize
 from e2e.zooms import GRID, SQUARE, poll
 
 INSPECTOR = 'aside[aria-label=Inspector]'
+MOTION = f"const s = [...document.querySelectorAll('{INSPECTOR} section')].find((s) => s.querySelector('h3')?.textContent === 'Motion');"
 CLIP = 'return window.__nuzky.store.getState().snap.project.tracks[0].clips[0]'
 # The canvas point the zoom keeps in place on a 1080×1920 canvas: the middle of the Reels and TikTok safe area.
 FIXED = (480, 835)
@@ -26,20 +27,21 @@ def motion_setup(r):
 
 
 def click(r, label):
-    """Clicks the inspector button with this text, as a person does."""
-    return r.s.run(f"""const b = [...document.querySelectorAll('{INSPECTOR} button')].find((b) => b.textContent.trim() === arguments[0]);
+    """Clicks the Motion section's button with this text, as a person does; Background has a None too."""
+    return r.s.run(f"""{MOTION}
+        const b = s && [...s.querySelectorAll('button')].find((b) => b.textContent.trim() === arguments[0]);
         if (!b) return false; b.click(); return true;""", label)
 
 
 def pressed(r):
     """Text of every pressed button of the Motion section."""
-    return r.s.run(f"""const s = [...document.querySelectorAll('{INSPECTOR} section')].find((s) => s.querySelector('h3')?.textContent === 'Motion');
+    return r.s.run(f"""{MOTION}
         return s ? [...s.querySelectorAll('button[aria-pressed=true]')].map((b) => b.textContent.trim()) : null;""")
 
 
 def show_motion(r):
     """Scrolls the inspector to the Motion section; True when every tile label and segment shows whole."""
-    whole = r.s.run(f"""const s = [...document.querySelectorAll('{INSPECTOR} section')].find((s) => s.querySelector('h3')?.textContent === 'Motion');
+    whole = r.s.run(f"""{MOTION}
         s.scrollIntoView({{block: 'end'}});
         return [...s.querySelectorAll('button > span.truncate, [role=group] button')].every((e) => e.scrollWidth <= e.clientWidth + 1);""")
     time.sleep(0.5)

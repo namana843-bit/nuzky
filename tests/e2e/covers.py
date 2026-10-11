@@ -96,8 +96,10 @@ def covers_unavailable(r):
         bridge.close()
     # In the app: Pick for me says why it is off; choosing a frame and text in front still work.
     r.s.run("""const b = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Make a cover'); b.click();""")
-    pick = wait(lambda: r.s.run("""const b = [...document.querySelectorAll('[data-testid=cover-frames] button')].find((b) => b.textContent.trim() === 'Pick for me');
-        return b ? {disabled: b.getAttribute('aria-disabled'), title: b.title} : null;"""), 10)
+    # The button shows before the app has asked whether covers can run here.
+    button = lambda: r.s.run("""const b = [...document.querySelectorAll('[data-testid=cover-frames] button')].find((b) => b.textContent.trim() === 'Pick for me');
+        return b ? {disabled: b.getAttribute('aria-disabled'), title: b.title} : null;""")
+    pick = wait(lambda: (b := button()) and b['disabled'] == 'true' and b, 10) or button()
     r.check('Pick for me is off with the reason', pick and pick['disabled'] == 'true' and "doesn't work on this computer" in pick['title'], pick)
     r.shot('cover-unavailable')
     r.key('Escape')
