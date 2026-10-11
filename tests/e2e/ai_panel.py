@@ -196,13 +196,15 @@ def ai_panel(r):
     theirs = clipboard() if MACOS else None
     found = r.s.run("""const b = document.querySelector('aside[aria-label=AI] button[aria-label="Copy message"]');
         b?.focus(); return !!b;""")
-    press('Return')
-    copied = wait(lambda: clipboard() == 'Cut the pause at the start and add captions', 5)
-    got = clipboard()
-    label = r.s.run("return document.activeElement?.getAttribute('aria-label')")
-    r.shot('message-copied')
-    if theirs is not None:
-        subprocess.run(['pbcopy'], input=theirs, text=True, check=True)
+    try:
+        press('Return')
+        copied = wait(lambda: clipboard() == 'Cut the pause at the start and add captions', 5)
+        got = clipboard()
+        label = r.s.run("return document.activeElement?.getAttribute('aria-label')")
+        r.shot('message-copied')
+    finally:
+        if theirs is not None:
+            subprocess.run(['pbcopy'], input=theirs, text=True, check=True)
     r.check('Copy beside my message puts exactly what I sent on the clipboard and says it is copied',
             found and copied and label == 'Copied', {'button': found, 'clipboard': got, 'label': label})
     click(r, 'Added 2 captions')
