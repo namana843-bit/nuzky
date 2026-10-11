@@ -1,61 +1,80 @@
 import { useRef } from "react";
 import { AlertCircle, Check, ScanFace, Sparkles } from "lucide-react";
-import { makeThumbnail } from "../../lib/agent";
+import { coverAiBlocked, makeCoverWithAi, useAgent } from "../../lib/agent";
 import { api } from "../../lib/api";
-import { candidateReason, chooseFrame, downloadModels, pick, thumbnailOf, useCandidates, useCover } from "../../lib/cover";
+import { candidateReason, chooseFrame, downloadModels, pick, useCandidates, useCover } from "../../lib/cover";
 import { useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import type { CoverCandidate, ThumbnailFormat } from "../../lib/types";
+import { useShownCover } from "./CoverStage";
 import { AiLock, Button, ProgressBar, lockedProps, useLockReason } from "../ui";
 
-/** The library's place in the cover editor: Pick for me and the frames it found. */
+/**
+ * The library's place in the cover editor. Until there is a cover, Make it with AI leads: the agent picks the frame
+ * and writes the hook. Then Pick for me and the frames it found.
+ */
 export function CoverFrames({ format }: { format: ThumbnailFormat }) {
+  // Either cover: the AI makes both, so it no longer leads once one is made by hand.
+  const made = useEditor((s) => !!s.snap?.project.thumbnails?.length);
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="cover-frames">
       <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-white/[.07] pl-4 pr-2">
         <h2 className="text-[13px] font-semibold text-fg">Frames</h2>
-        <AiLock>
-          <MakeWithAi />
-        </AiLock>
+        {made && (
+          <AiLock>
+            <MakeWithAi variant="ghost" />
+          </AiLock>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-3">
         <AiLock>
-          <Frames format={format} />
+          <Frames format={format} made={made} />
         </AiLock>
       </div>
     </div>
   );
 }
 
-function MakeWithAi() {
-  const lock = useLockReason();
-  const unavailable = useCover((s) => s.models?.unavailable ?? null);
+/** Why Make it with AI cannot start, read again whenever the agent or the cover models change. */
+function useAiBlocked() {
+  useAgent((s) => s.agents);
+  useAgent((s) => s.agent);
+  useAgent((s) => s.status);
+  useCover((s) => s.models);
+  return coverAiBlocked();
+}
+
+function MakeWithAi({ variant }: { variant: "primary" | "ghost" }) {
+  const blocked = useAiBlocked();
   return (
     <Button
-      variant="ghost"
-      className="h-7 gap-1 px-2 text-[12px] text-accent! hover:text-accent!"
-      disabled={!!unavailable}
-      disabledReason={unavailable ?? undefined}
-      title="Let your AI agent pick the frame and write the hook, in the AI panel"
-      {...lockedProps(lock)}
-      onClick={makeThumbnail}
+      variant={variant}
+      className={variant === "ghost" ? "h-7 gap-1 px-2 text-[12px] text-accent! hover:text-accent!" : "w-full"}
+      disabled={!!blocked}
+      disabledReason={blocked ?? undefined}
+      title="Your AI agent picks the frame, writes the hook and places it"
+      onClick={makeCoverWithAi}
     >
-      <Sparkles size={13} /> Make it with AI
+      <Sparkles size={variant === "ghost" ? 13 : 15} /> Make it with AI
     </Button>
   );
 }
 
-function Frames({ format }: { format: ThumbnailFormat }) {
+function Frames({ format, made }: { format: ThumbnailFormat; made: boolean }) {
   const candidates = useCandidates();
+  const aiBlocked = useAiBlocked();
+  // The AI waits for the cover models it needs; their download shows here like a pick.
+  const aiWaits = useCover((s) => !!s.afterModels);
   const job = useEditor((s) => {
-    const id = useCover.getState().pickJob;
-    return id && s.jobs[id]?.status === "running" ? s.jobs[id] : null;
+    const { pickJob, modelsJob, afterModels } = useCover.getState();
+    const id = [pickJob, afterModels ? modelsJob : null].find((j) => j && s.jobs[j]?.status === "running");
+    return id ? s.jobs[id] : null;
   });
   const failed = useCover((s) => s.failed);
   const damaged = useCover((s) => s.damaged);
   const kept = useCover((s) => s.kept);
   const models = useCover((s) => s.models);
-  const time = useEditor((s) => thumbnailOf(s.snap?.project, format)?.timeUs ?? null);
+  const time = useShownCover(format)?.cover.timeUs ?? null;
   const fps = useEditor((s) => s.snap?.project.canvas.fps ?? 30);
   const lock = useLockReason();
   const grid = useRef<HTMLDivElement>(null);
@@ -85,20 +104,27 @@ function Frames({ format }: { format: ThumbnailFormat }) {
         <div className="flex flex-col gap-2" role="status">
           <div className="flex items-center justify-between gap-2 text-[12px]">
             <span className="tabular truncate text-fg">
-              {job.phase ?? "Picking a cover frame"}
+              {job.phase ?? job.label}
               {job.progress > 0 && ` · ${Math.round(job.progress * 100)}%`}
             </span>
             <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" onClick={() => void api.cancelJob(job.id)}>
               Stop
             </Button>
           </div>
-          <ProgressBar value={job.progress} label="Picking a cover frame" />
+          <ProgressBar value={job.progress} label={job.label} />
+          {aiWaits && <p className="text-[12px] text-muted">Then the AI makes the cover.</p>}
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          {/* Prominent until it has found frames; then picking again is the rarer step. */}
+          {!made && (
+            <>
+              <MakeWithAi variant="primary" />
+              <p className="mb-1.5 text-[12px] text-muted">{aiBlocked ?? "Picks the frame and writes the hook from what is said in the video."}</p>
+            </>
+          )}
+          {/* Prominent once there is a cover, until it has found frames; then picking again is the rarer step. */}
           <Button
-            variant={candidates.length > 0 ? "secondary" : "primary"}
+            variant={!made || candidates.length > 0 ? "secondary" : "primary"}
             className="w-full"
             disabled={!!models?.unavailable}
             disabledReason={models?.unavailable ? "Finding faces doesn't work on this computer. Click the timeline to choose a frame." : undefined}
@@ -106,7 +132,8 @@ function Frames({ format }: { format: ThumbnailFormat }) {
           >
             <ScanFace size={15} /> {candidates.length > 0 ? "Pick again" : "Pick for me"}
           </Button>
-          {models && !models.downloaded && !models.unavailable && <p className="text-[12px] text-muted">Downloads the cover models first ({models.sizeMb} MB, once).</p>}
+          {candidates.length === 0 && <p className="text-[12px] text-muted">Finds frames with open eyes and a sharp face.</p>}
+          {models && !models.downloaded && !models.unavailable && <p className="text-[12px] text-muted">First use downloads the cover models ({models.sizeMb} MB).</p>}
         </div>
       )}
       {failed && !job && (
@@ -120,13 +147,6 @@ function Frames({ format }: { format: ThumbnailFormat }) {
               Download again
             </Button>
           )}
-        </div>
-      )}
-      {candidates.length === 0 && !job && !failed && (
-        <div className="mt-6 flex flex-col items-center gap-1 px-4 text-center">
-          <ScanFace size={20} className="text-muted" />
-          <p className="mt-1 text-[15px] font-semibold text-fg">No frames yet</p>
-          <p className="text-[13px] text-muted">Pick for me finds frames with open eyes, a sharp face and a good expression. Or click the timeline to choose any frame.</p>
         </div>
       )}
       {candidates.length > 0 && (
@@ -161,7 +181,7 @@ function Frames({ format }: { format: ThumbnailFormat }) {
                       </span>
                     )}
                   </span>
-                  <span className={`line-clamp-3 text-[11px] leading-[14px] ${chosen ? "text-fg" : "text-muted"}`}>{reason}</span>
+                  <span className={`truncate text-[11px] leading-[14px] ${chosen ? "text-fg" : "text-muted"}`}>{reason}</span>
                 </button>
               );
             })}

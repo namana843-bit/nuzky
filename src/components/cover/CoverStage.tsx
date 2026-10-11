@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, Loader2, MonitorPlay, Smartphone } from "lucide-react";
 import { api, errorText, plainError } from "../../lib/api";
-import { COVER_FORMATS, chooseFrame, frameAt, closeCover, coverFormat, downloadModels, editCover, editText, mask, newCover, setSafeZones, switchFormat, thumbnailOf, useCover } from "../../lib/cover";
+import { COVER_FORMATS, frameAt, coverFormat, downloadModels, draftCover, editCover, editText, mask, selectText, setSafeZones, switchFormat, thumbnailOf, useCover } from "../../lib/cover";
 import { projectDuration, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
 import type { CoverView, LayerBounds, Snapshot, Thumbnail, ThumbnailFormat, Transform } from "../../lib/types";
@@ -21,7 +21,7 @@ export function useShownCover(format: ThumbnailFormat): { cover: Thumbnail; draf
   if (cover) return { cover, draft: false };
   // Recomputed per render: `models` decides whether a YouTube thumbnail of a vertical video starts blurred.
   void models;
-  return { cover: newCover(format, project, frameAt(project, timeUs)), draft: true };
+  return { cover: draftCover(format, project, frameAt(project, timeUs)), draft: true };
 }
 
 /** What Reels, the profile grid and YouTube cover of a thumbnail, in its own pixels. */
@@ -148,7 +148,8 @@ export function CoverStage({ format, box }: { format: ThumbnailFormat; box: { w:
     : [];
   const latest = useRef(layers);
   latest.current = layers;
-  const cover = () => thumbnailOf(useEditor.getState().snap?.project, format);
+  // A drag can start on a draft text while selecting it is still making the cover.
+  const cover = () => thumbnailOf(useEditor.getState().snap?.project, format) ?? shown?.cover;
   const source: LayerSource = {
     canvas: { width: tw, height: th },
     bounds: layers,
@@ -160,7 +161,7 @@ export function CoverStage({ format, box }: { format: ThumbnailFormat; box: { w:
     onBounds: () => {},
     selected: selected === null ? null : String(selected),
     isOnlySelected: (id) => String(useCover.getState().selected) === id,
-    select: (id) => useCover.setState({ selected: id === null ? null : id === "frame" ? "frame" : Number(id) }),
+    select: (id) => (id === null || id === "frame" ? useCover.setState({ selected: id }) : void selectText(format, Number(id))),
     transform: (id) => {
       const c = cover();
       return (id === "frame" ? c?.frame : c?.texts[Number(id)]?.transform) ?? null;
@@ -218,14 +219,14 @@ export function CoverStage({ format, box }: { format: ThumbnailFormat; box: { w:
             ),
         )}
         {view && <LayerBox width={fit.w} height={fit.h} bleed={{ x: (box.w - fit.w) / 2, y: (box.h - fit.h) / 2 }} source={source} />}
-        <StatusChip format={format} view={view} draft={shown.draft} />
+        <StatusChip view={view} />
       </div>
     </div>
   );
 }
 
 /** One chip at the top left of the cover for what it is waiting for, with one way on. */
-function StatusChip({ format, view, draft }: { format: ThumbnailFormat; view: CoverView | null; draft: boolean }) {
+function StatusChip({ view }: { view: CoverView | null }) {
   const models = useCover((s) => s.models);
   const job = useEditor((s) => {
     const { maskJob, modelsJob } = useCover.getState();
@@ -235,7 +236,6 @@ function StatusChip({ format, view, draft }: { format: ThumbnailFormat; view: Co
   const failed = useCover((s) => s.failed);
   const damaged = useCover((s) => s.damaged);
   const locked = useEditor((s) => !!s.aiRun);
-  const timeUs = useEditor((s) => s.timeUs);
   const missing = !!view?.maskMissing;
   const tried = useRef(new Set<number>());
 
@@ -262,15 +262,6 @@ function StatusChip({ format, view, draft }: { format: ThumbnailFormat; view: Co
         </span>
         <Button pill className="h-5 shrink-0 px-2 text-[11px]" onClick={() => void api.cancelJob(job.id)}>
           Stop
-        </Button>
-      </div>
-    );
-  if (draft)
-    return (
-      <div className={`${chip} pr-1`}>
-        <span className="truncate">Not made yet</span>
-        <Button pill className="h-5 shrink-0 px-2 text-[11px]" onClick={() => void chooseFrame(format, timeUs)}>
-          Use this frame
         </Button>
       </div>
     );
@@ -312,7 +303,7 @@ function StatusChip({ format, view, draft }: { format: ThumbnailFormat; view: Co
   );
 }
 
-/** In place of the transport: the frame's time, the format, the safe zones and Done. */
+/** In place of the transport: the frame's time, the format and the safe zones. */
 export function CoverBar({ format }: { format: ThumbnailFormat }) {
   const time = useEditor((s) => thumbnailOf(s.snap?.project, format)?.timeUs ?? s.timeUs);
   const safeZones = useCover((s) => s.safeZones);
@@ -339,9 +330,6 @@ export function CoverBar({ format }: { format: ThumbnailFormat }) {
         >
           {format === "cover_9x16" ? <Smartphone size={16} /> : <MonitorPlay size={16} />}
         </IconButton>
-        <Button pill className="h-8 px-3.5" onClick={closeCover}>
-          Done
-        </Button>
       </div>
     </div>
   );

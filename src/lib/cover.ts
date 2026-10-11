@@ -4,7 +4,7 @@ import { create } from "zustand";
 import presets from "../../assets/presets/thumbnails.json";
 import { api, errorText, plainError } from "./api";
 import { DEFAULT_TRANSFORM } from "./presets";
-import { aiLocked, currentEpoch, projectDuration, undoAction, useEditor } from "./store";
+import { aiLocked, currentEpoch, openExport, projectDuration, undoAction, useEditor } from "./store";
 import { US } from "./time";
 import type { CoverCandidate, CoverPick, JobEvent, Project, TextStyle, Thumbnail, ThumbnailFormat, ThumbnailText, Transform, VisionModels } from "./types";
 
@@ -17,6 +17,7 @@ export const coverFormat = (id: ThumbnailFormat) => COVER_FORMATS.find((f) => f.
 
 /** Text looks for covers, shared with the engine's agents (assets/presets/thumbnails.json). Unlike text presets they carry their font. */
 export const COVER_PRESETS: { name: string; behind: boolean; style: TextStyle }[] = presets;
+const OUTLINED = COVER_PRESETS.find((p) => p.name === "Outlined")!;
 
 interface CoverState {
   /** The cover editor shows this format in place of the video; null shows the video. */
@@ -46,6 +47,8 @@ interface CoverState {
   /** The share of each text of the cover on screen that the person covers; empty until the person is cut out. */
   hidden: number[];
   models: VisionModels | null;
+  /** What to do once the cover models the user asked for are downloaded, e.g. let the AI make the cover. */
+  afterModels: (() => void) | null;
   safeZones: boolean;
 }
 
@@ -67,12 +70,15 @@ export const useCover = create<CoverState>(() => ({
   masks: 0,
   hidden: [],
   models: null,
+  afterModels: null,
   safeZones: localStorage.getItem(SAFE_ZONES_KEY) !== "0",
 }));
 
 export function thumbnailOf(project: Project | undefined, format: ThumbnailFormat): Thumbnail | undefined {
   return project?.thumbnails?.find((t) => t.format === format);
 }
+
+const otherFormat = (format: ThumbnailFormat): ThumbnailFormat => (format === "cover_9x16" ? "youtube_16x9" : "cover_9x16");
 
 export function setSafeZones(on: boolean) {
   localStorage.setItem(SAFE_ZONES_KEY, on ? "1" : "0");
@@ -123,12 +129,17 @@ export function closeCover() {
 
 /** The playhead time the cover editor set itself, which is not the user choosing a frame. */
 let synced: number | null = null;
+/** The cover editor is moving the playhead itself: the seek tells the subscription before `synced` is set. */
+let showing = false;
 
-/** Moves the playhead to the frame of the cover of `format`, when it has one. */
+/** Moves the playhead to the frame of the cover of `format`, or before it has one, of the other format's cover. */
 function showFrame(format: ThumbnailFormat) {
-  const cover = thumbnailOf(useEditor.getState().snap?.project, format);
+  const project = useEditor.getState().snap?.project;
+  const cover = thumbnailOf(project, format) ?? thumbnailOf(project, otherFormat(format));
   if (!cover) return;
+  showing = true;
   useEditor.getState().seek(cover.timeUs);
+  showing = false;
   synced = useEditor.getState().timeUs;
 }
 
@@ -157,9 +168,14 @@ useEditor.subscribe((s, prev) => {
     if (Math.abs(cover.timeUs - s.timeUs) > 1) showFrame(format);
     return;
   }
-  if (s.timeUs === prev.timeUs || s.timeUs === synced) return;
+  // A new snapshot can clamp the playhead to a shorter video; that is no frame the user chose either.
+  if (showing || s.snap !== prev.snap || s.timeUs === prev.timeUs || s.timeUs === synced) return;
   synced = null;
-  if (!cover) return;
+  // Playback stopped as the editor opened: where it stopped is no frame the user chose.
+  if (s.playing || prev.playing) {
+    showFrame(format);
+    return;
+  }
   if (s.aiRun) {
     // The frame stays the agent's; the playhead goes back to it and the lock says why.
     aiLocked();
@@ -193,7 +209,7 @@ const WIDE_FRAME: Transform = { ...DEFAULT_TRANSFORM, scale: 1.4, x: -1 / 6, y: 
 const WIDE_TEXT = { x: 1 / 6, y: -0.1, maxWidth: 760 };
 
 /** A new cover from the frame at `timeUs`: the frame fills the thumbnail as it would on the canvas. */
-export function newCover(format: ThumbnailFormat, project: Project, timeUs: number): Thumbnail {
+function newCover(format: ThumbnailFormat, project: Project, timeUs: number): Thumbnail {
   const wide = format === "youtube_16x9" && isVertical(project);
   const cutOut = wide && !!useCover.getState().models?.downloaded;
   return {
@@ -206,24 +222,27 @@ export function newCover(format: ThumbnailFormat, project: Project, timeUs: numb
   };
 }
 
-/** The other format's cover made from `from`: the same frame and texts, sized and placed for this format, as one step. */
-export function startFrom(format: ThumbnailFormat, from: Thumbnail) {
-  return editCover(format, (_, project) => {
-    const base = newCover(format, project, from.timeUs);
-    const wide = format === "youtube_16x9" && isVertical(project);
-    const k = format === "youtube_16x9" ? 2 / 3 : 3 / 2;
-    return {
-      ...base,
-      outline: base.outline ?? from.outline,
-      texts: from.texts.map((t) => ({
-        ...t,
-        // Beside the person on a YouTube thumbnail, where nothing covers it; where it was on a cover.
-        behind: wide ? false : t.behind,
-        transform: wide ? { ...t.transform, x: WIDE_TEXT.x, y: WIDE_TEXT.y } : format === "cover_9x16" ? { ...t.transform, x: 0, y: -0.22 } : t.transform,
-        style: { ...t.style, fontSize: Math.round(t.style.fontSize * k), strokeWidth: t.style.strokeWidth * k, maxWidth: wide ? WIDE_TEXT.maxWidth : null },
-      })),
-    };
-  });
+/**
+ * The cover the editor offers before there is one, from the frame at `timeUs`: with the other format's texts and
+ * outline when it has a cover, sized and placed for this format.
+ */
+export function draftCover(format: ThumbnailFormat, project: Project, timeUs: number): Thumbnail {
+  const from = thumbnailOf(project, otherFormat(format));
+  const base = newCover(format, project, timeUs);
+  if (!from) return base;
+  const wide = format === "youtube_16x9" && isVertical(project);
+  const k = format === "youtube_16x9" ? 2 / 3 : 3 / 2;
+  return {
+    ...base,
+    outline: base.outline ?? from.outline,
+    texts: from.texts.map((t) => ({
+      ...t,
+      // Beside the person on a YouTube thumbnail, where nothing covers it; where it was on a cover.
+      behind: wide ? false : t.behind,
+      transform: wide ? { ...t.transform, x: WIDE_TEXT.x, y: WIDE_TEXT.y } : format === "cover_9x16" ? { ...t.transform, x: 0, y: -0.22 } : t.transform,
+      style: { ...t.style, fontSize: Math.round(t.style.fontSize * k), strokeWidth: t.style.strokeWidth * k, maxWidth: wide ? WIDE_TEXT.maxWidth : null },
+    })),
+  };
 }
 
 /** Sets the cover's frame, making the cover when there is none, as one undo step. */
@@ -232,15 +251,15 @@ export function chooseFrame(format: ThumbnailFormat, timeUs: number, coalesce?: 
     format,
     (current, project) => {
       const t = frameAt(project, timeUs);
-      return current ? (current.timeUs === t ? null : { ...current, timeUs: t }) : newCover(format, project, t);
+      return current ? (current.timeUs === t ? null : { ...current, timeUs: t }) : draftCover(format, project, t);
     },
     coalesce,
   );
 }
 
 /**
- * A text in the look of `preset`, sized for the format: on a cover in the upper part where the apps leave it
- * free, on a YouTube thumbnail of a vertical video beside the person.
+ * A text in the look of `preset`, sized for the format: on a cover in the lower middle, on a YouTube thumbnail of a
+ * vertical video beside the person.
  */
 export function presetText(format: ThumbnailFormat, preset: (typeof COVER_PRESETS)[number], wide = false, text = "YOUR HOOK"): ThumbnailText {
   // The presets are sized for the 1080 px wide cover; a YouTube thumbnail is seen smaller, about two thirds.
@@ -248,34 +267,58 @@ export function presetText(format: ThumbnailFormat, preset: (typeof COVER_PRESET
   return {
     text,
     style: { ...preset.style, fontSize: Math.round(preset.style.fontSize * k), strokeWidth: preset.style.strokeWidth * k, ...(wide ? { maxWidth: WIDE_TEXT.maxWidth } : {}) },
-    transform: { ...DEFAULT_TRANSFORM, ...(wide ? { x: WIDE_TEXT.x, y: WIDE_TEXT.y } : { y: format === "youtube_16x9" ? -0.2 : -0.22 }) },
-    behind: preset.behind && !wide,
+    // Under the face of a talking head and inside the Reels safe area.
+    transform: { ...DEFAULT_TRANSFORM, ...(wide ? { x: WIDE_TEXT.x, y: WIDE_TEXT.y } : { y: format === "youtube_16x9" ? -0.2 : 0.12 }) },
+    behind: false,
   };
 }
 
-/** Adds a text in the look of `preset` and selects it, as one undo step; without a cover yet, it makes one at the playhead. */
-export async function addText(format: ThumbnailFormat, preset: (typeof COVER_PRESETS)[number]) {
+/**
+ * Adds "YOUR HOOK" in the Outlined look, in front, and selects it, ready to type over, as one undo step; without a
+ * cover yet, it makes the one the editor shows. Outlined in front reads over any picture; where the person stands
+ * decides how much of a text behind them would show.
+ */
+export async function addText(format: ThumbnailFormat) {
   const timeUs = useEditor.getState().timeUs;
   const snap = await editCover(format, (current, project) => {
-    const cover = current ?? newCover(format, project, Math.min(timeUs, lastFrame(project)));
-    return { ...cover, texts: [...cover.texts, presetText(format, preset, format === "youtube_16x9" && isVertical(project))] };
+    const cover = current ?? draftCover(format, project, Math.min(timeUs, lastFrame(project)));
+    return { ...cover, texts: [...cover.texts, presetText(format, OUTLINED, format === "youtube_16x9" && isVertical(project))] };
   });
   const count = thumbnailOf(snap?.project, format)?.texts.length ?? 0;
-  if (snap && count > 0) useCover.setState({ selected: count - 1 });
+  if (!snap || count === 0) return snap;
+  useCover.setState({ selected: count - 1 });
+  // The inspector shows the new text's field only now.
+  window.setTimeout(() => document.querySelector<HTMLTextAreaElement>("[data-cover-text]")?.select(), 0);
   return snap;
 }
 
-/** Changes one text of the cover, built from its latest confirmed state. */
+/** Export in the cover editor: a cover not made yet is made as the editor shows it, as one undo step, then the dialog opens on it. */
+export async function exportCover() {
+  const { open } = useCover.getState();
+  const { snap, timeUs } = useEditor.getState();
+  if (open && snap && !thumbnailOf(snap.project, open)) await chooseFrame(open, timeUs);
+  openExport();
+}
+
+/** Changes one text of the cover, built from its latest confirmed state; a text of the cover not made yet makes it. */
 export function editText(format: ThumbnailFormat, index: number, change: (text: ThumbnailText) => ThumbnailText | null, coalesce?: string) {
+  const timeUs = useEditor.getState().timeUs;
   return editCover(
     format,
-    (current) => {
-      const text = current?.texts[index];
+    (current, project) => {
+      const cover = current ?? draftCover(format, project, frameAt(project, timeUs));
+      const text = cover.texts[index];
       const next = text && change(text);
-      return current && next ? { ...current, texts: current.texts.map((t, i) => (i === index ? next : t)) } : null;
+      return next ? { ...cover, texts: cover.texts.map((t, i) => (i === index ? next : t)) } : null;
     },
     coalesce && `text:${index}:${coalesce}`,
   );
+}
+
+/** Selects a text of the cover; a text of the cover not made yet makes it first, so the inspector can edit it. */
+export async function selectText(format: ThumbnailFormat, index: number) {
+  if (!thumbnailOf(useEditor.getState().snap?.project, format)) await chooseFrame(format, useEditor.getState().timeUs);
+  useCover.setState({ selected: index });
 }
 
 /** Removes a text of the cover, with Undo in a toast. */
@@ -310,14 +353,32 @@ export async function mask(timeUs: number) {
   }
 }
 
-/** Downloads the cover models without picking, e.g. before using Behind person; after a damaged model, all of them are checked. */
-export async function downloadModels() {
-  const repair = useCover.getState().damaged;
+/** A model download asked for whose job id has not arrived yet, so a second click does not ask again. */
+let startingModels = false;
+
+/**
+ * Downloads the cover models without picking, e.g. for Behind person, then does `then` unless another project opened
+ * meanwhile; after a damaged model, all of them are checked. A download already running is the one to wait for.
+ */
+export async function downloadModels(then?: () => void) {
+  const { damaged: repair, modelsJob } = useCover.getState();
+  if (then) {
+    const epoch = currentEpoch();
+    useCover.setState({ afterModels: () => currentEpoch() === epoch && then() });
+  }
+  if (startingModels || (modelsJob && useEditor.getState().jobs[modelsJob]?.status === "running")) return;
+  startingModels = true;
   useCover.setState({ failed: null, damaged: false });
   try {
-    useCover.setState({ modelsJob: await api.startVisionModels(repair) });
+    const id = await api.startVisionModels(repair);
+    useCover.setState({ modelsJob: id });
+    // Checking models that are all there can end before its id arrives here.
+    const job = useEditor.getState().jobs[id];
+    if (job && job.status !== "running") onCoverJob(job);
   } catch (e) {
-    useCover.setState({ failed: plainError(errorText(e)) });
+    useCover.setState({ failed: plainError(errorText(e)), afterModels: null });
+  } finally {
+    startingModels = false;
   }
 }
 
@@ -339,7 +400,11 @@ export function onCoverJob(job: JobEvent) {
     if (job.status !== "failed") useCover.setState({ exportJob: null });
   }
   if (job.id === s.modelsJob || job.id === s.pickJob || job.id === s.maskJob) void loadModels();
-  if (job.id === s.modelsJob) useCover.setState({ modelsJob: null, ...(job.status === "failed" ? failure(job.message) : { failed: null }) });
+  if (job.id === s.modelsJob) {
+    useCover.setState({ modelsJob: null, afterModels: null, ...(job.status === "failed" ? failure(job.message) : { failed: null }) });
+    const then = s.afterModels;
+    if (job.status === "done" && then) void loadModels().then(then);
+  }
   if (job.id === s.maskJob) useCover.setState({ maskJob: null, masks: s.masks + 1, ...(job.status === "failed" ? failure(job.message) : {}) });
   if (job.id !== s.pickJob) return;
   useCover.setState({ pickJob: null, masks: s.masks + 1 });

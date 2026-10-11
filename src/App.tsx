@@ -34,7 +34,7 @@ import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLib
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
 import { useSounds } from "./lib/sounds";
 import { addProjects, listenStyle, loadStyle, useStyle } from "./lib/style";
-import { closeCover, deleteText, onCoverJob, useCover } from "./lib/cover";
+import { closeCover, deleteText, exportCover, onCoverJob, useCover } from "./lib/cover";
 import { candidateOf, closeReels, onReelsJob, openReelsToFind, playEnding, toggleReelPlay, useReels } from "./lib/reels";
 import { ReelList } from "./components/reels/ReelList";
 import { appWindow, toggleFullPreview, toggleMuted, usePreview } from "./lib/preview";
@@ -161,7 +161,8 @@ function useShortcuts() {
         pickAndImport();
       } else if (mod && key === "e") {
         e.preventDefault();
-        openExport();
+        if (cover.open) void exportCover();
+        else openExport();
       } else if (mod && key === "d") {
         e.preventDefault();
         duplicateSelection();

@@ -410,16 +410,9 @@ fn readonly_resources_prompts_and_clear_errors() {
     let covers = c.rpc("prompts/get", json!({"name":"thumbnail","arguments":{"wishes":"a red hook"}}));
     let text = covers["result"]["messages"][0]["content"]["text"].as_str().unwrap();
     assert!(
-        [
-            "thumbnail_frames",
-            "segment_subject",
-            "setThumbnail",
-            "inspect_thumbnail",
-            "export_thumbnail",
-            "\"Behind head\""
-        ]
-        .iter()
-        .all(|step| text.contains(step))
+        ["thumbnail_frames", "segment_subject", "setThumbnail", "inspect_thumbnail", "export_thumbnail", "\"Big\""]
+            .iter()
+            .all(|step| text.contains(step))
             && text.contains("wishes, which win over the steps: a red hook"),
         "{text}"
     );

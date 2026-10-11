@@ -1,5 +1,5 @@
 """The cover editor: a person opens it from the Cover tile, lets Pick for me choose the frame, chooses another one,
-writes a hook, puts it behind the person, undoes and redoes that, lets the AI make a thumbnail in the AI panel and
+writes a hook, puts it behind the person, undoes and redoes that, lets the AI make both covers with one click and
 exports the cover as PNG and the YouTube thumbnail as JPEG. Checks the saved project, the pixels of the cover the
 editor draws and the exported files. The face and person models are linked from tmp-test, so nothing downloads."""
 import json, os, shutil, subprocess, time
@@ -24,7 +24,7 @@ if (!c || !c.width || c.width === 300) return null;
 const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0;
 for (let i = 0; i < d.length; i += 4) if (d[i + 1] > 180 && d[i] < 110 && d[i + 2] < 110) n++;
 const cover = window.__nuzky.cover.getState();
-return {green: n / (d.length / 4), width: c.width, time: Number(stage.dataset.time), waiting: stage.dataset.mask === 'missing',
+return {green: n / (d.length / 4), width: c.width, height: c.height, time: Number(stage.dataset.time), waiting: stage.dataset.mask === 'missing',
         hidden: cover.hidden, revision: Number(stage.dataset.revision), now: window.__nuzky.store.getState().snap.revision};"""
 # Sets a field as typing does: WebKitWebDriver cannot send keys to it.
 TYPE = """const t = document.querySelector(arguments[0]); t.focus();
@@ -62,12 +62,6 @@ def cover(r, fmt='cover_9x16'):
     return r.s.run(COVER, fmt, retries=3)
 
 
-def tick(r, label):
-    """Clicks the checkbox of the label that reads `label`, as a person clicks it."""
-    return r.s.run("""const l = [...document.querySelectorAll('label')].find((l) => l.textContent.trim() === arguments[0]);
-        if (!l) return null; const i = l.querySelector('input'); i.click(); return i.checked;""", label)
-
-
 def shown(r):
     return r.s.run(SHOWN, retries=3)
 
@@ -84,11 +78,67 @@ def job(r, prefix, timeout):
 def thumbnail(r):
     webdriver('POST', r.s.path + '/window/rect', {'width': 1440, 'height': 900})
     time.sleep(1)
+    # A copy of the clip to undo in the editor, with the playhead in it: the shorter video clamps the playhead.
+    r.focus_clip(r.track()[0]['id'])
+    r.key('d', ctrlKey=True)
+    copied = wait(lambda: len(r.track()) == 2, 5)
+    r.seek(18_000_000)
+    # Opened while playing: the playback stops, and where it stops is no frame the user chose.
+    r.s.run("window.__nuzky.store.getState().togglePlay()")
+    wait(lambda: r.s.run("return window.__nuzky.store.getState().playing"), 5)
     r.check('the Cover tile opens the cover editor', click(r, 'Make a cover') == 'false'
             and wait(lambda: r.s.run("return !!document.querySelector('[data-testid=cover-stage]')"), 5))
-    r.check('nothing is made before a change', cover(r) is None)
+    time.sleep(1)
+    r.check('nothing is made before a change, also when the editor opens during playback',
+            cover(r) is None and not r.s.run("return window.__nuzky.store.getState().playing"))
+    r.key('z', ctrlKey=True)
+    undone = wait(lambda: len(r.track()) == 1, 5)
+    time.sleep(1)
+    r.check('Undo that shortens the video under the playhead saves no draft and keeps Redo',
+            copied and undone and cover(r) is None and r.s.run("return window.__nuzky.store.getState().snap.canRedo"))
+    r.check('the cover editor names its view and offers Back to video and Export cover in the top bar', r.s.run("""
+        const h = document.querySelector('header'); const buttons = [...h.querySelectorAll('button')].map((b) => b.textContent.trim());
+        return h.textContent.includes('Cover') && buttons.includes('Back to video') && buttons.includes('Export cover');"""))
+    r.check('before the first cover Make it with AI leads Frames and Pick for me is secondary', r.s.run("""
+        const buttons = [...document.querySelectorAll('[data-testid=cover-frames] button')];
+        return buttons.find((b) => b.textContent.trim() === 'Make it with AI')?.classList.contains('btn-prominent')
+          && !buttons.find((b) => b.textContent.trim() === 'Pick for me')?.classList.contains('btn-prominent');"""))
     time.sleep(2)
     r.shot('cover-draft')
+    r.seek(2_000_000)
+    chosen = wait(lambda: cover(r), 5)
+    r.check('choosing a frame on the timeline saves the draft at that frame', chosen and abs(chosen['timeUs'] - 2_000_000) < 50_000, chosen)
+    r.key('z', ctrlKey=True)
+    r.check('Undo takes the made draft back', wait(lambda: cover(r) is None, 5))
+    click(r, 'Back to video', 'header')
+    r.check('Back to video leaves the cover editor', wait(lambda: r.s.run(
+        "return !document.querySelector('[data-testid=cover-stage]') && !!document.querySelector('section[aria-label=Preview] canvas')"), 5))
+
+    # Make the app see missing models, but restore its isolated files before any job can download them.
+    models, aside = r.work / 'data/nuzky/models', r.work / 'models-aside'
+    models.rename(aside)
+    try:
+        click(r, 'Make a cover')
+        missing = wait(lambda: r.s.run("return window.__nuzky.cover.getState().models?.downloaded === false"), 5)
+    finally:
+        aside.rename(models)
+    restored = r.s.call('window.__nuzky.api.visionModels().then((v) => JSON.stringify(v))')
+    if not missing or not restored['ok'] or not json.loads(restored['value'])['downloaded']:
+        r.shot('cover-models-missing')
+        raise RuntimeError('Cannot safely test the models job without all fixture models restored')
+    # A double click while the download is being asked for still lets the AI make the cover once the models are there.
+    r.s.run("""const b = [...document.querySelectorAll('[data-testid=cover-frames] button')].find((b) => b.textContent.trim() === 'Make it with AI');
+        b.click(); b.click();""")
+    r.shot('make-a-thumbnail-models')
+    checked = job(r, 'vision-models:', 60)
+    hooked = wait(lambda: all((cover(r, f) or {}).get('texts', [{}])[0].get('text') == 'MY HOOK'
+                  for f in ('cover_9x16', 'youtube_16x9')) and r.s.run("return window.__nuzky.agent.getState().status === 'idle'"), 60)
+    r.check('Make it with AI, clicked twice, checks the restored models then runs the agent on both covers',
+            checked and checked['status'] == 'done' and hooked and (r.work / 'fake/runs.jsonl').exists(), checked)
+    undo = click(r, 'Undo', 'aside[aria-label=AI]')
+    r.check('the models-first AI run undoes back to the empty draft', undo == 'false' and wait(lambda: cover(r) is None
+            and cover(r, 'youtube_16x9') is None, 10))
+    r.s.run("window.__nuzky.dock.setState({open: false})")
 
     click(r, 'Pick for me')
     picked = job(r, 'cover-pick:', 240)
@@ -111,20 +161,30 @@ def thumbnail(r):
             and wait(lambda: abs(r.s.run('return window.__nuzky.store.getState().timeUs') - second) < 1000, 5),
             {'cover': cover(r), 'second': second})
 
-    # A hook in the Outline look, in front, in pure green, so the flow can count its pixels.
-    click(r, 'Add a text in the Outline style')
-    wait(lambda: r.s.run("return !!document.querySelector('[data-cover-text]')"), 5)
+    # Add text starts Outlined, in front in the lower middle, selected and ready to type over.
+    click(r, 'Add text')
+    added = wait(lambda: r.s.run("""const t = document.querySelector('[data-cover-text]');
+        return t && document.activeElement === t && t.value === 'YOUR HOOK' && t.selectionStart === 0
+          && t.selectionEnd === t.value.length && window.__nuzky.cover.getState().selected === 0;"""), 5)
+    text = (cover(r) or {}).get('texts', [{}])[0]
+    r.check('Add text adds an Outlined hook in front, low on the cover, selects it and focuses its selected words', added
+            and text.get('text') == 'YOUR HOOK' and not text['behind'] and text['style']['fontFamily'] == 'Anton'
+            and text['style']['fontSize'] == 170 and text['style']['strokeWidth'] == 14 and text['transform']['y'] > 0, text)
     r.s.run(TYPE, '[data-cover-text]', 'I QUIT SUGAR')
     r.s.run(TYPE, 'input[type=color][aria-label=Color]', '#00ff00')
     text = wait(lambda: (t := (cover(r) or {}).get('texts', [{}])[0]) and t.get('text') == 'I QUIT SUGAR'
                 and t['style']['color'] == '#00ff00' and t, 5)
     r.check('the text is typed and coloured in the inspector and saved in front of the person',
             text and not text['behind'], text)
+    # Up over the head, so behind the person the head covers part of it.
+    click(r, 'Position', '[data-testid=cover-text-inspector]')
+    r.s.run(TYPE + "t.blur();", 'input[aria-label="Position Y value"]', '-22')
+    wait(lambda: abs(cover(r)['texts'][0]['transform']['y'] + 0.22) < 0.01, 5)
     front = wait(lambda: (v := shown(r)) and v['green'] > 0.01 and v['revision'] == v['now'] and v, 10)
     r.check('the cover on screen shows the hook', front, front)
 
     # Behind person: the person is cut out of the frame a moment later, and the head covers part of the hook.
-    tick(r, 'Behind person')
+    click(r, 'Behind person', '[data-testid=cover-text-inspector]')
     r.check('Behind person is saved', wait(lambda: (cover(r) or {}).get('texts', [{}])[0].get('behind'), 5), cover(r))
     behind = wait(lambda: front and (v := shown(r)) and not v['waiting'] and v['revision'] == v['now'] and v['green'] < front['green'] * 0.95 and v, 120)
     r.check('behind the person the head covers part of the hook on screen, and the share is known',
@@ -149,21 +209,46 @@ def thumbnail(r):
     moved = wait(lambda: (t := cover(r)['texts'][0]['transform'])['y'] < y - 0.02 and t, 5)
     r.check('dragging the hook moves it up', moved, {'before': y, 'after': cover(r)['texts'][0]['transform']})
 
-    # The YouTube thumbnail from the cover: the same frame and hook, behind the person there too.
-    click(r, '16:9 YouTube')
-    wait(lambda: r.s.run("return !!document.querySelector('[data-testid=cover-stage]')"), 5)
-    click(r, 'Start from the 9:16 cover')
+    # The other format, made from the Export dialog with the playhead elsewhere, shows the hook without saving: the
+    # editor moving the playhead to the cover's frame chooses nothing. Export and selecting its row each make that draft.
+    click(r, 'Back to video', 'header')
+    r.seek(1_000_000)
+    r.key('e', ctrlKey=True)
+    click(r, 'Cover', '[aria-label="What to export"]')
+    click(r, '16:9 YouTube', '[aria-label="Cover format"]')
+    click(r, 'Make the thumbnail', '[role=dialog]')
+    draft = wait(lambda: (v := shown(r)) and abs(v['width'] / v['height'] - 16 / 9) < 0.01
+                 and not v['waiting'] and v['revision'] == v['now'] and v['green'] > 0.002 and v, 120)
+    r.check('16:9 shows the other cover hook as an unsaved draft', draft and cover(r, 'youtube_16x9') is None
+            and r.s.run("return [...document.querySelectorAll('[aria-label=\"Texts on the cover\"] button')].some((b) => b.textContent.includes('I QUIT SUGAR'))"), draft)
+    r.shot('youtube-draft')
+    click(r, 'Export cover', 'header')
+    r.check('Export cover saves the draft and opens the dialog on the YouTube thumbnail', wait(lambda:
+        cover(r, 'youtube_16x9') and r.s.run("""return [...document.querySelectorAll('[role=dialog] h2')].some((h) => h.textContent === 'Export cover')
+          && document.querySelector('[role=dialog] [aria-label="Cover format"] button[aria-pressed=true]')?.textContent === '16:9 YouTube';"""), 5))
+    r.key('Escape')
+    r.key('z', ctrlKey=True)
+    unsaved = wait(lambda: cover(r, 'youtube_16x9') is None, 5)
+    # The hook of the draft sits beside the person, a sixth right of the middle and a tenth above it.
+    r.s.run(DRAG, 1 / 6, -0.1, 40)
+    dragged = wait(lambda: (c := cover(r, 'youtube_16x9')) and c['texts'][0]['transform']['y'] > -0.08 and c, 5)
+    r.check('dragging a text of the unsaved draft saves the YouTube thumbnail and moves the text', unsaved and dragged, dragged)
+    r.key('z', ctrlKey=True)
+    wait(lambda: (c := cover(r, 'youtube_16x9')) and c['texts'][0]['transform']['y'] < -0.09, 5)
+    r.key('z', ctrlKey=True)
+    unsaved = wait(lambda: cover(r, 'youtube_16x9') is None, 5)
+    click(r, 'I QUIT SUGAR', '[aria-label="Texts on the cover"]')
     wide = wait(lambda: cover(r, 'youtube_16x9'), 5)
-    r.check('Start from the 9:16 cover lays out the YouTube thumbnail: the person on a third, the hook beside them',
-            wide and wide['timeUs'] == cover(r)['timeUs'] and wide['frame']['x'] < -0.1 and wide['frame']['scale'] > 1.2
+    r.check('selecting the draft text saves the YouTube thumbnail with the person on a third and the hook beside them',
+            unsaved and wide and wide['timeUs'] == cover(r)['timeUs'] and wide['frame']['x'] < -0.1 and wide['frame']['scale'] > 1.2
             and wide['texts'] and wide['texts'][0]['transform']['x'] > 0.1 and not wide['texts'][0]['behind']
-            and wide['texts'][0]['style']['fontSize'] < cover(r)['texts'][0]['style']['fontSize'], wide)
+            and wide['texts'][0]['style']['fontSize'] < cover(r)['texts'][0]['style']['fontSize']
+            and r.s.run("return window.__nuzky.cover.getState().selected === 0 && !!document.querySelector('[data-cover-text]')"), wide)
     time.sleep(1.5)
     r.shot('youtube-start')
     # The hook over the person and behind them, from the inspector: the list, Behind person, then Position X.
-    click(r, 'I QUIT SUGAR')
-    tick(r, 'Behind person')
-    click(r, 'Transform')
+    click(r, 'Behind person', '[data-testid=cover-text-inspector]')
+    click(r, 'Position', '[data-testid=cover-text-inspector]')
     r.s.run(TYPE + "t.blur();", 'input[aria-label="Position X value"]', '-16.7')
     placed = wait(lambda: (t := cover(r, 'youtube_16x9')['texts'][0])['behind'] and abs(t['transform']['x'] + 0.167) < 0.01 and t, 5)
     r.check('the hook goes behind the person on the YouTube thumbnail too', placed, cover(r, 'youtube_16x9'))
@@ -181,21 +266,18 @@ def thumbnail(r):
     webdriver('POST', r.s.path + '/window/rect', {'width': 1440, 'height': 900})
     wait(lambda: r.s.run('return window.innerWidth') == 1440, 5)
 
-    # Make a thumbnail in the AI panel: the agent gets the thumbnail prompt with the note, makes both covers in one
-    # run, live, and its Undo takes the whole run back.
+    # One click sends the thumbnail prompt without wishes and makes both covers live in one undoable run.
     before = {f: cover(r, f) for f in ('cover_9x16', 'youtube_16x9')}
-    click(r, 'Make it with AI')
-    r.check('Make it with AI puts Make a thumbnail in the AI panel\'s field', wait(lambda: r.s.run(
-        "return window.__nuzky.agent.getState().thumbnail && !!document.querySelector('aside[aria-label=AI] textarea')"), 5))
-    r.s.run(TYPE, 'aside[aria-label=AI] textarea', 'Hook: FAKE HOOK')
-    r.shot('make-a-thumbnail-chip')
-    r.key('Enter')
-    hooked = wait(lambda: all((cover(r, f) or {}).get('texts', [{}])[0].get('text') == 'FAKE HOOK' for f in before), 60)
+    runs = len((r.work / 'fake/runs.jsonl').read_text().splitlines())
+    click(r, 'Make it with AI', '[data-testid=cover-frames]')
+    r.shot('make-a-thumbnail-started')
+    hooked = wait(lambda: all((cover(r, f) or {}).get('texts', [{}])[0].get('text') == 'MY HOOK' for f in before), 60)
     r.check('the agent keeps the frame the user chose', cover(r)['timeUs'] == before['cover_9x16']['timeUs'],
             {'before': before['cover_9x16']['timeUs'], 'after': cover(r)['timeUs']})
-    prompt = next((json.loads(line)['prompt'] for line in (r.work / 'fake/runs.jsonl').read_text().splitlines()), '')
-    r.check('the agent gets the thumbnail prompt with the note and makes both covers',
-            hooked and prompt.startswith('Make a 9:16 cover') and 'win over the steps: Hook: FAKE HOOK' in prompt,
+    sent = (r.work / 'fake/runs.jsonl').read_text().splitlines()[runs:]
+    prompt = json.loads(sent[0])['prompt'] if sent else ''
+    r.check('with a cover present one click sends the thumbnail prompt without wishes and makes both covers',
+            hooked and len(sent) == 1 and prompt.startswith('Make a 9:16 cover') and 'which win over the steps: none' in prompt,
             {'prompt': prompt[:120], 'covers': {f: cover(r, f) for f in before}})
     card = wait(lambda: r.s.run("""const items = window.__nuzky.agent.getState().items; const run = items.findLast((i) => i.kind === 'run');
         return run && !run.undone && window.__nuzky.agent.getState().status === 'idle' ? run.changes.map((c) => c.text) : null;"""), 30)

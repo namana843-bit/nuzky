@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { errorText, plainError } from "./api";
-import { loadModels, useCover } from "./cover";
+import { downloadModels, loadModels, useCover } from "./cover";
 import { useDock } from "./dock";
 import { formatTime } from "./time";
 import { useEditor } from "./store";
@@ -268,6 +268,28 @@ export function makeThumbnail() {
   useDock.setState({ open: true });
   // The panel may only now be drawn.
   window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('aside[aria-label="AI"] textarea')?.focus(), 0);
+}
+
+/** Why Make it with AI cannot start now, or null; missing cover models are no reason, as it downloads them first. */
+export function coverAiBlocked(): string | null {
+  if (useCover.getState().models?.unavailable) return "Finding faces doesn't work on this computer, so the AI can't make a cover here";
+  return sendBlocked(false);
+}
+
+/** Make it with AI in the cover editor: the agent picks the frame and writes the hook at once, after downloading the cover models when they are missing. */
+export function makeCoverWithAi() {
+  if (coverAiBlocked()) return;
+  const start = () => {
+    // The agent may have started answering while the models downloaded.
+    const blocked = coverAiBlocked();
+    if (blocked) return useEditor.getState().toast({ kind: "info", text: `Make it with AI did not start. ${blocked}.` });
+    useAgent.setState({ thumbnail: true });
+    useDock.setState({ open: true });
+    void send("", "project");
+  };
+  const models = useCover.getState().models;
+  if (models && !models.downloaded) void downloadModels(start);
+  else start();
 }
 
 export async function send(text = useAgent.getState().draft.trim(), about: AiAbout = useAgent.getState().about) {
