@@ -335,7 +335,7 @@ export function ExportDialog() {
               {what === "video"
                 ? `MP4 · H.264 + AAC · ${formatLabel(project.canvas.width, project.canvas.height)} · ${formatTime(duration)}`
                 : what === "recap"
-                  ? `MP4 · H.264 + AAC · 9:16${info ? ` · ${formatTime(info.durationUs)}` : ""}`
+                  ? "MP4 · H.264 + AAC · 9:16"
                   : coverFacts}
             </p>
           </div>
@@ -398,7 +398,9 @@ export function ExportDialog() {
                 )}
                 <span className="text-right text-[13px] text-muted">Result</span>
                 <p className="tabular min-w-0 text-[13px] text-fg" aria-live="polite">
-                  {info ? (
+                  {info && info.totals.afterUs >= info.totals.beforeUs ? (
+                    <span className="text-muted">{recapRun ? "Nothing was cut in this run" : "Nothing was cut since the import"}</span>
+                  ) : info ? (
                     <>
                       <span className="text-muted">{info.before} →</span> {info.after}
                       {info.removed && <span className="text-muted"> · {info.removed}</span>}
@@ -424,7 +426,7 @@ export function ExportDialog() {
                 )}
                 <span className="text-right text-[13px] text-muted">End card</span>
                 <Checkbox
-                  label="nuzky.app at the end"
+                  label="“Cut in Nuzky · nuzky.app”"
                   checked={endCard}
                   onChange={(on) => {
                     setEndCard(on);
@@ -539,7 +541,7 @@ export function ExportDialog() {
             <span className={`tabular min-w-0 text-[13px] text-muted ${settingsLocked ? "opacity-50" : ""}`}>
               {info && (
                 <>
-                  <span className="font-semibold text-fg">{Math.round(info.durationUs / US)} s</span> · 1080×1920 · made on this computer
+                  <span className="font-semibold text-fg">{(info.durationUs / US).toFixed(1)} s</span> · 1080×1920
                 </>
               )}
             </span>

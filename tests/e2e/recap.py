@@ -2,6 +2,7 @@ import json, re, subprocess
 
 from e2e.ai_panel import FAKE, agent, click, panel, send
 from e2e.harness import CLI, FIXTURES, Bridge, changed_share, flow, link_models, wait
+from e2e.home import resize
 from e2e.reel import poll
 
 DIALOG = "return document.querySelector('[role=dialog]')?.innerText ?? ''"
@@ -116,11 +117,11 @@ def recap(r):
         r.check('the cut words are struck through in the caption', red_share(cut, (60, 1250, 900, 1405)) > 0.002,
                 red_share(cut, (60, 1250, 900, 1405)))
         frame(r, video, 0.7, 'recap-opening')
-        # Three seconds into the finished cut, past its label, the recap shows what the renderer draws there.
+        # Five seconds into the finished cut, past its label, the recap shows what the renderer draws there.
         sample_s = OPENING_S + fast + 0.6
-        shown = frame(r, video, sample_s + 3.0, 'recap-finished')
+        shown = frame(r, video, sample_s + 5.0, 'recap-finished')
         drawn = r.work / 'frame-finished.png'
-        subprocess.run([str(CLI), 'frame', str(r.saved_project()), '3', str(drawn), '1080'], env=r.env, check=True, capture_output=True)
+        subprocess.run([str(CLI), 'frame', str(r.saved_project()), '5', str(drawn), '1080'], env=r.env, check=True, capture_output=True)
         changed = changed_share(drawn, shown)
         r.check('the recap ends on the finished cut as the renderer draws it', changed < 0.01, f'{changed:.3%} of pixels differ')
         frame(r, video, duration - 0.5, 'recap-end-card')
@@ -157,6 +158,11 @@ def recap(r):
         dialog = wait(lambda: (d := r.s.run(DIALOG)) and 'Removed 1 pause' in d and d, 15)
         r.check("choosing it shows that run's numbers", dialog, r.s.run(DIALOG))
         r.shot('recap-dialog-pause')
+        if resize(r, 1024, 640):
+            box = r.s.run("const b = document.querySelector('[role=dialog]').getBoundingClientRect(); return [b.top, b.bottom, window.innerHeight]")
+            r.check('in the smallest window the whole dialog shows', box[0] >= 0 and box[1] <= box[2], box)
+            r.shot('recap-dialog-small')
+            resize(r, 1440, 900)
         video = make(r, 'pause-recap.mp4', run, False)
         duration, size, _ = probe(video)
         r.check('without the end card the recap is 1.5 s shorter than with it', size == (1080, 1920) and abs(duration - (pause['durationUs'] / 1e6 - 1.5)) < 0.06,

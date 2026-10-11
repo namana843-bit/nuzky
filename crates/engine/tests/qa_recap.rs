@@ -168,9 +168,9 @@ fn recap_marks_the_cuts_and_ends_on_the_finished_cut_as_the_renderer_draws_it() 
     assert!(struck(&cut) > 500, "the cut words are struck through: {} red pixels", struck(&cut));
     assert_eq!(struck(&kept), 0, "nothing kept is struck through");
 
-    // Three seconds into the finished cut, past its label, the recap shows the renderer's frame.
+    // Five seconds into the finished cut, past its label, the recap shows the renderer's frame.
     let start = hook + fast + hold;
-    let n = ((start + 3 * S) * 30 / S) as u32;
+    let n = ((start + 5 * S) * 30 / S) as u32;
     let into = nuzky_engine::export::frame_time_us(n as u64, 30) - start;
     let mut renderer = Renderer::new().unwrap();
     let drawn = renderer.render(&recap.after, into, 1080, 1920, Wait::Exact, false).unwrap();

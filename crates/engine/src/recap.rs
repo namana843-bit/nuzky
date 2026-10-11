@@ -174,14 +174,17 @@ const TOP: f32 = 250.0;
 const CAPTION_BOTTOM: f32 = 1405.0;
 
 const FG: &str = "#f2f2f5";
-const MUTED: &str = "#a1a1a9";
+/// Labels over the picture: 6:1 on the chip even over white footage.
+const LABEL: &str = "#d1d1d6";
 const RED: &str = "#ff453a";
-/// Black at 62 %, behind text over the picture.
-const CHIP: &str = "#0000009e";
+/// Black at 72 %, behind text over the picture.
+const CHIP: &str = "#000000b8";
+/// Under the bar and its playhead, so they hold on bright footage.
+const SHADE: &str = "#00000073";
 const BAR: &str = "#ffffff73";
-/// Fill of a struck caption word and of words not said yet.
-const STRUCK: &str = "#ffffff80";
-const UPCOMING: &str = "#ffffff8c";
+/// Fill of a struck caption word and of words not said yet; over the black outline they show as #595959 and #bfbfbf.
+const STRUCK: &str = "#ffffff59";
+const UPCOMING: &str = "#ffffffbf";
 
 /// Where the baseline sits below the top of a line of Inter, as a share of the font size.
 const BASELINE: f32 = 0.963;
@@ -193,7 +196,7 @@ const PAGE_MIN_US: i64 = 500_000;
 /// Above this speed the recording shows ten pictures a second, a time-lapse, instead of thirty.
 const SAMPLED_SPEED: f64 = 8.0;
 /// The finished cut is labelled this long.
-const AFTER_LABEL_US: i64 = 2_000_000;
+const AFTER_LABEL_US: i64 = 4_000_000;
 /// Ticks closer than this to the one before are left out.
 const TICK_GAP_US: i64 = 120_000;
 
@@ -320,6 +323,39 @@ fn rect(x: f32, y: f32, w: f32, h: f32, color: &str, radius: f32) -> Draw {
     Draw::Layer(rect)
 }
 
+const CHIP_HEIGHT: f32 = 64.0;
+
+/// `text` in a chip of `fill` with its top left corner at `x`, `y`: the counter's speed, the finished cut's label and
+/// a cut's label share its size.
+fn chip(draws: &mut Vec<Draw>, text: &Text, x: f32, y: f32, fill: &str) {
+    draws.push(rect(x, y, text.ink() + 44.0, CHIP_HEIGHT, fill, 14.0));
+    draws.push(text.at(x + 22.0, y + 46.0));
+}
+
+/// Words of these widths in lines at most `max` wide, as ranges. Two lines break where they come out most even, so
+/// no word is left alone on the second.
+fn lines(widths: &[f32], gap: f32, max: f32) -> Vec<Range<usize>> {
+    let span = |r: Range<usize>| widths[r.clone()].iter().sum::<f32>() + gap * r.len().saturating_sub(1) as f32;
+    let n = widths.len();
+    if span(0..n) <= max {
+        return vec![0..n];
+    }
+    let longer = |k: usize| span(0..k).max(span(k..n));
+    if let Some(k) = (1..n).filter(|&k| longer(k) <= max).min_by(|&a, &b| longer(a).total_cmp(&longer(b))) {
+        return vec![0..k, k..n];
+    }
+    let mut lines = vec![0..0];
+    for i in 0..n {
+        let line = lines.last_mut().expect("starts with a line");
+        if line.start == line.end || span(line.start..i + 1) <= max {
+            line.end = i + 1;
+        } else {
+            lines.push(i..i + 1);
+        }
+    }
+    lines
+}
+
 /// A rendered piece of text: its image, the size it is drawn at, and the padding around its glyphs.
 struct Text {
     image: Image,
@@ -402,7 +438,7 @@ impl<'a> Painter<'a> {
         let RecapTotals { words, retakes, pauses, .. } = self.totals;
         let passed = |cut: &&RecapCut| cut.start_us <= at;
         let counts = [
-            (words, self.recap.words.iter().filter(|w| w.removed && w.start_us <= at).count(), "word", "words"),
+            (words, self.recap.cuts.iter().filter(passed).map(|c| c.words).sum(), "word", "words"),
             (retakes, self.recap.cuts.iter().filter(passed).map(|c| c.retakes).sum(), "retake", "retakes"),
             (pauses, self.recap.cuts.iter().filter(passed).filter(|c| c.words == 0).count(), "pause", "pauses"),
         ];
@@ -481,10 +517,9 @@ impl<'a> Painter<'a> {
             let into = t - (hook + fast + hold);
             draws.push(self.picture(true, into, Adjust::default())?);
             if into < AFTER_LABEL_US {
-                let text = format!("After · {}", duration_text(self.totals.after_us));
-                let label = self.text(&text, &style(39.0, FG, true, 0.0));
-                draws.push(rect(LEFT, TOP, label.ink() + 44.0, 66.0, CHIP, 14.0));
-                draws.push(label.at(LEFT + 22.0, TOP + 47.0));
+                let label =
+                    self.text(&format!("After · {}", duration_text(self.totals.after_us)), &style(40.0, FG, true, 0.0));
+                chip(&mut draws, &label, LEFT, TOP, CHIP);
             }
         } else {
             let last = (sample - frame_time_us(1, FPS)).max(0);
@@ -492,7 +527,7 @@ impl<'a> Painter<'a> {
             let centre = (LEFT + RIGHT) / 2.0;
             for (text, style, baseline) in [
                 ("Cut in Nuzky", style(54.0, FG, true, 0.0), 840.0),
-                ("nuzky.app", style(41.0, MUTED, false, 0.0), 905.0),
+                ("nuzky.app", style(41.0, "#c7c7cc", false, 0.0), 905.0),
             ] {
                 let text = self.text(text, &style);
                 draws.push(text.at(centre - text.ink() / 2.0, baseline));
@@ -520,23 +555,23 @@ impl<'a> Painter<'a> {
     fn counter(&mut self, draws: &mut Vec<Draw>, at: i64, left: i64, speed: f64) {
         let length = vec![
             (duration_text(left), style(90.0, FG, true, 0.0)),
-            (format!("from {}", duration_text(self.totals.before_us)), style(36.0, MUTED, false, 0.0)),
+            (format!("from {}", duration_text(self.totals.before_us)), style(40.0, LABEL, false, 0.0)),
         ];
-        let stats = self.stats(at, 32.0, FG, MUTED);
-        let width = self.row_width(&length, 16.0).max(self.row_width(&stats, 10.0));
-        let height = if stats.is_empty() { 126.0 } else { 172.0 };
+        let stats = self.stats(at, 40.0, FG, LABEL);
+        let width = self.row_width(&length, 16.0).max(self.row_width(&stats, 12.0));
+        let height = if stats.is_empty() { 126.0 } else { 184.0 };
         draws.push(rect(LEFT, TOP, width + 60.0, height, CHIP, 26.0));
         self.row(draws, LEFT + 30.0, TOP + 100.0, &length, 16.0);
-        self.row(draws, LEFT + 30.0, TOP + 148.0, &stats, 10.0);
-        let speed = self.text(&speed_text(speed), &style(39.0, FG, true, 0.0));
-        draws.push(rect(RIGHT - speed.ink() - 32.0, TOP, speed.ink() + 32.0, 60.0, CHIP, 13.0));
-        draws.push(speed.at(RIGHT - speed.ink() - 16.0, TOP + 44.0));
+        self.row(draws, LEFT + 30.0, TOP + 158.0, &stats, 12.0);
+        let speed = self.text(&speed_text(speed), &style(40.0, FG, true, 0.0));
+        chip(draws, &speed, RIGHT - speed.ink() - 44.0, TOP, CHIP);
     }
 
     /// The whole recording as a bar, what was cut on it in red, and with `at` its playhead.
     fn bar(&self, draws: &mut Vec<Draw>, y: f32, at: Option<i64>) {
         let before = self.recap.before.duration_us().max(1) as f32;
         let (w, h) = (RIGHT - LEFT, 18.0);
+        draws.push(rect(LEFT - 3.0, y - 3.0, w + 6.0, h + 6.0, SHADE, 12.0));
         draws.push(rect(LEFT, y, w, h, BAR, h / 2.0));
         for cut in &self.recap.cuts {
             let x = LEFT + w * cut.start_us as f32 / before;
@@ -544,7 +579,9 @@ impl<'a> Painter<'a> {
             draws.push(rect(x, y, width.min(RIGHT - x), h, RED, 0.0));
         }
         if let Some(at) = at {
-            draws.push(rect(LEFT + w * at as f32 / before - 3.0, y - 10.0, 6.0, h + 20.0, FG, 3.0));
+            let x = LEFT + w * at as f32 / before;
+            draws.push(rect(x - 5.0, y - 12.0, 10.0, h + 24.0, SHADE, 5.0));
+            draws.push(rect(x - 3.0, y - 10.0, 6.0, h + 20.0, FG, 3.0));
         }
     }
 
@@ -567,8 +604,7 @@ impl<'a> Painter<'a> {
         };
         let size = 71.0;
         let (gap, line_height) = (0.26 * size, 1.2 * size);
-        let mut lines: Vec<Vec<(Text, bool)>> = vec![Vec::new()];
-        let mut width = 0.0;
+        let mut items = Vec::new();
         for i in self.pages[page].clone() {
             let word = &self.recap.words[i];
             let said = word.start_us <= at;
@@ -577,30 +613,23 @@ impl<'a> Painter<'a> {
                 (true, false) => "#ffffff",
                 (false, _) => UPCOMING,
             };
-            let text = self.text(&word.text, &style(size, fill, true, 6.0));
-            let line = lines.last_mut().expect("starts with a line");
-            if !line.is_empty() && width + gap + text.ink() > RIGHT - LEFT {
-                width = 0.0;
-                lines.push(Vec::new());
-            }
-            let line = lines.last_mut().expect("starts with a line");
-            width += if line.is_empty() { text.ink() } else { gap + text.ink() };
-            line.push((text, said && word.removed));
+            items.push((self.text(&word.text, &style(size, fill, true, 6.0)), said && word.removed));
         }
-        let count = lines.len();
-        for (n, line) in lines.into_iter().enumerate() {
+        let lines = lines(&items.iter().map(|(t, _)| t.ink()).collect::<Vec<_>>(), gap, RIGHT - LEFT);
+        for (n, line) in lines.iter().enumerate() {
+            let line = &items[line.clone()];
             let width: f32 = line.iter().map(|(t, _)| t.ink()).sum::<f32>() + gap * (line.len() - 1) as f32;
-            let baseline = CAPTION_BOTTOM - 0.25 * size - (count - 1 - n) as f32 * line_height;
+            let baseline = CAPTION_BOTTOM - 0.25 * size - (lines.len() - 1 - n) as f32 * line_height;
             let mut x = (LEFT + RIGHT) / 2.0 - width / 2.0;
             for (text, struck) in line {
                 draws.push(text.at(x, baseline));
-                if struck {
+                if *struck {
                     draws.push(rect(x - 4.0, baseline - 0.3 * size - 4.0, text.ink() + 8.0, 8.0, RED, 4.0));
                 }
                 x += text.ink() + gap;
             }
         }
-        count
+        lines.len()
     }
 
     /// What the cut on screen removed, above the caption.
@@ -612,12 +641,9 @@ impl<'a> Painter<'a> {
             (_, _, true) => format!("Pause {length:.1} s"),
             _ => format!("Cut {length:.1} s"),
         };
-        let text = self.text(&text, &style(41.0, "#000000", true, 0.0));
-        let (w, h) = (text.ink() + 44.0, 64.0);
-        let x = (LEFT + RIGHT) / 2.0 - w / 2.0;
+        let text = self.text(&text, &style(40.0, "#000000", true, 0.0));
         let bottom = CAPTION_BOTTOM - 0.25 * 71.0 - 71.0 - lines.saturating_sub(1) as f32 * 1.2 * 71.0 - 36.0;
-        draws.push(rect(x, bottom - h, w, h, RED, 14.0));
-        draws.push(text.at(x + 22.0, bottom - h + 47.0));
+        chip(draws, &text, (LEFT + RIGHT) / 2.0 - (text.ink() + 44.0) / 2.0, bottom - CHIP_HEIGHT, RED);
     }
 }
 
@@ -793,6 +819,15 @@ mod tests {
             let text: Vec<&str> = words[page].iter().map(|w| w.text.as_str()).collect();
             assert!(text.join(" ").chars().count() <= PAGE_CHARS, "{text:?}");
         }
+    }
+
+    #[test]
+    fn two_caption_lines_break_where_they_are_most_even() {
+        // Greedy wrapping would leave the last word alone: 300 + 300 + 300 fit, 100 does not.
+        assert_eq!(lines(&[300.0, 300.0, 300.0, 100.0], 0.0, 900.0), [0..2, 2..4]);
+        assert_eq!(lines(&[200.0, 200.0], 10.0, 900.0), [0..2]);
+        // A page too long for two lines wraps as it fits.
+        assert_eq!(lines(&[800.0, 800.0, 800.0], 10.0, 900.0), [0..1, 1..2, 2..3]);
     }
 
     #[test]
