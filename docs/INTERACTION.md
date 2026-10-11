@@ -69,7 +69,7 @@ Every cut on the main track has a small square. Clicking an empty one adds a 0.5
 The Filters tab applies a preset (None, Vivid, Warm, Cool, Mono, Fade, Moody, Punch) to the selected video or image clip. A preset replaces the clip's Adjust values; the matching preset is marked. Without a media clip selected the tiles are disabled with the reason.
 
 ### Playback
-`Space` plays and pauses; the focused control keeps focus and is not pressed. A focused checkbox or menu item keeps Space for itself. Clicking or dragging the ruler scrubs. `←`/`→` step one frame, with `Shift` one second. `Home`/`End` jump to the ends. A focused slider keeps its own arrow, Home and End keys. The sound card drives the clock, so picture and sound stay in sync.
+`Space` plays and pauses; the focused control keeps focus and is not pressed. A focused checkbox or menu item keeps Space for itself. Clicking or dragging the ruler scrubs. `←`/`→` step one frame, with `Shift` one second. `Home`/`End` jump to the ends. A focused slider keeps its own arrow, Home and End keys. The sound card drives the clock, so picture and sound stay in sync. Mute in the transport (`M`) silences the preview on this computer only: the picture plays on, the project and the export keep their sound, and the choice is remembered. Full screen (`F`) shows the preview with its transport over the whole screen, drawn in more pixels; `F`, `Esc` or the button leave it, and a window that was in full screen before stays in it.
 
 ### Preview
 Clicking the paused preview selects the top-most visible layer under the pointer, so a click outside the curve of a circle or a rounded corner reaches the layer below; clicking where no layer is clears the selection. The selected layer gets a box: drag inside it to move, drag a corner to scale uniformly, drag the round handle to rotate (`Shift` snaps to 15°). On videos and images, dragging the bar in the middle of an edge crops that edge: the rest of the picture stays where it is, a dashed outline shows the whole picture while dragging, and each edge stops 5 % short of the opposite one. An edge too short on screen for its bar to clear the corner handles has none; the inspector crops it. The box of a layer larger than the frame is cut off at the edge of the preview area, and handles that would leave it stay on that edge, so they can always be grabbed. While moving, the layer centre snaps to the canvas centre lines within 6 px and a guide shows. Each gesture is one undo step. If the clip has keyframes, the gesture writes the keyframe at the playhead. Ratio, right of the transport, switches the canvas between 9:16, 16:9, 1:1 and 4:5; in its menu ↑/↓ move through the formats and their Reframe buttons, and choosing or Esc returns focus to Ratio.
@@ -266,6 +266,8 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | Menu key, `Shift+F10` | On a focused clip, open its context menu |
 | `Alt+←` `Alt+→` (`Shift`) | Nudge the focused clip a frame (a second); on the main track, move it one place |
 | `Home` / `End` | Start / end |
+| `M` | Mute or unmute the preview |
+| `F` | Full screen preview, and back |
 | `Ctrl` + wheel, `+` / `-` | Zoom timeline; the playhead stays where it is on screen (moved to the middle if it was out of view), with the wheel the moment under the pointer does |
 | `F2` | In the transcript, correct the selected word |
 | In Reels from a long video | `Space` plays the reel; `Home` goes to its start and `End` plays its last 3 s; on the cards `Enter` checks, `Delete` rejects, `Ctrl+A` checks all; in the reel's words `Alt+←` `Alt+→` move its start and `Shift+←` `Shift+→` its end; `Esc` goes back to editing; `S`, `Q`, `W`, `Ctrl+D` and `Ctrl+E` do nothing |
@@ -276,7 +278,7 @@ Every edit is saved about a second later. The top bar shows Saving…, Saved, or
 | `Ctrl+O`, `Ctrl+N` | On the home screen, open a project file; open the New project menu |
 | `F8` | Focus the newest toast; `Esc` there dismisses it and focus moves to the next toast, then back |
 | In the cover editor | `←` `→` (`Shift`), `Home`, `End` choose the frame; `Delete` removes the selected text; `Esc` clears the selection, then closes the editor; `Space`, `S`, `Q`, `W` and `Ctrl+D` do nothing |
-| `Esc` | Cancel a drag or close the open menu or dialog; with none of those, clear the selection |
+| `Esc` | Cancel a drag or close the open menu or dialog; with none of those, leave the full screen preview, else clear the selection |
 
 Editor shortcuts are ignored on the home screen, in the launcher, while typing in a text field and while the export dialog is open. A focused tab bar keeps `←`/`→` (and `Home`/`End`) to switch tabs, so the playhead does not move. The focused transcript keeps `←`/`→`, `Home`/`End`, `Delete`, `Backspace` and `F2` for its words; while a word is being corrected, its field keeps every key.
 

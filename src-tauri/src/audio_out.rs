@@ -33,7 +33,8 @@ pub struct AudioOut {
 }
 
 impl AudioOut {
-    pub fn start(project: Arc<Mutex<Arc<Project>>>, start_us: i64, cache_dir: PathBuf) -> Self {
+    /// `muted` silences the output while the clock keeps running, so the picture plays on in time.
+    pub fn start(project: Arc<Mutex<Arc<Project>>>, start_us: i64, cache_dir: PathBuf, muted: Arc<AtomicBool>) -> Self {
         let (mut producer, mut consumer) = rtrb::RingBuffer::<f32>::new(RING_FRAMES * CHANNELS);
         let stop = Arc::new(AtomicBool::new(false));
         let started = Instant::now();
@@ -69,7 +70,8 @@ impl AudioOut {
                 out[a.len()..a.len() + b.len()].copy_from_slice(b);
                 chunk.commit_all();
             }
-            out[n..].fill(0.0);
+            let audible = if muted.load(Ordering::Relaxed) { 0 } else { n };
+            out[audible..].fill(0.0);
             n / CHANNELS
         });
         if stream.is_none() {

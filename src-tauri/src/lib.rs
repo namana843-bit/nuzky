@@ -719,6 +719,11 @@ fn set_preview_box(state: State<'_, AppState>, width: u32, height: u32) {
 }
 
 #[tauri::command]
+fn set_preview_muted(state: State<'_, AppState>, muted: bool) {
+    state.engine.muted.store(muted, Ordering::Relaxed);
+}
+
+#[tauri::command]
 fn list_projects() -> Vec<ProjectSummary> {
     store::list()
 }
@@ -1107,6 +1112,7 @@ pub fn run() {
             pause,
             seek,
             set_preview_box,
+            set_preview_muted,
             list_projects,
             list_fonts,
             new_project,
