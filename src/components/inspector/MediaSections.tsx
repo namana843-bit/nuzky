@@ -99,7 +99,6 @@ function useMatchGain(clip: Clip | undefined) {
       clearTimeout(timer);
     };
   }, [id, key, jobs]);
-  // A value measured for other settings never shows.
   return result && result.key === key ? result.db : null;
 }
 

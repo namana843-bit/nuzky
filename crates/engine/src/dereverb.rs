@@ -608,30 +608,4 @@ mod tests {
         assert!(error.to_string().starts_with("CANCELLED"));
         assert!(written <= BLOCK * HOP, "{written} frames processed after the stop");
     }
-
-    /// Writes each recording of the scratch evaluation (`tmp-test/dereverb-eval`, made by its
-    /// `generate.py`) without reverb beside it as raw 32-bit float stereo, for its `evaluate.py`.
-    #[test]
-    #[ignore = "needs the scratch evaluation's recordings"]
-    fn process_the_evaluation_recordings() {
-        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp-test/dereverb-eval");
-        for name in ["room04", "room08", "room08_noise", "room08_stereo", "dry"] {
-            let decoded = std::process::Command::new("ffmpeg")
-                .args(["-v", "error", "-i"])
-                .arg(dir.join(format!("{name}.wav")))
-                .args(["-f", "f32le", "-ac", "2", "-"])
-                .output()
-                .unwrap();
-            let input: Vec<f32> = decoded.stdout.as_chunks::<4>().0.iter().map(|&b| f32::from_le_bytes(b)).collect();
-            let started = std::time::Instant::now();
-            let output = run(&input);
-            let seconds = started.elapsed().as_secs_f64();
-            eprintln!(
-                "{name}: {:.0}x real time, reverb time {:.2} s",
-                input.len() as f64 / 2.0 / RATE / seconds,
-                reverb_time(&input)
-            );
-            std::fs::write(dir.join(format!("{name}__rust.f32")), bytemuck::cast_slice(&output)).unwrap();
-        }
-    }
 }

@@ -814,7 +814,6 @@ export const FADE_STEP_US = US / 10;
 /** The longest sound fade at each end of a clip: half its length, at most 10 s, on a whole step. */
 export const maxFadeUs = (durationUs: number) => Math.min(10 * US, Math.floor(durationUs / 2 / FADE_STEP_US) * FADE_STEP_US);
 
-/** The settings of the inspector's Voice section. */
 export type VoiceChange = { cleanVoice?: boolean; dereverb?: number; normalize?: boolean; leveler?: number };
 
 /** Changes Voice settings of the media clips in `ids`, as one undo step. */

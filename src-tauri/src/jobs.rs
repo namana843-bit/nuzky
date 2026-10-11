@@ -238,25 +238,7 @@ fn ensure_mattes(state: &AppState, project: &Project) {
 fn ensure_sound(state: &AppState, project: &Project) {
     let app = state.app.clone();
     for (kind, label) in [("voice", "Cleaning voice"), ("dereverb", "Reducing echo"), ("level", "Measuring loudness")] {
-        let mut wanted: HashMap<&str, Vec<Chain>> = HashMap::new();
-        for clip in project.tracks.iter().flat_map(|t| &t.clips) {
-            let ClipContent::Media { asset_id, .. } = &clip.content else { continue };
-            let (mut chains, blocks) = chains(clip);
-            chains.retain(|chain| match kind {
-                "voice" => !chain.dereverb && chain.clean_voice,
-                "dereverb" => chain.dereverb,
-                _ => blocks,
-            });
-            if chains.is_empty() {
-                continue;
-            }
-            let work = wanted.entry(asset_id).or_default();
-            for chain in chains {
-                if !work.contains(&chain) {
-                    work.push(chain);
-                }
-            }
-        }
+        let wanted = wanted_sound(project, kind);
         for (id, cancel) in state.jobs.lock().unwrap().iter() {
             if id.strip_prefix(&format!("{kind}:")).is_some_and(|asset| !wanted.contains_key(asset)) {
                 cancel.store(true, Ordering::Relaxed);
@@ -287,6 +269,13 @@ fn ensure_sound(state: &AppState, project: &Project) {
                 let mut rep = Reporter::new(&app, &id, "audio", format!("{label} in {}", asset.name));
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     for (index, (chain, output)) in work.iter().enumerate() {
+                        // A step no clip needs any more, as cleaning once Clean voice is off, is left out.
+                        let needed = app.state::<AppState>().project().is_ok_and(|open| {
+                            wanted_sound(&open, kind).get(&asset.id).is_some_and(|chains| chains.contains(chain))
+                        });
+                        if !needed {
+                            continue;
+                        }
                         path = output.clone();
                         check_cancelled(&flag)?;
                         let progress = |p| {
@@ -319,6 +308,34 @@ fn ensure_sound(state: &AppState, project: &Project) {
             }
         }
     }
+}
+
+/// What the clips of `project` need of the `kind` of preparation, per file: the chains to make, or for `level` the
+/// chains to measure. Taking the reverb out comes before cleaning what is left, as a step of its own.
+fn wanted_sound(project: &Project, kind: &str) -> HashMap<String, Vec<Chain>> {
+    let mut wanted: HashMap<String, Vec<Chain>> = HashMap::new();
+    for clip in project.tracks.iter().flat_map(|t| &t.clips) {
+        let ClipContent::Media { asset_id, .. } = &clip.content else { continue };
+        let (mut chains, blocks) = chains(clip);
+        chains.retain(|chain| match kind {
+            "voice" => !chain.dereverb && chain.clean_voice,
+            "dereverb" => chain.dereverb,
+            _ => blocks,
+        });
+        if chains.is_empty() {
+            continue;
+        }
+        if kind == "dereverb" {
+            chains.insert(0, Chain { dereverb: true, clean_voice: false });
+        }
+        let work = wanted.entry(asset_id.clone()).or_default();
+        for chain in chains {
+            if !work.contains(&chain) {
+                work.push(chain);
+            }
+        }
+    }
+    wanted
 }
 
 /// Makes the preview proxy of each video that decodes slowly (`nuzky_engine::proxy`), one file at a time; the
