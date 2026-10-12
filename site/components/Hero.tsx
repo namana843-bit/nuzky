@@ -48,8 +48,7 @@ const spokenWords = captions.flatMap((c, row) => c.words.map((_, word) => ({ row
 // The last word is lit whenever the walk is not running: that is what the server renders and what reduced motion keeps.
 const LAST = spokenWords.length - 1;
 
-// The spoken word walks through the captions the way it does in the app's preview, with a breath at the end,
-// lighting the line in the caption list and the word on the reel together. It only walks while the hero plays.
+// Walks like the spoken word in the app's preview, with a breath at the end.
 function useSpokenWord(on: boolean) {
   const [spoken, setSpoken] = useState(LAST);
   useEffect(() => {
@@ -103,7 +102,7 @@ function Reel({ w, spoken, sizes }: { w: number; spoken: Spoken; sizes: string }
   );
 }
 
-// The list already numbers the steps for a screen reader, so the visible number is hidden from it.
+// Screen readers skip the visible number: the order of the steps already says it.
 function Num({ n, size = 24, last = false }: { n: number; size?: number; last?: boolean }) {
   return (
     <span
@@ -118,7 +117,6 @@ function Num({ n, size = 24, last = false }: { n: number; size?: number; last?: 
 
 const WIDE = 1180;
 
-// The five steps in a row, at their design size, scaled down with the window like the rest of the page.
 function Pipeline({ spoken }: { spoken: Spoken }) {
   const visuals = [
     <div key="clips" aria-hidden className="grid grid-cols-2 gap-2">
@@ -209,7 +207,6 @@ function Pipeline({ spoken }: { spoken: Spoken }) {
 
 const NARROW = 380;
 
-// On a phone the first four steps stack on the left and the reel they make stands beside them.
 function PipelineNarrow({ spoken }: { spoken: Spoken }) {
   const minis = [
     <div key="clips" className="grid grid-cols-2 gap-0.5">
