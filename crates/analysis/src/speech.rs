@@ -67,7 +67,7 @@ pub fn transcribe_words(
     vad_model_path: &Path,
     language: &str,
 ) -> Result<Transcript> {
-    transcribe_words_cancellable(source, model_path, vad_model_path, language, || false)
+    transcribe_words_cancellable(source, model_path, vad_model_path, language, || false, |_| {})
 }
 
 pub fn transcribe_words_cancellable(
@@ -76,6 +76,7 @@ pub fn transcribe_words_cancellable(
     vad_model_path: &Path,
     language: &str,
     cancelled: impl Fn() -> bool,
+    mut progress: impl FnMut(f32),
 ) -> Result<Transcript> {
     let check = || {
         ensure!(!cancelled(), "CANCELLED: transcription cancelled");
@@ -98,12 +99,14 @@ pub fn transcribe_words_cancellable(
     ensure!(audio.iter().all(|s| s.is_finite()), "Speech audio contains non-finite samples");
     let mut transcript = Transcript { language: language.into(), words: Vec::new(), segments: Vec::new() };
     if audio.is_empty() {
+        progress(1.0);
         return Ok(transcript);
     }
     check()?;
     let regions = voice_regions(audio, vad_model_path)?;
     check()?;
     if regions.is_empty() {
+        progress(1.0);
         return Ok(transcript);
     }
     let mut context_params = WhisperContextParameters::default();
@@ -144,6 +147,8 @@ pub fn transcribe_words_cancellable(
     }
     let mut state = context.create_state().context("Creating speech recognition state")?;
     // Independent decoding prevents tokens from drifting across compacted pauses.
+    let total: usize = regions.iter().map(|(start, end)| end - start).sum();
+    let mut done = 0;
     for region in regions {
         check()?;
         let (compact, mapping) = compact_audio(audio, &[region]);
@@ -151,11 +156,20 @@ pub fn transcribe_words_cancellable(
         let abort: &dyn Fn() -> bool = &cancelled;
         // SAFETY: `abort` outlives `full`, which calls the callback only while it runs.
         unsafe { stop_on(&mut params, &abort) };
+        // A long region without a pause would otherwise report nothing until it is done.
+        let length = region.1 - region.0;
+        let mut within =
+            |percent: i32| progress((done + length * percent.clamp(0, 100) as usize / 100) as f32 / total as f32);
+        let mut within: &mut dyn FnMut(i32) = &mut within;
+        // SAFETY: `within` outlives `full`, which calls the callback only while it runs.
+        unsafe { report_on(&mut params, &mut within) };
         state.full(params, &compact).map_err(|error| stopped(error, &cancelled, "Recognising speech region"))?;
         check()?;
         transcript.language =
             whisper_rs::get_lang_str(state.full_lang_id_from_state()).context("Missing detected language")?.into();
         append_segments(&state, context.token_eot(), &mapping, &mut transcript, &cancelled)?;
+        done += length;
+        progress(done as f32 / total as f32);
     }
     Ok(transcript)
 }
@@ -172,6 +186,27 @@ unsafe fn stop_on(params: &mut FullParams<'_, '_>, abort: &&dyn Fn() -> bool) {
     unsafe {
         params.set_abort_callback(Some(poll));
         params.set_abort_callback_user_data(abort as *const &dyn Fn() -> bool as *mut std::ffi::c_void);
+    }
+}
+
+/// Gives `progress` whisper.cpp's percentage of the audio a `full` call has recognised.
+///
+/// # Safety
+/// `progress` must stay alive until every `full` call that uses `params` has returned.
+unsafe fn report_on(params: &mut FullParams<'_, '_>, progress: &mut &mut dyn FnMut(i32)) {
+    use whisper_rs::whisper_rs_sys::{whisper_context, whisper_state};
+    unsafe extern "C" fn report(
+        _: *mut whisper_context,
+        _: *mut whisper_state,
+        percent: std::ffi::c_int,
+        data: *mut std::ffi::c_void,
+    ) {
+        // SAFETY: `data` is the `&mut &mut dyn FnMut` passed to `report_on`, alive for the whole `full` call.
+        unsafe { (*(data as *mut &mut dyn FnMut(i32)))(percent) }
+    }
+    unsafe {
+        params.set_progress_callback(Some(report));
+        params.set_progress_callback_user_data(progress as *mut &mut dyn FnMut(i32) as *mut std::ffi::c_void);
     }
 }
 

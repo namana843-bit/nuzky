@@ -425,7 +425,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       timeUs: Math.min(get().timeUs, projectDuration(snap.project)),
       aiRun: snap.openRunLabel,
       // A copied project can reuse asset ids for other files, so media previews start over.
-      ...(switched ? { thumbs: {}, filmstrips: {}, waveforms: {} } : {}),
+      // An agent's jobs end with their project, whose last events never arrive.
+      ...(switched ? { thumbs: {}, filmstrips: {}, waveforms: {}, jobs: Object.fromEntries(Object.entries(get().jobs).filter(([, j]) => j.kind !== "agent")) } : {}),
       ...(rebound.length > 0 ? { thumbs: without(get().thumbs), filmstrips: without(get().filmstrips), waveforms: without(get().waveforms) } : {}),
     });
     if (switched) waveformUse.clear();

@@ -110,10 +110,36 @@ fn serve(target: Target) -> Result<()> {
     let server = Server { target: target.clone(), tools: Arc::new(catalog()?) };
     let runtime =
         tokio::runtime::Builder::new_multi_thread().enable_all().build().context("MCP_FAILED: starting runtime")?;
+    let (input, mut writer) = tokio::io::duplex(64 * 1024);
+    let (handle, closing) = (runtime.handle().clone(), target.clone());
+    // Its own thread: a read the runtime started would keep the runtime from shutting down while stdin stays open.
+    std::thread::spawn(move || {
+        use std::io::Read;
+        use tokio::io::AsyncWriteExt;
+        let mut buffer = [0; 8192];
+        while let Ok(read @ 1..) = std::io::stdin().read(&mut buffer) {
+            if handle.block_on(writer.write_all(&buffer[..read])).is_err() {
+                break;
+            }
+        }
+        // rmcp gives the calls in flight 5 s once its input ends; a job wait must end before that.
+        match closing.as_ref() {
+            Target::Local(backend) => backend.close(),
+            #[cfg(unix)]
+            Target::App(remote) => remote.close(),
+            #[cfg(unix)]
+            Target::Current(current) => {
+                if let Some(remote) = current.remote.lock().unwrap().as_ref() {
+                    remote.close();
+                }
+            }
+        }
+    });
     let result = runtime.block_on(async {
-        let service = server.serve(rmcp::transport::stdio()).await.context("MCP_FAILED: initialization")?;
-        service.waiting().await.context("MCP_FAILED: transport")?;
-        Ok(())
+        match server.serve((input, tokio::io::stdout())).await {
+            Ok(service) => service.waiting().await.context("MCP_FAILED: transport").map(|_| ()),
+            Err(error) => Err(error).context("MCP_FAILED: initialization"),
+        }
     });
     match target.as_ref() {
         Target::Local(backend) => {

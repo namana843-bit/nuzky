@@ -32,7 +32,7 @@ pub struct JobEvent {
     #[cfg_attr(
         test,
         ts(
-            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels" | "speech-model""#
+            type = r#""audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels" | "speech-model" | "agent""#
         )
     )]
     pub kind: &'static str,
@@ -892,23 +892,30 @@ fn recognise(
     let mut estimated = false;
     let models = download_speech(&request.model, cancel, |value, phase| rep.progress(value, Some(phase)))?;
     let mut recognised = HashSet::new();
-    for (i, asset) in assets.iter().enumerate() {
+    let total = assets.iter().map(|asset| asset.duration_us.max(1) as f64).sum::<f64>();
+    let mut done = 0.0;
+    for asset in &assets {
         check_cancelled(cancel)?;
         // The same file imported twice is recognised once.
         if !recognised.insert(store.fingerprint(asset)?) {
+            done += asset.duration_us.max(1) as f64;
             continue;
         }
-        let done = i as f32 / assets.len() as f32;
-        rep.progress(done, Some("Recognising speech"));
+        let weight = asset.duration_us.max(1) as f64;
+        let fraction = |part: f32| ((done + weight * f64::from(part)) / total) as f32;
+        rep.progress(fraction(0.0), Some("Recognising speech"));
         let stage = |stage| match stage {
-            transcript::Stage::Waiting => rep.progress(done, Some("Waiting for another transcription")),
-            transcript::Stage::Recognising => rep.progress(done, Some("Recognising speech")),
-            transcript::Stage::DownloadingAligner(part) => rep.progress(part, Some("Downloading word timing model")),
-            transcript::Stage::Aligning => rep.progress(done, Some("Measuring word times")),
+            transcript::Stage::Waiting => rep.progress(fraction(0.0), Some("Waiting for another transcription")),
+            transcript::Stage::Recognising(part) => rep.progress(fraction(part * 0.5), Some("Recognising speech")),
+            transcript::Stage::DownloadingAligner(_) => {
+                rep.progress(fraction(0.5), Some("Downloading word timing model"))
+            }
+            transcript::Stage::Aligning(part) => rep.progress(fraction(0.5 + part * 0.5), Some("Measuring word times")),
         };
         let record =
             transcript::recognise(store, asset, cache, &request.model, &models, &request.language, cancel, stage)
                 .with_context(|| format!("Transcribing {}", asset.name))?;
+        done += weight;
         estimated |= record.alignment.is_none() && nuzky_analysis::align_model(&record.language).is_some();
     }
     Ok(estimated)
@@ -1027,20 +1034,24 @@ fn learn_pairs(
         check_cancelled(cancel)?;
         let at = |part: f32| (index as f32 + part) / pairs.len() as f32;
         let result = (|| {
-            let mut video = |path: &str, from: f32| {
+            let mut video = |path: &str, from: f32, to: f32| {
+                let half = (to - from) / 2.0;
                 rep.progress(at(from), Some("Recognising speech"));
                 style::video(Path::new(path), "auto", &transcripts, cache, cancel, |stage| match stage {
                     transcript::Stage::Waiting => rep.progress(at(from), Some("Waiting for another transcription")),
-                    transcript::Stage::DownloadingAligner(_) => {
-                        rep.progress(at(from), Some("Downloading word timing model"))
+                    transcript::Stage::Recognising(part) => {
+                        rep.progress(at(from + part * half), Some("Recognising speech"))
                     }
-                    transcript::Stage::Recognising | transcript::Stage::Aligning => {
-                        rep.progress(at(from), Some("Recognising speech"))
+                    transcript::Stage::DownloadingAligner(_) => {
+                        rep.progress(at(from + half), Some("Downloading word timing model"))
+                    }
+                    transcript::Stage::Aligning(part) => {
+                        rep.progress(at(from + (1.0 + part) * half), Some("Recognising speech"))
                     }
                 })
             };
-            let recording = video(&pair.recording, 0.0)?;
-            let cut = video(&pair.cut, 0.4)?;
+            let recording = video(&pair.recording, 0.0, 0.4)?;
+            let cut = video(&pair.cut, 0.4, 0.7)?;
             rep.progress(at(0.7), Some("Comparing sound and picture"));
             style::compare(&recording, &cut, &transcripts, cache, &|| cancel.load(Ordering::Relaxed))
         })();
@@ -1131,15 +1142,19 @@ fn learn_timelines(
             let taught =
                 style::timeline_lessons(Path::new(path), &transcripts, &|| cancel.load(Ordering::Relaxed), |media| {
                     let at = (index as f32 + read as f32 / count) / paths.len() as f32;
+                    let half = 0.5 / count / paths.len() as f32;
                     read += 1;
                     rep.progress(at, Some("Recognising speech"));
                     style::video(media, "auto", &transcripts, cache, cancel, |stage| match stage {
                         transcript::Stage::Waiting => rep.progress(at, Some("Waiting for another transcription")),
-                        transcript::Stage::DownloadingAligner(_) => {
-                            rep.progress(at, Some("Downloading word timing model"))
+                        transcript::Stage::Recognising(part) => {
+                            rep.progress(at + part * half, Some("Recognising speech"))
                         }
-                        transcript::Stage::Recognising | transcript::Stage::Aligning => {
-                            rep.progress(at, Some("Recognising speech"))
+                        transcript::Stage::DownloadingAligner(_) => {
+                            rep.progress(at + half, Some("Downloading word timing model"))
+                        }
+                        transcript::Stage::Aligning(part) => {
+                            rep.progress(at + (1.0 + part) * half, Some("Recognising speech"))
                         }
                     })
                 });

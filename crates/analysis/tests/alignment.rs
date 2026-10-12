@@ -30,17 +30,18 @@ fn connected_czech_speech_is_timed_to_its_word_boundaries() -> Result<()> {
         &models.join(nuzky_analysis::VAD_MODEL),
         "cs",
         || false,
+        |_| {},
     )?;
     let reference = Reference::read(&root.join("crates/analysis/tests/data/krysar-cs-boundaries.tsv"))?;
 
     let mut today = recognised.words.clone();
-    align_to_sound(&mut today, &asset, &cache, None, || false)?;
+    align_to_sound(&mut today, &asset, &cache, None, || false, |_| {})?;
     let before = reference.score(&today);
     eprintln!("Whisper + align_words: {before}");
 
     let aligner = Aligner::load(&models.join(align_model("cs").context("no Czech model")?.file))?;
     let mut words = recognised.words.clone();
-    assert!(align_to_sound(&mut words, &asset, &cache, Some(&aligner), || false)?, "no word was measured");
+    assert!(align_to_sound(&mut words, &asset, &cache, Some(&aligner), || false, |_| {})?, "no word was measured");
     let after = reference.score(&words);
     eprintln!("word timing model: {after}");
 
@@ -76,7 +77,14 @@ fn a_stop_ends_word_timing_within_seconds() -> Result<()> {
             *asked.lock().unwrap() = Some(std::time::Instant::now());
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
         });
-        align_to_sound(&mut words, &asset, &cache, Some(&aligner), || stop.load(std::sync::atomic::Ordering::Relaxed))
+        align_to_sound(
+            &mut words,
+            &asset,
+            &cache,
+            Some(&aligner),
+            || stop.load(std::sync::atomic::Ordering::Relaxed),
+            |_| {},
+        )
     });
     let asked = asked.lock().unwrap().context("the stop came after the work ended")?;
     let error = result.expect_err("the stop was ignored");

@@ -198,6 +198,7 @@ fn cancelling_speech_recognition_half_way_reports_a_cancellation() -> Result<()>
             // A fixed language skips detection, whose encoder pass whisper.cpp cannot stop.
             "en",
             cancelled,
+            |_| {},
         )
     };
     let polls = AtomicUsize::new(0);

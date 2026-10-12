@@ -95,6 +95,13 @@ pub enum Origin {
 
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
+    Job {
+        id: String,
+        kind: &'static str,
+        status: &'static str,
+        progress: f32,
+        error: Option<String>,
+    },
     TranscriptsChanged,
     Changed {
         revision: u64,

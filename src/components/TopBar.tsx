@@ -83,7 +83,7 @@ function ProjectsButton() {
   );
 }
 
-/** Background work. A speech model download shows first, with its Stop; export reopens its dialog; captions and transcripts open their tab; a preview proxy can be stopped. */
+/** Background work. A speech model download shows first, with its Stop; export reopens its dialog; captions and transcripts open their tab; a preview proxy and work an AI agent started can be stopped. */
 export function JobIndicator() {
   const jobs = useEditor((s) => s.jobs);
   const running = Object.values(jobs).filter((j) => j.status === "running");
@@ -93,8 +93,8 @@ export function JobIndicator() {
     running.find((x) => x.kind === "speech-model") ??
     running.find((x) => x.kind === "export") ??
     running.find((x) => x.kind === "captions" || x.kind === "transcript") ??
-    // Ahead of the audio prepared beside it on import, so its Stop is there.
-    running.find((x) => x.kind === "proxy") ??
+    // Ahead of the audio prepared beside them, so their Stop is there.
+    running.find((x) => x.kind === "proxy" || x.kind === "agent") ??
     running[0];
   const pct = j.progress > 0 ? `${Math.round(j.progress * 100)}%` : null;
   const body = (
@@ -113,11 +113,16 @@ export function JobIndicator() {
         {body}
       </span>
     );
-  if (j.kind === "proxy")
+  if (j.kind === "proxy" || j.kind === "agent")
     return (
       <span className="bar flex h-8 items-center gap-1.5 rounded-full pl-3 pr-1 text-[12px] font-medium text-fg" role="status">
         {body}
-        <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" title="Stop preparing the preview. It keeps playing the original file, which can stutter." onClick={() => void api.cancelJob(j.id)}>
+        <Button
+          pill
+          className="h-6 shrink-0 px-2.5 text-[12px]"
+          title={j.kind === "agent" ? `Stop ${j.label.toLowerCase()}. The AI sees that it was stopped.` : "Stop preparing the preview. It keeps playing the original file, which can stutter."}
+          onClick={() => void api.cancelJob(j.id)}
+        >
           Stop
         </Button>
       </span>
