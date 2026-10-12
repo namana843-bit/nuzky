@@ -132,7 +132,7 @@ def style_capcut(r):
     r.s.run(CHECK, 'From JianYing')
     r.s.run("document.activeElement.click()")
     r.check('an encrypted draft says why it cannot be read and what to do instead',
-            wait(lambda: 'encrypted' in (r.s.run(ROW, 'From JianYing') or '') and 'Learn from the exported video' in r.s.run(ROW, 'From JianYing'), 10),
+            wait(lambda: 'encrypts its drafts' in (r.s.run(ROW, 'From JianYing') or '') and 'Learn from the exported video' in r.s.run(ROW, 'From JianYing'), 10),
             r.s.run(ROW, 'From JianYing'))
     shot(r, 'capcut-chosen')
     r.s.run(CHECK, 'From JianYing')
@@ -143,6 +143,11 @@ def style_capcut(r):
     r.s.call('window.__nuzky.findDrafts(arguments[0])', str(r.elsewhere))
     r.check('a draft folder added by hand joins the list, chosen',
             wait(lambda: 'Short reel' in [p['name'] for p in r.s.run(STATE)['chosen']], 10), r.s.run(STATE))
+
+    (r.work / 'Nothing here').mkdir()
+    r.s.call('window.__nuzky.findDrafts(arguments[0])', str(r.work / 'Nothing here'))
+    note = "return window.__nuzky.store.getState().toasts.find((t) => t.text.startsWith('No CapCut drafts in this folder'))?.text ?? null"
+    r.check('a folder without drafts says so', wait(lambda: r.s.run(note), 5), r.state()['toasts'])
 
     before = job(r)
     r.s.run(CLICK_TEXT, 'Learn', f'{DIALOG} div.border-t')

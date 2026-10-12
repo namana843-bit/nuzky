@@ -566,7 +566,7 @@ fn an_encrypted_capcut_draft_teaches_nothing() {
         .unwrap();
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{said}");
-    assert!(said.contains("This draft is encrypted, as JianYing's drafts are. Learn from the exported video and its recording instead."), "{said}");
+    assert!(said.contains("JianYing encrypts its drafts, so Nuzky cannot read this one. Learn from the exported video and its recording instead."), "{said}");
     assert!(!dir.join("EDIT.md").exists());
     std::fs::remove_dir_all(&dir).unwrap();
 }

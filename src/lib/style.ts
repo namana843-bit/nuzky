@@ -27,7 +27,9 @@ type StyleState = {
   projects: TimelinePlan[];
   /** CapCut's drafts on this computer and those added by hand, newest first; null until looked for. */
   capcutDrafts: CapCutDraft[] | null;
-  /** The drafts chosen among them, as read, in the list's order. */
+  /** The drafts ticked among them, in the order ticked. */
+  capcutTicked: string[];
+  /** The ticked drafts, as read, in the list's order. */
   capcut: TimelinePlan[];
   /** The AI panel beside the page, to talk the style through. */
   chatOpen: boolean;
@@ -45,6 +47,7 @@ export const useStyle = create<StyleState>(() => ({
   draft: [NO_PAIR],
   projects: [],
   capcutDrafts: null,
+  capcutTicked: [],
   capcut: [],
   chatOpen: false,
 }));
@@ -109,36 +112,43 @@ export async function addProjects(paths: string[]) {
   }
 }
 
-/** Looks for CapCut's drafts, or in `folder`, which may be one draft; drafts found in a folder chosen by hand are chosen too. */
+/** Looks for CapCut's drafts, or in `folder`: a folder of drafts joins the list, and one draft's folder is ticked too. */
 export async function findDrafts(folder?: string) {
+  const toast = useEditor.getState().toast;
   try {
     const found = await api.styleCapCutDrafts(folder ?? null);
+    if (folder && found.length === 0) {
+      toast({ kind: "info", text: "No CapCut drafts in this folder. Choose the folder that holds them, or one draft's folder." });
+      return;
+    }
     const paths = found.map((d) => d.path);
-    useStyle.setState((s) => ({ capcutDrafts: [...found, ...(s.capcutDrafts ?? []).filter((d) => !paths.includes(d.path))] }));
-    if (folder) await Promise.all(found.map((d) => chooseDraft(d.path, true)));
+    const drafts = (old: CapCutDraft[]) => [...found, ...old.filter((d) => !paths.includes(d.path))].sort((a, b) => b.modifiedMs - a.modifiedMs);
+    useStyle.setState((s) => ({ capcutDrafts: drafts(s.capcutDrafts ?? []) }));
+    if (folder && found.length === 1) await chooseDraft(found[0].path, true);
   } catch (e) {
     useStyle.setState((s) => ({ capcutDrafts: s.capcutDrafts ?? [] }));
-    useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
+    toast({ kind: "error", text: plainError(errorText(e)) });
   }
 }
 
-/** The drafts chosen last, so a draft left out while it was being read stays out. */
-const chosenDrafts = new Set<string>();
-
-/** Chooses a draft to learn from, reading it at once, or leaves it out. A choice after learning ended leaves its results, which were about the others. */
+/** Ticks a draft to learn from and reads it at once, or leaves it out. A choice after learning ended leaves its results, which were about the others. */
 export async function chooseDraft(path: string, on: boolean) {
-  if (on) chosenDrafts.add(path);
-  else chosenDrafts.delete(path);
-  const others = (plans: TimelinePlan[]) => plans.filter((p) => p.path !== path);
-  useStyle.setState((s) => ({ capcut: others(s.capcut), projectsLearning: s.projectsLearning?.tab === "capcut" ? null : s.projectsLearning }));
+  const others = <T>(list: T[], key: (item: T) => string) => list.filter((item) => key(item) !== path);
+  useStyle.setState((s) => ({
+    capcutTicked: on ? [...others(s.capcutTicked, String), path] : others(s.capcutTicked, String),
+    capcut: others(s.capcut, (p) => p.path),
+    projectsLearning: s.projectsLearning?.tab === "capcut" ? null : s.projectsLearning,
+  }));
   if (!on) return;
   try {
     const [plan] = await api.styleReadTimelines([path]);
-    if (!chosenDrafts.has(path)) return;
+    // A draft left out while it was read stays out.
+    if (!useStyle.getState().capcutTicked.includes(path)) return;
     const order = (useStyle.getState().capcutDrafts ?? []).map((d) => d.path);
     const place = (p: TimelinePlan) => order.indexOf(p.path);
-    useStyle.setState((s) => ({ capcut: [...others(s.capcut), plan].sort((a, b) => place(a) - place(b)) }));
+    useStyle.setState((s) => ({ capcut: [...others(s.capcut, (p) => p.path), plan].sort((a, b) => place(a) - place(b)) }));
   } catch (e) {
+    useStyle.setState((s) => ({ capcutTicked: others(s.capcutTicked, String) }));
     useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
   }
 }
@@ -160,8 +170,7 @@ export async function saveLearned(jobId: string): Promise<boolean> {
   const toast = useEditor.getState().toast;
   try {
     const view = await api.styleUseLearned(jobId);
-    useStyle.setState({ view, error: null, projectsLearning: null, projects: [], capcut: [] });
-    chosenDrafts.clear();
+    useStyle.setState({ view, error: null, projectsLearning: null, projects: [], capcutTicked: [], capcut: [] });
     // The version before is the one replaced, or none: no style.
     const before = view.versions[1]?.index ?? 0;
     toast({ kind: "success", text: "Saved as your style", action: { label: "Undo", run: () => void changeStyle({ type: "restore", index: before }) } });

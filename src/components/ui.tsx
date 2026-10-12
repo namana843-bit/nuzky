@@ -471,10 +471,10 @@ export function Checkbox({
   }, [mixed]);
   return (
     <label
-      className={`flex cursor-pointer items-center has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40 ${children ? "min-w-0 flex-1 gap-3" : "gap-2"}`}
+      className={`flex cursor-pointer has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40 ${children ? "min-w-0 flex-1 items-start gap-3" : "items-center gap-2"}`}
       title={lock ?? title}
     >
-      <span className="relative inline-flex">
+      <span className={`relative inline-flex ${children ? "mt-0.5" : ""}`}>
         <input
           ref={input}
           type="checkbox"

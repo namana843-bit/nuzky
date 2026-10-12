@@ -27,8 +27,7 @@ const PX_PER_SIZE: f32 = 5.1;
 const COPY_DEPTH: usize = 3;
 const COPY_ENTRIES: usize = 5_000;
 
-pub const ENCRYPTED: &str =
-    "This draft is encrypted, as JianYing's drafts are. Learn from the exported video and its recording instead.";
+pub const ENCRYPTED: &str = "JianYing encrypts its drafts, so Nuzky cannot read this one. Learn from the exported video and its recording instead.";
 
 /// Where CapCut keeps its drafts on this computer: under the local app data on Windows, under Movies
 /// in the home folder elsewhere.

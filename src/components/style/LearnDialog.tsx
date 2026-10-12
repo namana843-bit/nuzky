@@ -287,6 +287,7 @@ function Outcome({ plan, result }: { plan: TimelinePlan; result: StyleTimelineRe
 /** CapCut's drafts to choose from, newest first; a chosen one says at once what it will teach, and after learning how it went. */
 function Drafts({ results }: { results: Map<string, StyleTimelineResult> }) {
   const drafts = useStyle((s) => s.capcutDrafts);
+  const ticked = useStyle((s) => s.capcutTicked);
   const chosen = useStyle((s) => s.capcut);
 
   useEffect(() => {
@@ -297,7 +298,7 @@ function Drafts({ results }: { results: Map<string, StyleTimelineResult> }) {
   if (drafts.length === 0)
     return (
       <div className="flex flex-col items-center gap-4 px-6 py-8 text-center">
-        <p className="max-w-[440px] text-[13px] text-muted">No CapCut drafts were found on this computer. If CapCut keeps them in another folder, add a draft's folder.</p>
+        <p className="max-w-[440px] text-[13px] text-muted">No CapCut drafts on this computer. If CapCut saves them elsewhere, add that folder.</p>
         <Button pill variant="primary" data-autofocus onClick={() => void pickDraftFolder()}>
           Add a draft folder…
         </Button>
@@ -311,7 +312,7 @@ function Drafts({ results }: { results: Map<string, StyleTimelineResult> }) {
           const result = results.get(draft.path);
           return (
             <li key={draft.path} className="flex items-center gap-3 border-b border-white/[.06] py-2 last:border-b-0">
-              <Checkbox label={draft.name} checked={!!plan} onChange={(on) => void chooseDraft(draft.path, on)}>
+              <Checkbox label={draft.name} checked={ticked.includes(draft.path)} onChange={(on) => void chooseDraft(draft.path, on)}>
                 <span className="flex min-w-0 flex-1 flex-col text-[12px]">
                   <span className="flex min-w-0 items-baseline gap-2">
                     <span className="truncate text-[13px] font-medium text-fg" title={draft.path}>
@@ -319,12 +320,20 @@ function Drafts({ results }: { results: Map<string, StyleTimelineResult> }) {
                     </span>
                     <span className="tabular shrink-0 text-muted">{when(draft.modifiedMs)}</span>
                   </span>
-                  {plan ? <Plan plan={plan} /> : draft.durationUs ? <span className="tabular text-muted">{formatLength(draft.durationUs)}</span> : null}
+                  {plan ? (
+                    <Plan plan={plan} />
+                  ) : ticked.includes(draft.path) ? (
+                    <span className="text-muted">Reading…</span>
+                  ) : draft.durationUs ? (
+                    <span className="tabular text-muted">{formatLength(draft.durationUs)}</span>
+                  ) : null}
                 </span>
               </Checkbox>
-              <div className="flex min-h-8 w-[196px] shrink-0 items-center justify-end text-[12px]" aria-live="polite">
-                {plan && result && <Outcome plan={plan} result={result} />}
-              </div>
+              {plan && result && (
+                <div className="flex min-h-8 w-[196px] shrink-0 items-center justify-end text-[12px]">
+                  <Outcome plan={plan} result={result} />
+                </div>
+              )}
             </li>
           );
         })}
@@ -403,7 +412,7 @@ function Projects({ tab }: { tab: ProjectsTab }) {
           </Button>
         </div>
       ) : (
-        <ul aria-label="Projects" className={`flex min-h-0 flex-col overflow-y-auto ${preview ? "max-h-[132px] shrink-0" : ""}`}>
+        <ul aria-label="Projects" className={`flex min-h-0 flex-col overflow-y-auto ${preview ? "max-h-[172px] shrink-0" : ""}`}>
           {plans.map((plan, i) => {
             const result = learning && (running || ended) ? learning.results[i] : null;
             return (
