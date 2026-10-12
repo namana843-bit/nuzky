@@ -3,13 +3,14 @@ import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { showHome, useLibrary } from "./library";
 import { useEditor } from "./store";
-import type { JobEvent, StyleAction, StylePair, StylePairResult, StyleTimelineResult, StyleView, TimelinePlan } from "./types";
+import type { CapCutDraft, JobEvent, StyleAction, StylePair, StylePairResult, StyleTimelineResult, StyleView, TimelinePlan } from "./types";
 
 /** A job learning from videos: its pairs and how each ended, in order. */
 export type Learning = { jobId: string; pairs: StylePair[]; results: (StylePairResult | null)[] };
-/** A job learning from projects cut in another editor: what each was read as and how it ended. */
-export type ProjectsLearning = { jobId: string; plans: TimelinePlan[]; results: (StyleTimelineResult | null)[] };
-export type LearnTab = "videos" | "projects";
+export type ProjectsTab = "projects" | "capcut";
+/** A job learning from projects cut in another editor, chosen on `tab`: what each was read as and how it ended. */
+export type ProjectsLearning = { jobId: string; tab: ProjectsTab; plans: TimelinePlan[]; results: (StyleTimelineResult | null)[] };
+export type LearnTab = "videos" | ProjectsTab;
 
 type StyleState = {
   /** null until read. */
@@ -24,6 +25,10 @@ type StyleState = {
   draft: StylePair[];
   /** The projects chosen in the Learn dialog, as read, kept while it is closed. */
   projects: TimelinePlan[];
+  /** CapCut's drafts on this computer and those added by hand, newest first; null until looked for. */
+  capcutDrafts: CapCutDraft[] | null;
+  /** The drafts chosen among them, as read, in the list's order. */
+  capcut: TimelinePlan[];
   /** The AI panel beside the page, to talk the style through. */
   chatOpen: boolean;
 };
@@ -39,6 +44,8 @@ export const useStyle = create<StyleState>(() => ({
   learnTab: "videos",
   draft: [NO_PAIR],
   projects: [],
+  capcutDrafts: null,
+  capcut: [],
   chatOpen: false,
 }));
 
@@ -102,10 +109,44 @@ export async function addProjects(paths: string[]) {
   }
 }
 
-export async function startProjectsLearning(plans: TimelinePlan[]) {
+/** Looks for CapCut's drafts, or in `folder`, which may be one draft; drafts found in a folder chosen by hand are chosen too. */
+export async function findDrafts(folder?: string) {
+  try {
+    const found = await api.styleCapCutDrafts(folder ?? null);
+    const paths = found.map((d) => d.path);
+    useStyle.setState((s) => ({ capcutDrafts: [...found, ...(s.capcutDrafts ?? []).filter((d) => !paths.includes(d.path))] }));
+    if (folder) await Promise.all(found.map((d) => chooseDraft(d.path, true)));
+  } catch (e) {
+    useStyle.setState((s) => ({ capcutDrafts: s.capcutDrafts ?? [] }));
+    useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
+  }
+}
+
+/** The drafts chosen last, so a draft left out while it was being read stays out. */
+const chosenDrafts = new Set<string>();
+
+/** Chooses a draft to learn from, reading it at once, or leaves it out. A choice after learning ended leaves its results, which were about the others. */
+export async function chooseDraft(path: string, on: boolean) {
+  if (on) chosenDrafts.add(path);
+  else chosenDrafts.delete(path);
+  const others = (plans: TimelinePlan[]) => plans.filter((p) => p.path !== path);
+  useStyle.setState((s) => ({ capcut: others(s.capcut), projectsLearning: s.projectsLearning?.tab === "capcut" ? null : s.projectsLearning }));
+  if (!on) return;
+  try {
+    const [plan] = await api.styleReadTimelines([path]);
+    if (!chosenDrafts.has(path)) return;
+    const order = (useStyle.getState().capcutDrafts ?? []).map((d) => d.path);
+    const place = (p: TimelinePlan) => order.indexOf(p.path);
+    useStyle.setState((s) => ({ capcut: [...others(s.capcut), plan].sort((a, b) => place(a) - place(b)) }));
+  } catch (e) {
+    useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
+  }
+}
+
+export async function startProjectsLearning(plans: TimelinePlan[], tab: ProjectsTab) {
   try {
     const jobId = await api.startTimelineLearning(plans.map((p) => p.path));
-    useStyle.setState({ projectsLearning: { jobId, plans, results: plans.map(() => null) } });
+    useStyle.setState({ projectsLearning: { jobId, tab, plans, results: plans.map(() => null) } });
   } catch (e) {
     useEditor.getState().toast({ kind: "error", text: plainError(errorText(e)) });
   }
@@ -119,7 +160,8 @@ export async function saveLearned(jobId: string): Promise<boolean> {
   const toast = useEditor.getState().toast;
   try {
     const view = await api.styleUseLearned(jobId);
-    useStyle.setState({ view, error: null, projectsLearning: null, projects: [] });
+    useStyle.setState({ view, error: null, projectsLearning: null, projects: [], capcut: [] });
+    chosenDrafts.clear();
     // The version before is the one replaced, or none: no style.
     const before = view.versions[1]?.index ?? 0;
     toast({ kind: "success", text: "Saved as your style", action: { label: "Undo", run: () => void changeStyle({ type: "restore", index: before }) } });
@@ -165,10 +207,11 @@ export function listenStyle() {
       const projects = projectsLearning?.jobId === job.id;
       if (learnOpen || (learning?.jobId !== job.id && !projects)) return;
       const toast = useEditor.getState().toast;
-      const details = { label: "Details", run: () => useStyle.setState({ learnOpen: true, learnTab: projects ? "projects" : "videos" }) };
+      const details = { label: "Details", run: () => useStyle.setState({ learnOpen: true, learnTab: projects ? projectsLearning.tab : "videos" }) };
       if (job.status === "done" && projects) {
         const learned = projectsLearning.results.filter((r) => r?.learned.length).length;
-        toast({ kind: "success", text: `Learned from ${plural(learned, "project")}`, action: { ...details, label: "Review" } });
+        const what = projectsLearning.tab === "capcut" ? "draft" : "project";
+        toast({ kind: "success", text: `Learned from ${plural(learned, what)}`, action: { ...details, label: "Review" } });
       } else if (job.status === "done" && learning) {
         const learned = learning.results.filter((r) => r && !r.error).length;
         const found = view?.suggestions.length ?? 0;

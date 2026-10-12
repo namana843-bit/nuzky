@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Word;
 
-use super::{Alignment, Caption, Picture, Place, token};
+use super::{Alignment, Caption, CaptionLook, Picture, Place, token};
 
 /// Rules need at least this many moments from the recordings to be written down.
 const MIN_EXAMPLES: usize = 3;
@@ -182,6 +182,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("Cuts per minute", "Cuts"),
     ("build_captions max_words", "Captions"),
     ("build_captions max_chars", "Captions"),
+    ("build_captions style", "Captions"),
     ("Base framing", "Zoom"),
     ("Zoom in", "Zoom"),
     ("Slow zoom moves", "Zoom"),
@@ -951,21 +952,59 @@ fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> 
         say(&examples)
     );
     let height = format!("{:.0}% of the height", centre * 100.0);
+    let mut settings = vec![
+        ("build_captions max_words".into(), most.to_string()),
+        ("build_captions max_chars".into(), max_chars.to_string()),
+    ];
+    let mut choices = vec![
+        Choice::number("Words per caption", most.to_string(), most as f64, 0.0),
+        Choice::number("Characters per caption", max_chars.to_string(), max_chars as f64, 2.0),
+        Choice::number("Position", height.clone(), centre as f64, 0.03),
+    ];
+    if let Some(look) = look(edits) {
+        let font = look.font.as_deref().unwrap_or("the editor's default font");
+        let weight = if look.bold { " bold" } else { "" };
+        let outline =
+            look.outline.as_ref().map_or(String::new(), |(c, w)| format!(" with a {c} outline {w:.0} pixels wide"));
+        let said = format!("{font}{weight}, {:.0} pixels, {}{outline}", look.size, look.color);
+        // Inserted before the examples, after the sentence on where captions sit.
+        let at = out.find("Times in the examples").unwrap_or(out.len());
+        out.insert_str(at, &format!("They are drawn in {said}, on a frame 1080 pixels across its shorter side. "));
+        let mut style = serde_json::json!({"fontSize": look.size, "color": look.color, "bold": look.bold});
+        if let Some(font) = &look.font {
+            style["fontFamily"] = font.clone().into();
+        }
+        if let Some((color, width)) = &look.outline {
+            style["strokeWidth"] = (*width).into();
+            style["strokeColor"] = color.clone().into();
+        } else {
+            style["strokeWidth"] = 0.into();
+        }
+        settings.push(("build_captions style".into(), style.to_string()));
+        choices.push(Choice::text("Look", said));
+    }
     Some(Rule {
         title: "Captions",
         summary: format!("{most} words at most, {max_chars} characters at most, middle at {height}"),
         text: out,
-        settings: vec![
-            ("build_captions max_words".into(), most.to_string()),
-            ("build_captions max_chars".into(), max_chars.to_string()),
-        ],
-        choices: vec![
-            Choice::number("Words per caption", most.to_string(), most as f64, 0.0),
-            Choice::number("Characters per caption", max_chars.to_string(), max_chars as f64, 2.0),
-            Choice::number("Position", height, centre as f64, 0.03),
-        ],
+        settings,
+        choices,
         moments: examples,
     })
+}
+
+/// How most captions are drawn over every cut whose timeline says, by how many captions each has.
+fn look(edits: &[Edit]) -> Option<CaptionLook> {
+    let mut looks: Vec<(&CaptionLook, usize)> = Vec::new();
+    for picture in edits.iter().map(|e| e.source.picture).filter(|p| p.caption_band.is_some()) {
+        let Some(look) = &picture.look else { continue };
+        match looks.iter_mut().find(|(l, _)| *l == look) {
+            Some((_, n)) => *n += picture.captions.len(),
+            None => looks.push((look, picture.captions.len())),
+        }
+    }
+    let most = looks.iter().map(|(_, n)| *n).max()?;
+    looks.into_iter().find(|(_, n)| *n == most).map(|(look, _)| look.clone())
 }
 
 /// The cut's recognised words of each caption, in order. Each caption takes about as many words
@@ -1346,7 +1385,7 @@ mod tests {
             words,
             cut_words,
             alignment,
-            Picture { skipped: None, captions, caption_band: Some((0.6, 0.66)), framing, zooms },
+            Picture { skipped: None, captions, caption_band: Some((0.6, 0.66)), framing, zooms, look: None },
         )
     }
 

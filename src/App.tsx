@@ -33,7 +33,7 @@ import { SwitchDialog } from "./components/home/SwitchConfirm";
 import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
 import { useSounds } from "./lib/sounds";
-import { addProjects, listenStyle, loadStyle, useStyle } from "./lib/style";
+import { addProjects, findDrafts, listenStyle, loadStyle, useStyle } from "./lib/style";
 import { closeCover, deleteText, exportCover, onCoverJob, useCover } from "./lib/cover";
 import { candidateOf, closeReels, onReelsJob, openReelsToFind, playEnding, toggleReelPlay, useReels } from "./lib/reels";
 import { ReelList } from "./components/reels/ReelList";
@@ -408,7 +408,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __nuzky: { importPaths, store: useEditor, cover: useCover, reels: useReels, openReelsToFind, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, addProjects, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds, previewWindow: appWindow },
+    __nuzky: { importPaths, store: useEditor, cover: useCover, reels: useReels, openReelsToFind, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, addProjects, findDrafts, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds, previewWindow: appWindow },
   });
 
 async function startEditor() {

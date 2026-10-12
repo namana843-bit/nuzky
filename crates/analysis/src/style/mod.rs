@@ -10,7 +10,7 @@ mod score;
 pub use align::{Alignment, Piece, Place, align};
 pub use from_timeline::{Lesson, Recording, heard_media, lessons, speech_clips};
 pub use learn::{Choice, Correction, Learned, Moment, RULES, Rule, SETTINGS, Source, learn, learned, settings_block};
-pub use picture::{Caption, Framing, Picture, ZoomChange, picture};
+pub use picture::{Caption, CaptionLook, Framing, Picture, ZoomChange, picture};
 pub use score::{Passage, Score, score};
 
 use std::path::PathBuf;

@@ -18,14 +18,14 @@ const SMALL_WIDTH: usize = 72;
 /// The reason `picture` gives says this length too.
 const MAX_CUT_US: i64 = 5 * 60 * 1_000_000;
 /// Framing is measured about this often within a piece, and this far from its ends.
-const SAMPLE_US: i64 = 500_000;
-const EDGE_US: i64 = 200_000;
+pub(super) const SAMPLE_US: i64 = 500_000;
+pub(super) const EDGE_US: i64 = 200_000;
 /// Below this match the framing of a moment is unknown, such as over B-roll.
 const MIN_MATCH: f32 = 0.75;
 /// Zoom steps smaller than this between samples are noise.
 const STEP: f32 = 0.012;
 /// A zoom change smaller than this in total is not a zoom.
-const MIN_ZOOM: f32 = 0.03;
+pub(super) const MIN_ZOOM: f32 = 0.03;
 
 /// One caption on screen, in cut time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +57,20 @@ pub struct ZoomChange {
     pub at_cut: bool,
 }
 
+/// How captions are drawn, as Nuzky draws text: sizes are pixels of a frame 1080 pixels across its
+/// shorter side, as a Reel is.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CaptionLook {
+    /// None for the editor's default font.
+    pub font: Option<String>,
+    pub size: f32,
+    /// `#rrggbb`
+    pub color: String,
+    pub bold: bool,
+    /// Colour and width.
+    pub outline: Option<(String, f32)>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Picture {
     /// Why the picture was not analysed, if it was not.
@@ -66,6 +80,9 @@ pub struct Picture {
     pub caption_band: Option<(f32, f32)>,
     pub framing: Vec<Framing>,
     pub zooms: Vec<ZoomChange>,
+    /// How most captions are drawn, when a timeline says; never seen in pixels.
+    #[serde(default)]
+    pub look: Option<CaptionLook>,
 }
 
 pub fn picture(recording: &Asset, cut: &Asset, alignment: &Alignment, cancelled: &dyn Fn() -> bool) -> Result<Picture> {
@@ -90,7 +107,7 @@ pub fn picture(recording: &Asset, cut: &Asset, alignment: &Alignment, cancelled:
     let shots = shots(&frames, alignment, &keep_rows);
     let framing = framing(recording, cut, &frames, &shots, &keep_rows, cancelled)?;
     let zooms = zooms(&framing, &frames, &shots, &keep_rows);
-    Ok(Picture { skipped: None, captions, caption_band, framing, zooms })
+    Ok(Picture { skipped: None, captions, caption_band, framing, zooms, look: None })
 }
 
 /// The pieces as the picture shows them. Sound puts a cut anywhere in its pause, the picture

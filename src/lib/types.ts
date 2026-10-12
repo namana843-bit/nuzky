@@ -173,6 +173,22 @@ export type Canvas = {
 };
 
 /**
+ * A CapCut draft as the Learn dialog lists it.
+ */
+export type CapCutDraft = {
+  /**
+   * The draft's folder.
+   */
+  path: string,
+  name: string,
+  /**
+   * Milliseconds since 1970.
+   */
+  modifiedMs: number,
+  durationUs: number | null,
+};
+
+/**
  * A caption style: its look, a font when it brings its own, the entry and exit animation of every caption
  * and how it marks key words. The built-in ones are in `assets/presets/captions.json`; the user's own live
  * beside the projects.

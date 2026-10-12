@@ -7,9 +7,10 @@
 
 use std::path::Path;
 
-use nuzky_interchange::{ImportedTimeline, MediaClip, TrackKind};
+use nuzky_interchange::{ImportedTimeline, MediaClip, TextClip, TrackKind, Transform};
 
-use super::{Alignment, Caption, Picture, Piece, Place, pauses_between};
+use super::picture::{EDGE_US, MIN_ZOOM, SAMPLE_US};
+use super::{Alignment, Caption, CaptionLook, Framing, Picture, Piece, Place, ZoomChange, pauses_between};
 use crate::Word;
 
 /// A recording the timeline plays, with the words recognised in it.
@@ -145,7 +146,7 @@ pub fn lessons(timeline: &ImportedTimeline, cut: &str, recordings: &[Recording])
                 recording_pauses: pauses_between(recording.words),
                 pieces,
             },
-            picture: picture(timeline, clips),
+            picture: picture(timeline, recording.path, clips),
             places,
         }));
     }
@@ -172,11 +173,11 @@ fn heard(words: &[Word], clips: &[&MediaClip]) -> Vec<(usize, Word, usize)> {
     out
 }
 
-/// The captions said over the recording, and where they sit when the timeline says so. Framing
-/// and zoom are left to formats that carry them.
-fn picture(timeline: &ImportedTimeline, heard: &[&MediaClip]) -> Picture {
+/// The captions said over the recording, where they sit and how they look, and how the recording's
+/// picture is framed and zoomed, as far as the timeline says.
+fn picture(timeline: &ImportedTimeline, path: &Path, heard: &[&MediaClip]) -> Picture {
     let spoken = |t: i64| heard.iter().any(|c| c.start_us <= t && t < c.end_us());
-    let texts: Vec<_> =
+    let texts: Vec<&TextClip> =
         timeline.tracks.iter().flat_map(|t| &t.texts).filter(|c| spoken(c.start_us + c.duration_us / 2)).collect();
     let mut captions: Vec<Caption> = texts
         .iter()
@@ -190,17 +191,105 @@ fn picture(timeline: &ImportedTimeline, heard: &[&MediaClip]) -> Picture {
     let mut heights: Vec<f32> = texts.iter().filter_map(|c| c.transform).map(|t| 0.5 + t.y).collect();
     heights.sort_by(f32::total_cmp);
     let caption_band = heights.get(heights.len() / 2).map(|&middle| (middle, middle));
-    let skipped = caption_band
-        .is_none()
+    let (framing, zooms) = framing(timeline, path);
+    let skipped = (caption_band.is_none() && framing.is_empty())
         .then(|| "the timeline does not say where its captions sit or how its picture is framed".into());
-    Picture { skipped, captions, caption_band, ..Picture::default() }
+    Picture { skipped, captions, caption_band, framing, zooms, look: look(timeline, &texts) }
+}
+
+/// How most of the captions are drawn, by how many of them are.
+fn look(timeline: &ImportedTimeline, texts: &[&TextClip]) -> Option<CaptionLook> {
+    let to_reel = timeline.size.map_or(1.0, |(w, h)| 1080.0 / w.min(h).max(1) as f32);
+    let mut looks: Vec<(CaptionLook, usize)> = Vec::new();
+    for text in texts {
+        let Some(style) = &text.style else { continue };
+        let px = |v: f32| (v * text.transform.map_or(1.0, |t| t.scale) * to_reel).round();
+        let look = CaptionLook {
+            font: style.font.clone(),
+            size: px(style.size),
+            color: style.color.clone(),
+            bold: style.bold,
+            outline: style.outline.as_ref().map(|(color, width)| (color.clone(), px(*width))),
+        };
+        match looks.iter_mut().find(|(l, _)| *l == look) {
+            Some((_, n)) => *n += 1,
+            None => looks.push((look, 1)),
+        }
+    }
+    // The first seen wins a tie.
+    let most = looks.iter().map(|(_, n)| *n).max()?;
+    looks.into_iter().find(|(_, n)| *n == most).map(|(look, _)| look)
+}
+
+/// Where the clip's picture sits `at_us` from its start, between its keyframes.
+fn transform_at(clip: &MediaClip, at_us: i64) -> Option<Transform> {
+    let keys = &clip.keyframes;
+    let Some(next) = keys.iter().position(|k| k.at_us > at_us) else {
+        return keys.last().map(|k| k.transform).or(clip.transform);
+    };
+    if next == 0 {
+        return Some(keys[0].transform);
+    }
+    let (a, b) = (&keys[next - 1], &keys[next]);
+    let f = (at_us - a.at_us) as f32 / (b.at_us - a.at_us) as f32;
+    let mix = |x: f32, y: f32| x + (y - x) * f;
+    let (s, e) = (a.transform, b.transform);
+    Some(Transform {
+        scale: mix(s.scale, e.scale),
+        x: mix(s.x, e.x),
+        y: mix(s.y, e.y),
+        rotation: mix(s.rotation, e.rotation),
+    })
+}
+
+/// Framing of the recording's picture over time, on the lowest video track that shows it, and its
+/// zoom changes: at a cut, or a gradual move between keyframes. Nothing when the timeline does not
+/// say where its pictures sit.
+fn framing(timeline: &ImportedTimeline, path: &Path) -> (Vec<Framing>, Vec<ZoomChange>) {
+    let shows = |c: &&MediaClip| c.path.as_deref() == Some(path) && c.transform.is_some();
+    let track =
+        timeline.tracks.iter().filter(|t| t.kind == TrackKind::Video).find(|t| t.clips.iter().any(|c| shows(&c)));
+    let mut clips: Vec<&MediaClip> = track.into_iter().flat_map(|t| t.clips.iter().filter(shows)).collect();
+    clips.sort_by_key(|c| c.start_us);
+    let (mut framing, mut zooms) = (Vec::new(), Vec::new());
+    let scale = |clip: &MediaClip, at: i64| transform_at(clip, at).map_or(1.0, |t| t.scale);
+    for (i, clip) in clips.iter().enumerate() {
+        let mut t = clip.start_us + EDGE_US;
+        while t < clip.end_us() - EDGE_US {
+            if let Some(f) = transform_at(clip, t - clip.start_us) {
+                framing.push(Framing { time_us: t, scale: f.scale, x: f.x, y: f.y });
+            }
+            t += SAMPLE_US;
+        }
+        if let Some(next) = clips.get(i + 1).filter(|n| (n.start_us - clip.end_us()).abs() < 1_000) {
+            let (from, to) = (scale(clip, clip.duration_us - 1), scale(next, 0));
+            if (to - from).abs() >= MIN_ZOOM {
+                zooms.push(ZoomChange { start_us: next.start_us, end_us: next.start_us, from, to, at_cut: true });
+            }
+        }
+        for pair in clip.keyframes.windows(2) {
+            let (from, to) = (pair[0].transform.scale, pair[1].transform.scale);
+            if (to - from).abs() >= MIN_ZOOM {
+                let at = |k: i64| clip.start_us + k.clamp(0, clip.duration_us);
+                zooms.push(ZoomChange {
+                    start_us: at(pair[0].at_us),
+                    end_us: at(pair[1].at_us),
+                    from,
+                    to,
+                    at_cut: false,
+                });
+            }
+        }
+    }
+    zooms.sort_by_key(|z| z.start_us);
+    (framing, zooms)
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use nuzky_interchange::{TextClip, Track, Transform};
+    use nuzky_interchange::{Track, Transform};
 
     use super::*;
 
@@ -346,13 +435,64 @@ mod tests {
     }
 
     #[test]
+    fn framing_zoom_and_the_caption_look_come_from_the_timeline() {
+        use nuzky_interchange::{Keyframe, TextStyle};
+        let talk = words("w", 20);
+        let at = |scale: f32| Transform { scale, x: 0.0, y: -0.03, rotation: 0.0 };
+        let mut first = clip("t.mov", 0, 0, 2 * S, 1.0);
+        first.transform = Some(at(1.3));
+        first.keyframes =
+            vec![Keyframe { at_us: 0, transform: at(1.1) }, Keyframe { at_us: 2 * S, transform: at(1.3) }];
+        let mut second = clip("t.mov", 2 * S, 5 * S, 2 * S, 1.0);
+        second.transform = Some(at(1.6));
+        let look = |size: f32, color: &str| {
+            Some(TextStyle { font: Some("Montserrat".into()), size, color: color.into(), bold: false, outline: None })
+        };
+        let text = |start_us, style| TextClip {
+            text: "two words".into(),
+            start_us,
+            duration_us: 500_000,
+            transform: Some(Transform { scale: 1.5, x: 0.0, y: 0.15, rotation: 0.0 }),
+            style,
+        };
+        let mut titles = track(TrackKind::Video, Vec::new());
+        titles.texts =
+            vec![text(0, look(40.0, "#ffffff")), text(S, look(60.0, "#fff059")), text(3 * S, look(60.0, "#fff059"))];
+        let timeline = ImportedTimeline {
+            size: Some((540, 960)),
+            tracks: vec![track(TrackKind::Video, vec![first, second]), titles],
+            ..Default::default()
+        };
+        let picture = lessons(&timeline, "Reel", &[recording("t.mov", &talk)]).remove(0).unwrap().picture;
+        assert_eq!(picture.skipped, None);
+        let framing: Vec<(i64, f32)> =
+            picture.framing.iter().map(|f| (f.time_us, (f.scale * 100.0).round() / 100.0)).collect();
+        let expected = [(200_000, 1.12), (700_000, 1.17), (1_200_000, 1.22), (1_700_000, 1.27)];
+        assert_eq!(framing[..4], expected, "half a second apart, between the keyframes");
+        assert_eq!(framing[4..], [(2_200_000, 1.6), (2_700_000, 1.6), (3_200_000, 1.6), (3_700_000, 1.6)]);
+        assert!(picture.framing.iter().all(|f| (f.y + 0.03).abs() < 1e-6));
+        let round = |v: f32| (v * 100.0).round() / 100.0;
+        let zooms: Vec<_> =
+            picture.zooms.iter().map(|z| (z.start_us, z.end_us, round(z.from), round(z.to), z.at_cut)).collect();
+        assert_eq!(
+            zooms,
+            [(0, 2 * S, 1.1, 1.3, false), (2 * S, 2 * S, 1.3, 1.6, true)],
+            "a slow move, then a zoom at the cut"
+        );
+        // The look of most captions, its size on a frame 1080 pixels wide with the captions' own scale.
+        let look = picture.look.unwrap();
+        assert_eq!((look.font.as_deref(), look.size, look.color.as_str()), (Some("Montserrat"), 180.0, "#fff059"));
+    }
+
+    #[test]
     fn captions_said_over_the_recording_and_where_they_sit() {
         let talk = words("w", 20);
         let text = |start_us, text: &str| TextClip {
             text: text.into(),
             start_us,
             duration_us: 500_000,
-            transform: Some(Transform { scale: 1.0, x: 0.0, y: 0.15 }),
+            transform: Some(Transform { scale: 1.0, x: 0.0, y: 0.15, rotation: 0.0 }),
+            style: None,
         };
         let mut titles = track(TrackKind::Video, Vec::new());
         titles.texts = vec![text(0, "two words"), text(S, "three short words"), text(9 * S, "after the cut")];
