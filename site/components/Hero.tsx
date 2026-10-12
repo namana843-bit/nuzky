@@ -291,7 +291,7 @@ export function Hero() {
             </a>
           </div>
           <p id="hero-notify-note" className="max-w-[460px] text-[14px] leading-[1.5] text-muted">
-            Coming soon for Mac, Windows and Linux. AI cutting comes to Windows later. {notifyNote}
+            Coming soon for Mac, Windows and Linux. {notifyNote}
           </p>
         </div>
       </div>
