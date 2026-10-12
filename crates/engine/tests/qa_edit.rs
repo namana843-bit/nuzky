@@ -178,6 +178,14 @@ fn a_whole_clip_changes_from_one_speed_to_another() {
     e.apply(update_speed(&id, 1.25), None).unwrap();
     e.apply(update_speed(&id, 1.5), None).unwrap();
     invariants(&e.project).unwrap();
+    // Half an hour at 1.97x lands a float error above the end of the file.
+    let mut p = Project::new("speeds");
+    p.assets = vec![asset("a", 1_829_517_000)];
+    let mut e = Editor::new(p);
+    e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
+    let id = e.project.tracks[0].clips[0].id.clone();
+    e.apply(update_speed(&id, 1.97), None).unwrap();
+    invariants(&e.project).unwrap();
 }
 #[test]
 fn equal_start_captions_do_not_overlap() {
