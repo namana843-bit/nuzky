@@ -1048,7 +1048,8 @@ impl Project {
                             }
                             let ratio = *sp as f64 / x as f64;
                             *sp = x;
-                            clip.duration_us = ((clip.duration_us as f64 * ratio).round() as i64).max(min);
+                            // Rounding up could reach a microsecond past the end of the file and refuse the speed.
+                            clip.duration_us = ((clip.duration_us as f64 * ratio).floor() as i64).max(min);
                             for k in &mut clip.keyframes {
                                 k.t_us = (k.t_us as f64 * ratio).round() as i64;
                             }

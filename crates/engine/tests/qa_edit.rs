@@ -169,6 +169,17 @@ fn fast_trim_stays_inside_source() {
     invariants(&e.project).unwrap();
 }
 #[test]
+fn a_whole_clip_changes_from_one_speed_to_another() {
+    let mut p = Project::new("speeds");
+    p.assets = vec![asset("a", 17_812_000)];
+    let mut e = Editor::new(p);
+    e.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }, None).unwrap();
+    let id = e.project.tracks[0].clips[0].id.clone();
+    e.apply(update_speed(&id, 1.25), None).unwrap();
+    e.apply(update_speed(&id, 1.5), None).unwrap();
+    invariants(&e.project).unwrap();
+}
+#[test]
 fn equal_start_captions_do_not_overlap() {
     let mut e = editor();
     let style = TextStyle {
