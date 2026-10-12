@@ -267,18 +267,28 @@ fn framing(timeline: &ImportedTimeline, path: &Path) -> (Vec<Framing>, Vec<ZoomC
                 zooms.push(ZoomChange { start_us: next.start_us, end_us: next.start_us, from, to, at_cut: true });
             }
         }
-        for pair in clip.keyframes.windows(2) {
-            let (from, to) = (pair[0].transform.scale, pair[1].transform.scale);
+        // One move while the scale keeps going the same way, however many keyframes of where the
+        // picture sits lie along it.
+        let keys = &clip.keyframes;
+        let step = |k: usize| keys[k + 1].transform.scale - keys[k].transform.scale;
+        let mut i = 0;
+        while i + 1 < keys.len() {
+            let mut j = i + 1;
+            while j + 1 < keys.len() && step(j) * step(i) > 0.0 {
+                j += 1;
+            }
+            let (from, to) = (keys[i].transform.scale, keys[j].transform.scale);
             if (to - from).abs() >= MIN_ZOOM {
                 let at = |k: i64| clip.start_us + k.clamp(0, clip.duration_us);
                 zooms.push(ZoomChange {
-                    start_us: at(pair[0].at_us),
-                    end_us: at(pair[1].at_us),
+                    start_us: at(keys[i].at_us),
+                    end_us: at(keys[j].at_us),
                     from,
                     to,
                     at_cut: false,
                 });
             }
+            i = j;
         }
     }
     zooms.sort_by_key(|z| z.start_us);
@@ -441,8 +451,13 @@ mod tests {
         let at = |scale: f32| Transform { scale, x: 0.0, y: -0.03, rotation: 0.0 };
         let mut first = clip("t.mov", 0, 0, 2 * S, 1.0);
         first.transform = Some(at(1.3));
-        first.keyframes =
-            vec![Keyframe { at_us: 0, transform: at(1.1) }, Keyframe { at_us: 2 * S, transform: at(1.3) }];
+        // The picture moves sideways halfway through the zoom, which stays one move.
+        let aside = Transform { x: 0.05, ..at(1.2) };
+        first.keyframes = vec![
+            Keyframe { at_us: 0, transform: at(1.1) },
+            Keyframe { at_us: S, transform: aside },
+            Keyframe { at_us: 2 * S, transform: at(1.3) },
+        ];
         let mut second = clip("t.mov", 2 * S, 5 * S, 2 * S, 1.0);
         second.transform = Some(at(1.6));
         let look = |size: f32, color: &str| {

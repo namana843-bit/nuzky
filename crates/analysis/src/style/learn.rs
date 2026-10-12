@@ -967,7 +967,6 @@ fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> 
         let outline =
             look.outline.as_ref().map_or(String::new(), |(c, w)| format!(" with a {c} outline {w:.0} pixels wide"));
         let said = format!("{font}{weight}, {:.0} pixels, {}{outline}", look.size, look.color);
-        // Inserted before the examples, after the sentence on where captions sit.
         let at = out.find("Times in the examples").unwrap_or(out.len());
         out.insert_str(at, &format!("They are drawn in {said}, on a frame 1080 pixels across its shorter side. "));
         let mut style = serde_json::json!({"fontSize": look.size, "color": look.color, "bold": look.bold});

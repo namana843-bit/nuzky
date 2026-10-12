@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowRight, Check, Film, FolderPlus, Plus, X } from "luc
 import { api, plainError } from "../../lib/api";
 import {
   NO_PAIR,
+  type ProjectsLearning,
   type ProjectsTab,
   addProjects,
   chooseDraft,
@@ -373,9 +374,11 @@ function Projects({ tab }: { tab: ProjectsTab }) {
   }, [empty, running, previewed, confirming]);
 
   // Another choice of projects after learning ended leaves its results, which were about the old ones.
-  const setDraft = (change: (plans: TimelinePlan[]) => TimelinePlan[]) => useStyle.setState((s) => ({ projects: change(s.projects), projectsLearning: null }));
+  // Learning from the other tab goes on, so only this tab's is left.
+  const leave = (s: { projectsLearning: ProjectsLearning | null }) => (s.projectsLearning?.tab === tab ? null : s.projectsLearning);
+  const setDraft = (change: (plans: TimelinePlan[]) => TimelinePlan[]) => useStyle.setState((s) => ({ projects: change(s.projects), projectsLearning: leave(s) }));
   const choose = async () => {
-    useStyle.setState({ projectsLearning: null });
+    useStyle.setState((s) => ({ projectsLearning: leave(s) }));
     await pickProjects();
   };
   const editable = !running && !preview;

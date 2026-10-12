@@ -155,6 +155,19 @@ def style_capcut(r):
     r.check('learning runs as a job, a row showing its phase over a progress bar',
             wait(lambda: (j := job(r)) and j != before and j['status'] == 'running' and r.s.run(bar), 30), job(r))
     shot(r, 'capcut-learning')
+    # Closed, the dialog comes back from the top bar on the tab that learns.
+    r.s.run("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true}))")
+    wait(lambda: not r.s.run(f"return !!document.querySelector('{DIALOG}')"), 5)
+    r.s.run("document.querySelector('button[title=\"Show learning\"]').click()")
+    r.check('the top bar opens learning on the CapCut tab', wait(lambda: r.s.run(tab) == 'CapCut' and r.s.run(bar), 5), r.s.run(tab))
+    # Choosing on another tab leaves this learning alone.
+    r.s.run(f"[...document.querySelectorAll('{DIALOG} [role=tab]')].find((t) => t.textContent === 'Projects (.otio)').click()")
+    r.s.call('window.__nuzky.addProjects(arguments[0])', [str(r.work / 'gone.otio')])
+    remove = f"""const b = document.querySelector('{DIALOG} button[aria-label="Remove gone"]'); if (!b) return false; b.click(); return true;"""
+    r.check('a project can be chosen and removed on the other tab meanwhile', wait(lambda: r.s.run(remove), 5))
+    owner = "return window.__nuzky.style.getState().projectsLearning?.tab ?? null"
+    r.check('and the CapCut learning stays, Stop and all', r.s.run(owner) == 'capcut', r.s.run(owner))
+    r.s.run(f"[...document.querySelectorAll('{DIALOG} [role=tab]')].find((t) => t.textContent === 'CapCut').click()")
     r.check('learning ends', wait(lambda: (j := job(r)) and j['status'] != 'running', 600), job(r))
     result = job(r)
     chosen = [p['path'] for p in r.s.run(STATE)['chosen']]
