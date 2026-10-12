@@ -267,7 +267,7 @@ export function Hero() {
     <section ref={section} className="relative">
       <div className="relative z-10 flex flex-col items-center px-5 pt-12 text-center sm:pt-24">
         <h1 className="heading-xl">
-          Talking is the fun part.
+          Recording is the fun part.
           <br />
           <span className="text-subtle">Nuzky does the boring one.</span>
         </h1>

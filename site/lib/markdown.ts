@@ -34,7 +34,7 @@ ${list(features)}
 
 ## From your clips to a reel
 
-Talking is the fun part. Nuzky does the boring one.
+Recording is the fun part. Nuzky does the boring one.
 
 1. Your videos and photos. Nuzky opens video from any phone or camera, including HEVC and variable frame rate.
 2. Cuts the ums and retakes. Your ChatGPT or Claude keeps the best take and cuts the ums and long pauses while you watch. One undo takes it all back.
