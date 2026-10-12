@@ -185,8 +185,9 @@ function NoReels() {
   const finding = useReels((s) => s.finding);
   const searched = useReels((s) => s.searched);
   const agents = useAgent((s) => s.agents);
-  // Read again whenever the ChatGPT sign-in changes.
+  // Read again whenever the ChatGPT sign-in or its models change.
   useChatGpt((s) => s.status);
+  useChatGpt((s) => s.models);
   const failed = useAgent((s) => s.items[s.items.length - 1]?.kind === "error");
   const blocked = useAgent(() => findBlocked());
   useEffect(() => {

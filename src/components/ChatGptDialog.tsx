@@ -90,7 +90,9 @@ function SignedIn({ email, plan }: { email: string | null; plan: boolean }) {
           )}
         </div>
       </div>
-      {plan ? (
+      {plan && action === "signingIn" ? (
+        <Waiting />
+      ) : plan ? (
         <div className="flex gap-2">
           <Button pill onClick={() => void openUrl(USAGE_PAGE)}>
             Manage usage <ExternalLink size={12} />
