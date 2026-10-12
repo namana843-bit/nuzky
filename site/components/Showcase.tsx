@@ -185,7 +185,7 @@ export function Showcase() {
   const current = tab.spots[spot];
 
   return (
-    <section id="editor" ref={section} className="relative pb-10 pt-28 sm:pt-[150px]">
+    <section id="editor" ref={section} className="relative pb-10 pt-32 sm:pt-[180px]">
       <div className="relative z-10 mx-auto flex max-w-[1240px] flex-col items-center gap-7 px-5 text-center">
         <h2 className="heading-lg">
           Everything where you expect it.
@@ -221,7 +221,6 @@ export function Showcase() {
           <Fit
             width={1200}
             height={740}
-            waves="glow"
             view={current.view}
             className="mx-auto max-md:overflow-hidden max-md:rounded-[18px] max-md:ring-1 max-md:ring-white/10"
           >

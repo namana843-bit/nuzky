@@ -19,15 +19,12 @@ export function Fit({
   width,
   height,
   className = "",
-  waves,
   view,
   children,
 }: {
   width: number;
   height: number;
   className?: string;
-  /** Marks the composition as an anchor for the light behind it (see Waves). */
-  waves?: "swell" | "glow";
   view?: FitView;
   children: React.ReactNode;
 }) {
@@ -45,7 +42,6 @@ export function Fit({
     // The inline script adds `--fit` to the style before React hydrates, so the attribute differs on purpose.
     <div
       ref={ref}
-      data-waves={waves}
       data-view={view ? "" : undefined}
       suppressHydrationWarning
       className={`fit relative w-full ${className}`}

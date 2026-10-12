@@ -10,8 +10,7 @@ import { useEffect, useRef, useState } from "react";
 // When the GPU drops the context, the canvas hides and the gradient underneath shows until it is back.
 //
 // With `swellAt` the light spans several sections as one surface: the swells sit behind the element
-// the selector finds, an optional soft glow sits behind `glowAt`, and the light fades out before the
-// bottom edge, so nothing ends in a seam.
+// the selector finds, and the light fades out before the bottom edge, so nothing ends in a seam.
 
 const vertex = `attribute vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }`;
 
@@ -26,7 +25,6 @@ uniform float u_time;
 uniform float u_intensity;
 uniform float u_base;
 uniform float u_unit;
-uniform float u_glow;
 uniform float u_span;
 const vec3 BASE = vec3(0.0314, 0.0314, 0.0392);
 const vec3 COOL = vec3(0.788, 0.8, 0.827);
@@ -63,10 +61,8 @@ void main() {
 
   vec3 col;
   if (u_span > 0.5) {
-    // One surface over several sections: a broad glow behind the second anchor, a falloff into the
-    // page colour at the sides, and a long fade before the bottom edge so the next section starts clean.
-    float g = (gl_FragCoord.y - u_glow) / u_unit;
-    light += mix(DEEP, COOL, 0.3) * exp(-sq(g / 0.55)) * exp(-sq(p.x / 1.1)) * 0.085 * u_intensity;
+    // One surface over several sections: a falloff into the page colour at the sides, and a long fade
+    // before the bottom edge so the next section starts clean.
     light *= smoothstep(0.0, 0.55 * u_unit, gl_FragCoord.y);
     light *= mix(0.35, 1.0, exp(-sq(p.x / 1.5)));
     col = BASE + light;
@@ -86,8 +82,6 @@ type Props = {
   intensity?: number;
   /** Selector, within the parent, of the element the swells sit behind. */
   swellAt?: string;
-  /** Selector, within the parent, of the element a soft glow sits behind. */
-  glowAt?: string;
   className?: string;
 };
 
@@ -98,7 +92,7 @@ const SCALE = 0.5;
 // A frame is due after this long; the slack lets a 60 Hz screen draw every other frame without drifting.
 const FRAME_MS = 1000 / 30 - 3;
 
-export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className = "" }: Props) {
+export function Waves({ height = 0.4, intensity = 1, swellAt, className = "" }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   // Bumped when a lost context comes back, so the effect builds the program again.
   const [restored, setRestored] = useState(0);
@@ -134,17 +128,16 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
     const uTime = u("u_time");
     const uBase = u("u_base");
     const uUnit = u("u_unit");
-    const uGlow = u("u_glow");
     gl.uniform1f(u("u_intensity"), intensity);
     gl.uniform1f(u("u_span"), swellAt ? 1 : 0);
 
     const root = canvas.parentElement?.parentElement;
-    const anchors = [swellAt, glowAt].map((s) => (s && root ? root.querySelector<HTMLElement>(s) : null));
+    const anchor = swellAt && root ? root.querySelector<HTMLElement>(swellAt) : null;
 
-    // GL counts y from the bottom; anchors are measured from the top of the page.
-    const anchorY = (el: HTMLElement | null, rect: DOMRect, fallback: number) => {
-      if (!el) return fallback;
-      const r = el.getBoundingClientRect();
+    // GL counts y from the bottom; the anchor is measured from the top of the page.
+    const anchorY = (rect: DOMRect, fallback: number) => {
+      if (!anchor) return fallback;
+      const r = anchor.getBoundingClientRect();
       return (rect.bottom - (r.top + r.height / 2)) * SCALE;
     };
     const measure = () => {
@@ -160,8 +153,7 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
       gl.uniform2f(uRes, w, h);
       if (swellAt) {
         const rect = canvas.getBoundingClientRect();
-        gl.uniform1f(uBase, anchorY(anchors[0], rect, h * height));
-        gl.uniform1f(uGlow, anchorY(anchors[1], rect, -1e5));
+        gl.uniform1f(uBase, anchorY(rect, h * height));
         gl.uniform1f(uUnit, SPAN_UNIT * SCALE);
       } else {
         gl.uniform1f(uBase, h * height);
@@ -196,13 +188,13 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
       kick();
     });
     io.observe(canvas);
-    // Anchors only move when something resizes, so the layout is read here and never per frame.
+    // The anchor only moves when something resizes, so the layout is read here and never per frame.
     const ro = new ResizeObserver(() => {
       measure();
       draw(performance.now());
     });
     ro.observe(canvas);
-    for (const a of anchors) if (a) ro.observe(a);
+    if (anchor) ro.observe(anchor);
     measure();
     document.addEventListener("visibilitychange", kick);
     still.addEventListener("change", kick);
@@ -218,7 +210,7 @@ export function Waves({ height = 0.4, intensity = 1, swellAt, glowAt, className 
       // the next mount of the same canvas (React runs effects twice in development).
       delete canvas.dataset.ready;
     };
-  }, [height, intensity, swellAt, glowAt, restored]);
+  }, [height, intensity, swellAt, restored]);
 
   useEffect(() => {
     const canvas = ref.current;

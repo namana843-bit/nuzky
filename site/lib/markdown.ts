@@ -32,11 +32,15 @@ ${makerNote.join("\n\n")}
 
 ${list(features)}
 
-## From raw clips to a finished cut
+## From your clips to a reel
 
-1. Drop in your clips. Nuzky opens video from any phone or camera, including HEVC and variable frame rate.
-2. Caption it. AI on your computer writes the captions in your language. Pick a style and fix any word it misheard.
-3. Export anywhere. Vertical for Reels and TikTok, widescreen for YouTube, any size up to 4K. The file matches the preview.
+Recording is the fun part. Nuzky does the boring one.
+
+1. Your videos and photos. Nuzky opens video from any phone or camera, including HEVC and variable frame rate.
+2. Cuts the ums and retakes. Your ChatGPT or Claude keeps the best take and cuts the ums and long pauses while you watch. One undo takes it all back.
+3. Captions in your language. AI on your computer writes them, with the names you say. Fix any word it misheard.
+4. Music you're allowed to use. Search CC0 and CC BY music and sound effects; music plays quieter while you talk.
+5. Ready for Reels, TikTok and Shorts. Vertical 1080 × 1920 with the sound levelled for social apps, or widescreen up to 4K for YouTube. The file matches the preview.
 
 ## Or hand the cut to ChatGPT or Claude
 
