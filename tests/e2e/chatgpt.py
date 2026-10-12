@@ -240,7 +240,7 @@ def chatgpt(r):
         r.s.run("window.__nuzky.store.setState({view: 'editor'})")
         open_dialog(r)
         # The AI panel read the stored sign-in already, so the dialog shows it at once and renews it meanwhile.
-        wait(lambda: len(server.issued) == 2, 10)
+        wait(lambda: len(server.issued) == 2 and stored(r).get('refresh_token') == server.issued[1]['refresh_token'], 10)
         r.check('after restart the dialog shows the same email and Using ChatGPT plan',
                 EMAIL in view(r)['text'] and 'Using ChatGPT plan' in view(r)['text'], view(r))
         r.check('opening the dialog refreshes with the first refresh token without another authorization',
