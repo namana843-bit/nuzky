@@ -39,10 +39,8 @@ impl Tools for InApp {
         serde_json::to_value(self.0.answer(name, arguments)).unwrap_or_default()
     }
 
-    fn end(&self) {
-        if let Err(error) = self.0.disconnect() {
-            log::warn!("Ending the ChatGPT turn's run failed: {error:#}");
-        }
+    fn end(&self) -> anyhow::Result<()> {
+        self.0.disconnect()
     }
 }
 
@@ -272,7 +270,7 @@ fn send(
             tools: nuzky_mcp::tool_list().map_err(err)?,
             prompt: prompt(text, context, &project),
             history,
-            token: Box::new(|renew| chatgpt::chatgpt().access_token(renew)),
+            token: Arc::new(|renew| chatgpt::chatgpt().access_token(renew)),
             run: Arc::new(InApp(Backend::shared(host, &path, client).map_err(err)?)),
         })
     } else {

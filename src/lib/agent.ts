@@ -249,7 +249,9 @@ function offered(input: unknown): Omit<Extract<ChatItem, { kind: "options" }>, "
 
 export async function loadAgents() {
   try {
-    const [agents] = await Promise.all([agentApi.list(), checkChatGpt()]);
+    // Renewing the ChatGPT sign-in can take a while on a slow network; the installed agents need not wait for it.
+    void checkChatGpt();
+    const agents = await agentApi.list();
     const s = useAgent.getState();
     // Keep the chosen agent when it is installed or is ChatGPT; otherwise pick one that is installed, or else ChatGPT.
     const chosen = s.agent === "chatgpt" ? s.agent : (agents.find((a) => a.id === s.agent && usable(a)) ?? agents.find(usable))?.id;

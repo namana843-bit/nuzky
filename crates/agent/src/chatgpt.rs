@@ -45,7 +45,7 @@ pub trait Tools: Send + Sync + 'static {
     /// One call; the answer is an MCP `CallToolResult` as JSON.
     fn call(&self, name: &str, arguments: Value) -> Value;
     /// The turn ended or was stopped: a call still running ends, and a run left open is kept.
-    fn end(&self);
+    fn end(&self) -> Result<()>;
 }
 
 pub struct ChatGptRequest {
@@ -62,7 +62,7 @@ pub struct ChatGptRequest {
     /// on OpenAI's side. The turn adds what it keeps once it ends.
     pub history: Arc<Mutex<Vec<Value>>>,
     /// A valid access token; `true` renews it although it has not expired, after ChatGPT refused it.
-    pub token: Box<dyn Fn(bool) -> Result<String> + Send>,
+    pub token: Arc<dyn Fn(bool) -> Result<String> + Send + Sync>,
     pub run: Arc<dyn Tools>,
 }
 
@@ -83,12 +83,20 @@ impl Turn {
     }
 }
 
-fn run(req: &ChatGptRequest, stop: &AtomicBool, emit: &mut dyn FnMut(AgentEvent)) -> AgentEvent {
+fn run(req: &ChatGptRequest, stop: &Arc<AtomicBool>, emit: &mut dyn FnMut(AgentEvent)) -> AgentEvent {
     let before = req.history.lock().unwrap().clone();
     let mut items = before.clone();
     items.push(json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": req.prompt}]}));
-    let (end, answered) = converse(req, &mut items, stop, emit);
-    req.run.end();
+    let (mut end, answered) = converse(req, &mut items, stop, emit);
+    // A run ChatGPT left open that could not be kept leaves the editor locked, so the panel says so.
+    if let Err(error) = req.run.end()
+        && !matches!(end, AgentEvent::Error { .. })
+    {
+        end = failure(
+            ErrorCode::AgentFailed,
+            &format!("Nuzky couldn't finish ChatGPT's edits. Use Stop and edit in the top bar.\n{error:#}"),
+        );
+    }
     // A message ChatGPT never answered leaves the conversation when it failed, as the panel gives it back
     // to the field; a stopped one stays, as the panel still shows it.
     let kept = if answered {
@@ -108,7 +116,7 @@ fn run(req: &ChatGptRequest, stop: &AtomicBool, emit: &mut dyn FnMut(AgentEvent)
 fn converse(
     req: &ChatGptRequest,
     items: &mut Vec<Value>,
-    stop: &AtomicBool,
+    stop: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(AgentEvent),
 ) -> (AgentEvent, bool) {
     let http = http();
@@ -173,6 +181,8 @@ enum Wire {
     Event(Value),
     End,
     Broken(String),
+    /// No valid access token: the sign-in's own error.
+    NoToken(anyhow::Error),
 }
 
 /// One answer of ChatGPT's, streamed: its words go to the panel as they come, and its output items come
@@ -181,14 +191,14 @@ fn respond(
     http: &ureq::Agent,
     req: &ChatGptRequest,
     body: &str,
-    stop: &AtomicBool,
+    stop: &Arc<AtomicBool>,
     emit: &mut dyn FnMut(AgentEvent),
 ) -> Result<Vec<Value>, AgentEvent> {
     let mut renewed = false;
     let mut pauses = BACKOFF.iter().copied();
     let events = loop {
-        let token = (req.token)(renewed).map_err(|error| token_failure(&error))?;
-        let wire = post(http.clone(), format!("{}/responses", req.api), token, body.to_owned());
+        let url = format!("{}/responses", req.api);
+        let wire = post(http.clone(), url, req.token.clone(), renewed, body.to_owned(), stop.clone());
         match next(&wire, stop)? {
             Wire::Open => break wire,
             // An access token can stop working before it expires, e.g. once another window renewed it.
@@ -198,6 +208,7 @@ fn respond(
                 None => return Err(refused(503, &body, request.as_deref())),
             },
             Wire::Refused { status, body, request } => return Err(refused(status, &body, request.as_deref())),
+            Wire::NoToken(error) => return Err(token_failure(&error)),
             Wire::Broken(error) => {
                 return Err(failure(
                     ErrorCode::AgentFailed,
@@ -238,11 +249,26 @@ fn respond(
     }
 }
 
-/// Sends one request on its own thread, so the turn can stop without waiting for the network. A stopped
-/// turn drops the receiver, and the thread closes the connection at the next event.
-fn post(http: ureq::Agent, url: String, token: String, body: String) -> Receiver<Wire> {
+/// Gets the token and sends one request on its own thread, so the turn can stop without waiting for
+/// the network, a renewal included. A stopped turn drops the receiver, and the thread closes the
+/// connection at the next event.
+fn post(
+    http: ureq::Agent,
+    url: String,
+    token: Arc<dyn Fn(bool) -> Result<String> + Send + Sync>,
+    renew: bool,
+    body: String,
+    stop: Arc<AtomicBool>,
+) -> Receiver<Wire> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let token = match token(renew) {
+            Ok(token) => token,
+            Err(error) => return drop(tx.send(Wire::NoToken(error))),
+        };
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
         let response = http
             .post(&url)
             .header("Authorization", format!("Bearer {token}"))
@@ -286,7 +312,6 @@ fn post(http: ureq::Agent, url: String, token: String, body: String) -> Receiver
     rx
 }
 
-/// The next thing a request reports, looking every 50 ms whether the turn was stopped.
 fn next(wire: &Receiver<Wire>, stop: &AtomicBool) -> Result<Wire, AgentEvent> {
     let since = Instant::now();
     loop {

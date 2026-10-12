@@ -103,6 +103,7 @@ struct FakeTools {
     result: Value,
     block: Mutex<Option<Receiver<()>>>,
     ended: AtomicBool,
+    fail_end: AtomicBool,
 }
 
 impl Tools for FakeTools {
@@ -113,8 +114,10 @@ impl Tools for FakeTools {
         }
         self.result.clone()
     }
-    fn end(&self) {
+    fn end(&self) -> Result<()> {
         self.ended.store(true, Ordering::Release);
+        anyhow::ensure!(!self.fail_end.load(Ordering::Acquire), "SAVE_FAILED: the disk is full");
+        Ok(())
     }
 }
 
@@ -136,6 +139,7 @@ impl Fixture {
             result: res,
             block: Mutex::new(wait),
             ended: AtomicBool::new(false),
+            fail_end: AtomicBool::new(false),
         });
         let history = Arc::new(Mutex::new(prior));
         let renew = Arc::new(Mutex::new(Vec::new()));
@@ -151,7 +155,7 @@ impl Fixture {
             }}]),
             history: history.clone(),
             run: run.clone(),
-            token: Box::new(move |renew| {
+            token: Arc::new(move |renew| {
                 flags.lock().unwrap().push(renew);
                 if let Some(error) = err {
                     anyhow::bail!(error);
@@ -348,4 +352,54 @@ fn stop_during_tool_ends_promptly_and_answers_pending_call() {
     assert!(history[2]["output"].as_str().unwrap().starts_with("RUN_STOPPED"));
     release.send(()).unwrap();
     assert!(matches!(f.events.recv_timeout(Duration::from_secs(1)), Err(RecvTimeoutError::Disconnected)));
+}
+
+#[test]
+fn a_run_that_cannot_be_kept_ends_the_turn_with_an_error() {
+    let server = Server::new(vec![sse(vec![item(call()), completed()]), answer()]);
+    let (release, blocked) = mpsc::channel();
+    let f = Fixture::start(&server, tool_reply(), None, Some(blocked), vec![]);
+    f.calls.recv_timeout(Duration::from_secs(3)).unwrap();
+    f.run.fail_end.store(true, Ordering::Release);
+    release.send(()).unwrap();
+    let events = f.finish();
+    let message = error(events.last().unwrap(), ErrorCode::AgentFailed);
+    assert!(
+        message.starts_with("Nuzky couldn't finish ChatGPT's edits") && message.contains("SAVE_FAILED"),
+        "{message}"
+    );
+}
+
+#[test]
+fn stop_while_the_token_renews_sends_nothing() {
+    let server = Server::new(vec![]);
+    let (tx, events) = mpsc::channel();
+    let run = Arc::new(FakeTools {
+        calls: mpsc::channel().0,
+        result: tool_reply(),
+        block: Mutex::default(),
+        ended: AtomicBool::new(false),
+        fail_end: AtomicBool::new(false),
+    });
+    let request = ChatGptRequest {
+        api: server.api.clone(),
+        model: "test-model".into(),
+        guide: String::new(),
+        prompt: "Cut it".into(),
+        tools: json!([]),
+        history: Arc::default(),
+        run: run.clone(),
+        // A renewal stuck on a slow network.
+        token: Arc::new(|_| {
+            thread::sleep(Duration::from_secs(2));
+            Ok("late-token".into())
+        }),
+    };
+    let turn = Turn::chatgpt(request, move |event| drop(tx.send(event))).unwrap();
+    thread::sleep(Duration::from_millis(100));
+    turn.stop();
+    assert_eq!(events.recv_timeout(Duration::from_millis(500)).unwrap(), AgentEvent::Done { stopped: true });
+    assert!(run.ended.load(Ordering::Acquire));
+    thread::sleep(Duration::from_secs(2));
+    assert!(server.requests.lock().unwrap().is_empty());
 }

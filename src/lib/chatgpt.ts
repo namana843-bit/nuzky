@@ -117,6 +117,21 @@ export async function loadModels() {
   }
 }
 
+// The model list follows the signed-in account, also while the AI panel is closed, as Find reels and
+// Make it with AI send from elsewhere.
+useChatGpt.subscribe((s, prev) => {
+  if (s.status === prev.status) return;
+  if (s.status?.state === "signedIn" && s.status.plan) {
+    if (s.modelsFor !== (s.status.email ?? "")) void loadModels();
+  } else if (s.modelsFor !== null) useChatGpt.setState({ models: null, modelsFor: null, modelsError: null });
+});
+
+/** Continue with ChatGPT from outside the dialog: the dialog opens to show the sign-in going on, with Cancel. */
+export function continueWithChatGpt() {
+  void signIn();
+  openChatGpt();
+}
+
 export function chooseModel(slug: string) {
   localStorage.setItem(MODEL_KEY, slug);
   useChatGpt.setState({ model: slug });

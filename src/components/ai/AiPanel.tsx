@@ -59,7 +59,7 @@ import { Button, IconButton } from "../ui";
 import { Markdown } from "./Markdown";
 import { ChatGptLogo } from "../ChatGptLogo";
 import { ContinueButton, USAGE_PAGE } from "../ChatGptDialog";
-import { chooseModel, loadModels, openChatGpt, planReady, signIn, useChatGpt } from "../../lib/chatgpt";
+import { chooseModel, continueWithChatGpt, loadModels, openChatGpt, planReady, useChatGpt } from "../../lib/chatgpt";
 import { moveFloatBy, startMove } from "./AiDock";
 
 const INSTALL: Record<CliAgentId, string> = {
@@ -452,7 +452,7 @@ function ErrorNotice({ code, message, retryText }: { code: AgentErrorCode; messa
   const [icon, title, body, buttons]: [ReactNode, string, ReactNode, ReactNode] =
     agent === "chatgpt"
       ? code === "NOT_SIGNED_IN"
-        ? [<AlertCircle size={16} className="text-danger" />, "ChatGPT isn't signed in.", kept, <>{button("Sign in…", openChatGpt)}{retry}{switchTo}</>]
+        ? [<AlertCircle size={16} className="text-danger" />, "ChatGPT isn't signed in.", kept, <>{button("Sign in…", continueWithChatGpt)}{retry}{switchTo}</>]
         : code === "USAGE_LIMIT"
           ? [
               // OpenAI asks to keep ChatGPT's identity on its usage-limit message.
@@ -539,13 +539,7 @@ function ChatGptSignIn() {
           ? "Continue with ChatGPT and allow it when the browser asks. If a work or school workspace blocks it, sign out in ChatGPT account… and use a personal account."
           : "Sign in with ChatGPT, and ChatGPT edits your video right here. What it uses counts toward your ChatGPT plan's usage limits."}
       </p>
-      <ContinueButton
-        onClick={() => {
-          void signIn();
-          // The dialog shows the sign-in going on, with Cancel.
-          openChatGpt();
-        }}
-      />
+      <ContinueButton onClick={continueWithChatGpt} />
       {!agents.some((a) => a.path) && (
         <div className="mt-6 flex w-full flex-col">
           <p className="mb-1.5 text-[12px] leading-[18px] text-muted">Or use Claude Code or Codex: install one, sign in from your terminal, then check again.</p>
@@ -763,14 +757,7 @@ function Composer() {
   const otherRun = useEditor((s) => (s.aiRun && status === "idle" ? s.aiRun : null));
   const field = useRef<HTMLTextAreaElement>(null);
   const name = agentName(agent, agents);
-  const chatgpt = useChatGpt((s) => s.status);
-  const modelsFor = useChatGpt((s) => s.modelsFor);
-  const plan = agent === "chatgpt" && planReady(chatgpt);
-  // The model list is the signed-in account's, loaded again after another account signs in.
-  const account = chatgpt?.email ?? "";
-  useEffect(() => {
-    if (plan && modelsFor !== account) void loadModels();
-  }, [plan, account, modelsFor]);
+  const plan = useChatGpt((s) => agent === "chatgpt" && planReady(s.status));
   const working = status !== "idle";
   const blocked = sendBlocked();
 

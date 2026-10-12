@@ -173,7 +173,8 @@ def setup_chatgpt(r):
         'client_id': 'oaiapp_e2e', 'access_token': 'e2e-access', 'refresh_token': 'e2e-refresh', 'id_token': 'e2e-id',
         'expires_at': int(time.time()) + 3600, 'scopes': SCOPES.split()}))
     r.chatgpt = ChatGptPanelServer()
-    r.env['NUZKY_CHATGPT_ISSUER'] = r.chatgpt.url
+    # Signing in again only has to start: no browser opens.
+    r.env.update(NUZKY_CHATGPT_ISSUER=r.chatgpt.url, NUZKY_TEST_BROWSER='/usr/bin/true')
 
 
 @flow('ai_panel_chatgpt', 'ChatGPT on the signed-in plan streams a split through local tools, shows its run and Undo, '
@@ -246,8 +247,10 @@ def ai_panel_chatgpt(r):
         r.shot('chatgpt-not-signed-in')
         click(r, 'Sign in…')
         dialog = "return document.querySelector('[role=dialog][aria-labelledby=chatgpt-title]')?.innerText ?? ''"
-        check('Sign in… opens the ChatGPT dialog, which finds the sign-in gone',
-              wait(lambda: 'Continue with ChatGPT' in r.s.run(dialog), 10), r.s.run(dialog))
+        check('Sign in… starts signing in again, with the ChatGPT dialog showing it',
+              wait(lambda: 'Sign in to ChatGPT in your browser' in r.s.run(dialog), 10), r.s.run(dialog))
+        click(r, 'Cancel', '[role=dialog][aria-labelledby=chatgpt-title]')
+        check('cancelled, the dialog offers Continue with ChatGPT', wait(lambda: 'Continue with ChatGPT' in r.s.run(dialog), 10), r.s.run(dialog))
         r.key('Escape')
         wait(lambda: not r.s.run(dialog), 3)
         r.s.run("window.__nuzky.agent.setState({draft: ''})")
