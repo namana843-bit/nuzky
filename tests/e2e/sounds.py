@@ -250,6 +250,7 @@ def sounds(r):
     r.check('built-in sounds reach no server', len(r.openverse.requests) == before, r.openverse.requests[before:])
 
     # The export carries the credits beside it; the built-in and CC0 sounds need none.
+    timeline = max(c['startUs'] + c['durationUs'] for t in r.state()['tracks'] for c in t['clips']) / 1e6
     video = export(r, 'reel.mp4')
     beside = video.with_name('reel.credits.txt')
     text = beside.read_text() if beside.exists() else ''
@@ -260,7 +261,9 @@ def sounds(r):
     r.check('exporting over the video again asks before replacing its credits file',
             not again['ok'] and 'CREDITS_EXIST: reel.credits.txt already exists' in again['error'], again)
     duration, codecs = ffprobe(video)
-    r.check('the video has the sound, as long as the timeline', 'aac' in codecs and abs(duration - 14.53) < 0.2, (duration, codecs))
+    # The timeline is as long as talk.mp4, whose spoken length depends on the machine's espeak-ng and FFmpeg.
+    r.check('the video has the sound, as long as the timeline', 'aac' in codecs and abs(duration - timeline) < 0.2,
+            (duration, timeline, codecs))
 
     # Offline: built-in sounds still come up, and the panel says why online ones do not.
     r.openverse.stop()
