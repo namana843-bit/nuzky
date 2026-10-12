@@ -189,7 +189,9 @@ def ai_panel_jobs(r):
     # The user takes a moment to answer.
     time.sleep(1)
     r.check('the user answers the question', r.s.run(answer, 'Wait and continue'))
-    r.check('the next turn reads the finished result of that same job', wait(lambda: f'Job {first}: done' in said(), 60), said())
+    # The answer streams in, so wait for the file name after "done", not just the word.
+    r.check('the next turn reads the finished result of that same job',
+            wait(lambda: any(f'Job {first}: done {p.name}' in said() for p in fake.glob('export-*.mp4')), 60), said())
     exported = [p for p in fake.glob('export-*.mp4') if p.name in said()]
     r.check('the export is in its file', len(exported) == 1 and exported[0].stat().st_size > 0,
             {'files': sorted(p.name for p in fake.iterdir()), 'said': said()})

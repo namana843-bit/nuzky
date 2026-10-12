@@ -213,7 +213,7 @@ def style(r):
     rule_menu(r, 'Pauses', 'Remove')
     r.check('Remove takes a learned rule out', wait(lambda: '## Pauses' not in (edit_md(r) or '## Pauses'), 10))
     r.check('and its setting', 'shorten_pauses_us' not in edit_md(r))
-    r.check('learning leaves it out', any(n['title'] == 'Pauses' for n in view(r)['notLearned']) and not view(r)['suggestions'])
+    r.check('learning leaves it out', wait(lambda: any(n['title'] == 'Pauses' for n in view(r)['notLearned']) and not view(r)['suggestions'], 5), view(r))
     r.s.run(f"[...document.querySelectorAll('{PAGE} button')].find((b) => b.textContent.startsWith('Not learned')).click()")
     click(r, 'Learn again')
     r.check('Learn again suggests it again', wait(lambda: [s['title'] for s in view(r)['suggestions']] == ['Pauses'], 10), view(r))

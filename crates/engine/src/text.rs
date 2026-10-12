@@ -102,6 +102,16 @@ impl Default for TextRenderer {
 impl TextRenderer {
     pub fn new() -> Self {
         let mut fonts = FontSystem::new();
+        // An installed copy of a bundled family, often another version, would draw instead of ours.
+        let installed: Vec<_> = fonts
+            .db()
+            .faces()
+            .filter(|face| face.families.iter().any(|(name, _)| BUNDLED_FONT_FAMILIES.contains(&name.as_str())))
+            .map(|face| face.id)
+            .collect();
+        for id in installed {
+            fonts.db_mut().remove_face(id);
+        }
         for data in BUNDLED_FONTS.iter() {
             fonts.db_mut().load_font_data(data.to_vec());
         }

@@ -1048,14 +1048,16 @@ impl Project {
                             }
                             let ratio = *sp as f64 / x as f64;
                             *sp = x;
-                            clip.duration_us = ((clip.duration_us as f64 * ratio).round() as i64).max(min);
+                            // Rounded down, the clip never covers more source than it did before the change.
+                            clip.duration_us = ((clip.duration_us as f64 * ratio).floor() as i64).max(min);
                             for k in &mut clip.keyframes {
                                 k.t_us = (k.t_us as f64 * ratio).round() as i64;
                             }
                             // A one-frame clip covers more source when sped up; move its start back
-                            // rather than read past the end of the file.
+                            // rather than read past the end of the file. Less than half a microsecond past it is
+                            // floating-point error, not more source.
                             if let Some(limit) = limit {
-                                let span = (clip.duration_us as f64 * x as f64).ceil() as i64;
+                                let span = (clip.duration_us as f64 * x as f64).round() as i64;
                                 if span > limit {
                                     bail!("This clip is too short for that speed");
                                 }
