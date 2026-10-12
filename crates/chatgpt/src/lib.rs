@@ -1,7 +1,7 @@
 //! Sign in with ChatGPT, so Nuzky's AI can run on the user's ChatGPT plan without an API key or a
 //! terminal (OpenAI's flow for open-source apps, https://developers.openai.com/siwc/token-sharing-open-source).
 //! The system browser signs in, a listener on 127.0.0.1 takes the code back, and the tokens live
-//! only in the system keychain; the app gets the status, never a token. See docs/AI-ARCHITECTURE.md,
+//! only in the system keychain; the frontend gets the status, never a token. See docs/AI-ARCHITECTURE.md,
 //! "ChatGPT sign-in".
 
 mod listener;
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use listener::Listener;
 use oauth::{Attempt, Authorize, Callback, CallbackError, TokenError};
@@ -24,6 +24,8 @@ pub use store::Vault;
 use store::{Registration, Tokens};
 
 pub const ISSUER: &str = "https://auth.openai.com";
+pub const API: &str = "https://api.openai.com/v1";
+const MAX_BYTES: u64 = 256 * 1024;
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Tokens this close to expiring are renewed first; access tokens live an hour.
 const RENEW_BEFORE: u64 = 5 * 60;
@@ -51,8 +53,19 @@ pub enum Notice {
     NotRevoked,
 }
 
+/// The panel shows `display_name` and sends `slug` as the model.
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "ChatGptModel"))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Model {
+    pub slug: String,
+    pub display_name: String,
+}
+
 pub struct ChatGpt {
     issuer: String,
+    api: String,
     /// Holds `chatgpt.json` (this computer's host id and the account it signed in to) and the lock.
     dir: PathBuf,
     vault: Vault,
@@ -61,12 +74,16 @@ pub struct ChatGpt {
 impl ChatGpt {
     /// OpenAI's sign-in, with the tokens in the system keychain.
     pub fn new(dir: PathBuf) -> Self {
-        Self::with(ISSUER.into(), dir, Vault::Keychain)
+        Self { issuer: ISSUER.into(), api: API.into(), dir, vault: Vault::Keychain }
     }
 
-    /// Another issuer, such as a test server on 127.0.0.1, and another vault.
+    /// Another issuer and vault; a test server serves the API under /v1 too.
     pub fn with(issuer: String, dir: PathBuf, vault: Vault) -> Self {
-        Self { issuer, dir, vault }
+        Self { api: format!("{issuer}/v1"), issuer, dir, vault }
+    }
+
+    pub fn api(&self) -> &str {
+        &self.api
     }
 
     /// The account as stored, its tokens renewed first when they expire within five minutes.
@@ -80,15 +97,47 @@ impl ChatGpt {
         if tokens.expires_at > now() + RENEW_BEFORE {
             return Ok(Status::SignedIn { email: reg.email, plan: tokens.plan() });
         }
-        match oauth::refresh(&self.http(), &self.issuer, &client_id, &tokens.refresh_token) {
+        match self.refresh(&mut reg, tokens, Some(u64::MAX))? {
+            Some(tokens) => Ok(Status::SignedIn { email: reg.email, plan: tokens.plan() }),
+            None => Ok(signed_out(reg.client_id.and(reg.email), Some(Notice::Ended))),
+        }
+    }
+
+    /// A token for a request; `renew` forces renewal after an API refusal.
+    pub fn access_token(&self, renew: bool) -> Result<String> {
+        let _lock = store::lock(&self.dir)?;
+        let missing = "NOT_SIGNED_IN: Sign in with your ChatGPT account first.";
+        let plan =
+            "PLAN_UNAVAILABLE: ChatGPT hasn't allowed Nuzky to use your plan yet. Open ChatGPT account… and allow it.";
+        let mut reg = Registration::load(&self.dir).context(missing)?;
+        let client_id = reg.client_id.as_ref().context(missing)?;
+        let tokens = self.vault.load(&reg.host_id)?.filter(|t| &t.client_id == client_id).context(missing)?;
+        if !tokens.plan() {
+            bail!(plan);
+        }
+        let tokens = if !renew && tokens.expires_at > now() + RENEW_BEFORE {
+            tokens
+        } else {
+            let fallback_until = (!renew).then_some(tokens.expires_at);
+            self.refresh(&mut reg, tokens, fallback_until)?
+                .context("NOT_SIGNED_IN: Your ChatGPT sign-in ended. Sign in again.")?
+        };
+        if !tokens.plan() {
+            bail!(plan);
+        }
+        Ok(tokens.access_token)
+    }
+
+    fn refresh(&self, reg: &mut Registration, tokens: Tokens, fallback_until: Option<u64>) -> Result<Option<Tokens>> {
+        match oauth::refresh(&self.http(), &self.issuer, &tokens.client_id, &tokens.refresh_token) {
             Ok(fresh) => {
                 let tokens = tokens.renewed(fresh, now());
                 self.vault.save(&reg.host_id, &tokens)?;
-                Ok(Status::SignedIn { email: reg.email, plan: tokens.plan() })
+                Ok(Some(tokens))
             }
             Err(TokenError::Refused { code, .. }) if oauth::UNUSABLE_REFRESH.contains(&code.as_str()) => {
                 self.vault.delete(&reg.host_id)?;
-                Ok(signed_out(reg.email, Some(Notice::Ended)))
+                Ok(None)
             }
             // The registration itself is gone, so the next sign-in registers Nuzky again.
             Err(TokenError::Refused { code, .. }) if code == "invalid_client" => {
@@ -96,12 +145,61 @@ impl ChatGpt {
                 reg.client_id = None;
                 reg.subject = None;
                 reg.save(&self.dir)?;
-                Ok(signed_out(None, Some(Notice::Ended)))
+                Ok(None)
             }
-            // Offline or a server hiccup: the sign-in stays, and the next look renews it.
-            Err(error) => {
-                log::warn!("Renewing the ChatGPT sign-in failed: {error}");
-                Ok(Status::SignedIn { email: reg.email, plan: tokens.plan() })
+            Err(_) if fallback_until.is_some_and(|expiry| expiry > now()) => {
+                log::warn!("Renewing the ChatGPT sign-in failed; keeping the stored tokens");
+                Ok(Some(tokens))
+            }
+            Err(_) => bail!("OFFLINE: Couldn't reach ChatGPT. Check the internet connection and try again."),
+        }
+    }
+
+    /// The selected account's models, in ChatGPT's display order.
+    pub fn models(&self) -> Result<Vec<Model>> {
+        #[derive(Deserialize)]
+        struct Entry {
+            slug: String,
+            display_name: String,
+            visibility: String,
+        }
+        #[derive(Deserialize)]
+        struct Catalog {
+            models: Vec<Entry>,
+        }
+        let http = self.http();
+        let mut renew = false;
+        loop {
+            let token = self.access_token(renew)?;
+            let mut response = http
+                .get(&format!("{}/models", self.api))
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Accept", "application/json")
+                .call()
+                .map_err(|_| {
+                    anyhow!("MODELS_FAILED: Couldn't reach ChatGPT. Check the internet connection and try again.")
+                })?;
+            let status = response.status().as_u16();
+            match status {
+                200 => {
+                    let body = response
+                        .body_mut()
+                        .with_config()
+                        .limit(MAX_BYTES)
+                        .read_to_string()
+                        .map_err(|_| anyhow!("MODELS_FAILED: Couldn't read ChatGPT's model list."))?;
+                    let catalog: Catalog = serde_json::from_str(&body)
+                        .map_err(|_| anyhow!("MODELS_FAILED: Couldn't read ChatGPT's model list."))?;
+                    return Ok(catalog
+                        .models
+                        .into_iter()
+                        .filter(|m| m.visibility == "list")
+                        .map(|m| Model { slug: m.slug, display_name: m.display_name })
+                        .collect());
+                }
+                401 if !renew => renew = true,
+                401 => bail!("NOT_SIGNED_IN: ChatGPT didn't accept the sign-in. Sign in again."),
+                _ => bail!("MODELS_FAILED: ChatGPT didn't list your models ({status})."),
             }
         }
     }

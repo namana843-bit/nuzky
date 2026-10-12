@@ -45,5 +45,7 @@ pub enum ToolStatus {
 pub enum ErrorCode {
     NotSignedIn,
     UsageLimit,
+    /// Signed in to ChatGPT, but it does not let Nuzky use the account's plan.
+    PlanUnavailable,
     AgentFailed,
 }

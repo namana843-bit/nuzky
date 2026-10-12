@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CapCutDraft, CaptionPreset, ChatGptStatus, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelCandidate, ReelFraming, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CapCutDraft, CaptionPreset, ChatGptModel, ChatGptStatus, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelCandidate, ReelFraming, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -51,6 +51,8 @@ export const api = {
   chatgptSignIn: (anotherAccount: boolean) => invoke<ChatGptStatus>("chatgpt_sign_in", { anotherAccount }),
   chatgptCancelSignIn: () => invoke<void>("chatgpt_cancel_sign_in"),
   chatgptSignOut: () => invoke<ChatGptStatus>("chatgpt_sign_out"),
+  /** The signed-in account's models, as ChatGPT orders them. */
+  chatgptModels: () => invoke<ChatGptModel[]>("chatgpt_models"),
   newProject: (width: number, height: number) => invoke<Snapshot>("new_project", { width, height }),
   openProject: (path: string) => invoke<Snapshot>("open_project", { path }),
   /** A new project with the media on its timeline, in the format of the first picture. */

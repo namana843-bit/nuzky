@@ -26,6 +26,7 @@ use schemars::{JsonSchema, schema_for};
 use serde_json::Value;
 
 use bridge::Target;
+pub use tools::{Access, Backend, Client};
 
 const GUIDE: &str = include_str!("../../../skills/nuzky-edit/SKILL.md");
 const STYLE_FIRST: &str = "This creator has their own editing style, nuzky://style: rules learned from their finished cuts and their own instructions. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
@@ -45,7 +46,7 @@ fn style() -> Option<String> {
 
 /// The guide with the creator's style, pointed to first so a client that shortens long
 /// instructions still sees it. Without EDIT.md this is the guide alone.
-fn guide() -> String {
+pub fn guide() -> String {
     match style() {
         Some(style) => format!("{STYLE_FIRST}{GUIDE}{STYLE_NOTE}{style}"),
         None => GUIDE.to_owned(),
@@ -73,6 +74,12 @@ fn tool<T: JsonSchema>(name: &'static str, description: &'static str) -> Result<
         .idempotent(rules.idempotent)
         .open_world(rules::ONLINE.contains(&name));
     Ok(Tool::new(name, description, object).with_annotations(annotations))
+}
+
+/// Every tool as MCP's `tools/list` lists it, for the AI panel's ChatGPT agent, which calls them
+/// without an MCP client.
+pub fn tool_list() -> Result<Value> {
+    Ok(serde_json::to_value(catalog()?)?)
 }
 
 fn catalog() -> Result<Vec<Tool>> {

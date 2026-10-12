@@ -1,4 +1,5 @@
-import json, os, shutil, subprocess, time
+import json, os, shutil, subprocess, threading, time, uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from e2e.harness import CLI, FIXTURES, MACOS, clipboard, flow, press, wait, webdriver
@@ -77,6 +78,220 @@ def setup_jobs(r):
 def setup_codex(r):
     setup(r)
     r.env.update(NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_CODEX=str(FAKE.with_name('fake_codex')))
+
+
+class ChatGptPanelServer:
+    def __init__(self):
+        self.requests, self.errors = [], []
+        server = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path != '/v1/models':
+                    self.send_error(404)
+                    return
+                models = [{'slug': f'gpt-e2e-{name}', 'display_name': f'GPT E2E {name.title()}', 'visibility': visibility}
+                          for name, visibility in [('sol', 'list'), ('luna', 'list'), ('hidden', 'hidden')]]
+                body = json.dumps({'models': models}).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                if self.path != '/v1/responses':
+                    self.send_error(404)
+                    return
+                try:
+                    body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                    server.requests.append({'body': body, 'authorization': self.headers.get('Authorization')})
+                    events, pause = server.answer(body['input'])
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/event-stream')
+                    self.send_header('Connection', 'close')
+                    self.end_headers()
+                    time.sleep(pause)
+                    for event in events:
+                        self.wfile.write(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode())
+                        self.wfile.flush()
+                        if event['type'] == 'response.output_text.delta':
+                            time.sleep(0.3)
+                    self.close_connection = True
+                except Exception as error:
+                    server.errors.append(str(error))
+
+            def log_message(self, *args):
+                pass
+
+        self.http = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.url = f'http://127.0.0.1:{self.http.server_port}'
+        self.worker = threading.Thread(target=self.http.serve_forever, daemon=True)
+        self.worker.start()
+
+    def answer(self, items):
+        last = max(i for i, item in enumerate(items) if item.get('role') == 'user')
+        message = ' '.join(part['text'] for part in items[last]['content']).lower()
+        if 'limit' in message:
+            return [{'type': 'response.output_text.delta', 'delta': 'Checking your plan now.'},
+                    {'type': 'response.failed', 'response': {'error': {
+                        'code': 'subscription_sharing_usage_limit_exceeded', 'message': 'The plan usage limit was reached.'}}}], 0
+        if 'split' not in message:
+            raise ValueError(f'unexpected user message: {message}')
+        outputs = [json.loads(item['output']) for item in items[last + 1:] if item['type'] == 'function_call_output']
+        count, events = len(outputs), []
+        if count in (0, 4):
+            text = 'I will split the clip at 2 s.' if count == 0 else 'The clip is split at 2 s.'
+            events += [{'type': 'response.output_text.delta', 'delta': text},
+                       {'type': 'response.output_item.done', 'item': {'type': 'message', 'id': f'msg-{count}',
+                        'role': 'assistant', 'content': [{'type': 'output_text', 'text': text}]}}]
+        if count < 4:
+            name = ['get_state', 'begin_run', 'apply_edits', 'end_run'][count]
+            arguments = {}
+            if count == 1:
+                arguments = {'label': 'Split the clip at 2 s'}
+            elif count >= 2:
+                arguments = {'run_id': outputs[1]['run_id']}
+                if count == 2:
+                    clip = next(t['clips'][0] for t in outputs[0]['tracks'] if t['id'] == 'main')
+                    arguments.update(request_id='e2e-split', edits=[{'type': 'splitClip', 'clipId': clip['id'], 'atUs': 2_000_000}])
+                else:
+                    arguments['action'] = 'keep'
+            events.append({'type': 'response.output_item.done', 'item': {'type': 'function_call', 'id': f'item-{count}',
+                           'call_id': f'call-{count}', 'namespace': 'nuzky', 'name': name, 'arguments': json.dumps(arguments)}})
+        events.append({'type': 'response.completed', 'response': {'id': f'response-{count}'}})
+        return events, 1 if count in (1, 2, 3) else 0
+
+
+def setup_chatgpt(r):
+    from e2e.chatgpt import SCOPES
+    setup(r)
+    r.env.update(NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_CODEX=str(r.work / 'no-codex'))
+    (r.work / 'data/nuzky/chatgpt.json').write_text(json.dumps({
+        'host_id': f'urn:uuid:{uuid.uuid4()}', 'client_id': 'oaiapp_e2e', 'subject': 'e2e-editor', 'email': 'editor@example.test'}))
+    (r.work / 'keychain.json').write_text(json.dumps({
+        'client_id': 'oaiapp_e2e', 'access_token': 'e2e-access', 'refresh_token': 'e2e-refresh', 'id_token': 'e2e-id',
+        'expires_at': int(time.time()) + 3600, 'scopes': SCOPES.split()}))
+    r.chatgpt = ChatGptPanelServer()
+    r.env['NUZKY_CHATGPT_ISSUER'] = r.chatgpt.url
+
+
+@flow('ai_panel_chatgpt', 'ChatGPT on the signed-in plan streams a split through local tools, shows its run and Undo, '
+      'lists account models and recovers from a usage limit and a missing sign-in', before=setup_chatgpt)
+def ai_panel_chatgpt(r):
+    server = r.chatgpt
+
+    def check(name, ok, detail=None):
+        if not r.check(name, ok, detail):
+            r.shot('failed')
+            raise RuntimeError(name)
+
+    try:
+        r.s.run('document.body.focus()')
+        r.key('j', ctrlKey=True)
+        wait(lambda: panel(r) and 'GPT E2E Sol' in panel(r)['text'], 15)
+        text = (panel(r) or {}).get('text', '')
+        check('Ctrl+J opens the panel using ChatGPT, its plan, usage link and first model',
+              r.s.run("return window.__nuzky.agent.getState().agent === 'chatgpt'")
+              and all(s in text for s in ('Using ChatGPT plan', 'Manage usage', 'GPT E2E Sol')), text)
+        click(r, 'GPT E2E Sol')
+        menu = '[role=menu][aria-label=Model]'
+        listed = r.s.run("return [...document.querySelectorAll(arguments[0] + ' [role^=menuitem]')].map((b) => b.textContent.trim())", menu)
+        check('the model menu lists exactly the two visible models in server order', listed == ['GPT E2E Sol', 'GPT E2E Luna'], listed)
+        click(r, 'GPT E2E Luna', menu)
+        model = "return document.querySelector('aside[aria-label=AI] button[title=\"Choose the model\"]')?.textContent.trim()"
+        check('picking the second model changes the model button', wait(lambda: r.s.run(model) == 'GPT E2E Luna', 3), r.s.run(model))
+        r.shot('chatgpt-model-selected')
+        webdriver('POST', r.s.path + '/window/rect', {'width': 1024, 'height': 640})
+        check('in the smallest window the plan line and the model still show',
+              wait(lambda: panel(r)['windowWidth'] <= 1030 and 'Using ChatGPT plan' in panel(r)['text'] and 'GPT E2E Luna' in panel(r)['text'], 5),
+              panel(r))
+        r.shot('chatgpt-small-window')
+        webdriver('POST', r.s.path + '/window/rect', {'width': 1440, 'height': 900})
+        wait(lambda: panel(r)['windowWidth'] >= 1400, 5)
+
+        before = r.track()
+        send(r, 'Split the clip at 2 s')
+        check('the editor locks and the live steps show Read the project and Editing',
+              wait(lambda: r.state()['aiRun'], 15)
+              and wait(lambda: all(s in panel(r)['text'] for s in ('Read the project', 'Editing')) and r.state()['aiRun'], 10), panel(r)['text'])
+        wait(lambda: agent(r)['status'] == 'idle' and 'run' in agent(r)['kinds'], 20)
+        saved = json.loads(r.saved_project().read_text())
+        main = next(t['clips'] for t in saved['tracks'] if t['id'] == 'main')
+        check('the done run names the split, saves two clips meeting at 2 s and shows no error toast',
+              'Split talk.mp4' in panel(r)['text'] and len(main) == 2
+              and main[0]['startUs'] + main[0]['durationUs'] == main[1]['startUs'] == 2_000_000
+              and main[-1]['startUs'] + main[-1]['durationUs'] == before[0]['durationUs']
+              and not r.errors(), {'panel': panel(r)['text'], 'clips': main, 'errors': r.errors()})
+        r.shot('chatgpt-run-done')
+        click(r, 'Undo')
+        check('Undo on the card restores the original single clip', wait(lambda: r.track() == before, 10), r.track())
+
+        send(r, 'limit please')
+        idle(r)
+        text = panel(r)['text']
+        check('a streamed usage limit keeps the words and shows the plan card with Manage usage and no error code',
+              'Checking your plan now.' in r.s.run(MESSAGES) and "ChatGPT can't run on your plan right now." in text
+              and r.s.run("return [...document.querySelectorAll('aside[aria-label=AI] button')].filter((b) => b.textContent.trim() === 'Manage usage').length") == 2
+              and 'subscription_sharing_usage_limit_exceeded' not in text and 'USAGE_LIMIT' not in text, text)
+        r.shot('chatgpt-usage-limit')
+        (r.work / 'keychain.json').unlink()
+        send(r, 'Hello after sign-out')
+        idle(r)
+        check('a missing sign-in shows Sign in, returns the message to the field and stops saying the plan is in use',
+              "ChatGPT isn't signed in." in panel(r)['text'] and 'Sign in…' in panel(r)['text']
+              and wait(lambda: 'Using ChatGPT plan' not in panel(r)['text'], 5)
+              and agent(r)['draft'] == 'Hello after sign-out'
+              and r.s.run("return document.querySelector('aside[aria-label=AI] textarea').value") == 'Hello after sign-out', panel(r)['text'])
+        r.shot('chatgpt-not-signed-in')
+        click(r, 'Sign in…')
+        dialog = "return document.querySelector('[role=dialog][aria-labelledby=chatgpt-title]')?.innerText ?? ''"
+        check('Sign in… opens the ChatGPT dialog, which finds the sign-in gone',
+              wait(lambda: 'Continue with ChatGPT' in r.s.run(dialog), 10), r.s.run(dialog))
+        r.key('Escape')
+        wait(lambda: not r.s.run(dialog), 3)
+        r.s.run("window.__nuzky.agent.setState({draft: ''})")
+        click(r, 'New chat')
+        check('signed out, the empty panel offers Continue with ChatGPT and, without Claude Code or Codex, how to install them',
+              wait(lambda: all(s in panel(r)['text'] for s in ('Use your ChatGPT plan', 'Continue with ChatGPT', 'Or use Claude Code or Codex'))
+                   and 'Using ChatGPT plan' not in panel(r)['text'], 5), panel(r)['text'])
+        r.shot('chatgpt-sign-in')
+        r.s.run("""document.querySelector('aside[aria-label=AI] button[title="Choose the agent"]').click()""")
+        items = "return [...document.querySelectorAll('[role=menu][aria-label=Agent] [role^=menuitem]')].map((b) => b.textContent.trim())"
+        check('the agent menu offers ChatGPT as not signed in, beside the two missing agents',
+              wait(lambda: (r.s.run(items) or [])[:3] == ['Claude CodeNot installed', 'CodexNot installed', 'ChatGPTNot signed in'], 3),
+              r.s.run(items))
+        r.shot('chatgpt-agent-menu')
+        r.key('Escape')
+
+        unsupported = set('background conversation max_output_tokens max_tool_calls metadata moderation multi_agent prompt '
+                          'prompt_cache_retention safety_identifier temperature top_logprobs top_p truncation user previous_response_id'.split())
+        guide = (Path(__file__).resolve().parents[2] / 'skills/nuzky-edit/SKILL.md').read_text().split('---', 2)[2]
+        heading = next(line for line in guide.splitlines() if line.startswith('# '))
+        requests = server.requests
+        bodies = [request['body'] for request in requests]
+        check('all requests use the selected model, bearer token, preview fields, guide and only namespaced Nuzky tools',
+              len(bodies) == 6 and not server.errors and all(
+                  request['authorization'] == 'Bearer e2e-access' and body.get('model') == 'gpt-e2e-luna'
+                  and body.get('store') is False and body.get('stream') is True and not unsupported.intersection(body)
+                  and 'You are the AI panel inside Nuzky' in body.get('instructions', '') and heading in body['instructions']
+                  and len(body.get('tools', [])) == 1 and body['tools'][0].get('type') == 'namespace'
+                  and body['tools'][0].get('name') == 'nuzky' and all(t.get('type') == 'function' for t in body['tools'][0]['tools'])
+                  and {'get_state', 'begin_run', 'apply_edits', 'end_run'} <= {t['name'] for t in body['tools'][0]['tools']}
+                  for request, body in zip(requests, bodies)), {'requests': len(bodies), 'server_errors': server.errors})
+        calls = [i for i in bodies[-1]['input'] if i['type'] == 'function_call']
+        check('the first prompt carries the playhead and later inputs pair calls without item ids with their outputs',
+              any('[Nuzky] Playhead' in p['text'] for i in bodies[0]['input'] if i.get('role') == 'user' for p in i['content'])
+              and [call['name'] for call in calls] == ['get_state', 'begin_run', 'apply_edits', 'end_run']
+              and all('id' not in i for body in bodies[1:] for i in body['input'] if i['type'] == 'function_call')
+              and all(any(i['type'] == 'function_call_output' and i['call_id'] == call['call_id'] and isinstance(i['output'], str)
+                          for i in bodies[-1]['input']) for call in calls), bodies[-1]['input'])
+
+    finally:
+        server.http.shutdown()
+        server.http.server_close()
+        server.worker.join(timeout=5)
+        (r.work / 'requests.json').write_text(json.dumps(server.requests, indent=2) + '\n')
 
 
 @flow('ai_panel_codex', 'The AI panel uses Codex: live edits, undo, choices, conversation after Stop, and prompt login and usage hints',

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
-import { send, sendBlocked, useAgent } from "./agent";
+import { anyAgent, send, sendBlocked, useAgent } from "./agent";
 import { useDock } from "./dock";
 import { openProject, refreshLibrary } from "./library";
 import { MAIN_TRACK, aiLocked, currentEpoch, projectDuration, useEditor, whenIdle } from "./store";
@@ -201,8 +201,7 @@ async function measure(id: string, from: number, to: number, epoch: string | und
 
 /** Why Find reels cannot ask the AI panel's agent now, or null. */
 export function findBlocked(): string | null {
-  const { agents } = useAgent.getState();
-  if (agents && !agents.some((a) => a.path)) return "Install Claude Code or Codex first";
+  if (useAgent.getState().agents && !anyAgent()) return "Sign in with ChatGPT first, or install Claude Code or Codex";
   return sendBlocked(false);
 }
 

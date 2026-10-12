@@ -13,10 +13,10 @@ use crate::{CmdResult, err};
 /// The sign-in waiting for the browser, so Cancel and a new attempt can end it.
 static WAITING: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
 
-/// Debug builds can sign in to a test server on 127.0.0.1 (`NUZKY_CHATGPT_ISSUER`) and keep the
-/// tokens in a file (`NUZKY_TEST_KEYCHAIN`), as the end-to-end flow does; release builds always
-/// use OpenAI and the system keychain.
-fn chatgpt() -> ChatGpt {
+/// Debug builds can sign in to a test server on 127.0.0.1 (`NUZKY_CHATGPT_ISSUER`), which also
+/// stands in for the API, and keep the tokens in a file (`NUZKY_TEST_KEYCHAIN`), as the end-to-end
+/// flows do; release builds always use OpenAI and the system keychain.
+pub(crate) fn chatgpt() -> ChatGpt {
     let dir = crate::store::data_dir();
     #[cfg(debug_assertions)]
     if let Ok(issuer) = std::env::var("NUZKY_CHATGPT_ISSUER")
@@ -72,6 +72,12 @@ pub fn chatgpt_cancel_sign_in() {
     if let Some(waiting) = WAITING.lock().unwrap().take() {
         waiting.store(true, Ordering::Relaxed);
     }
+}
+
+/// The account's models for the AI panel's picker.
+#[tauri::command]
+pub async fn chatgpt_models() -> CmdResult<Vec<nuzky_chatgpt::Model>> {
+    tauri::async_runtime::spawn_blocking(|| chatgpt().models().map_err(err)).await.map_err(err)?
 }
 
 #[tauri::command]

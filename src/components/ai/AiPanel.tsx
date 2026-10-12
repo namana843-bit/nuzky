@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  agentName,
   choose,
   chooseAgent,
   jobText,
@@ -43,8 +44,8 @@ import {
   useAgent,
   type AgentErrorCode,
   type AiAbout,
-  type AgentId,
   type ChatItem,
+  type CliAgentId,
   type RunChange,
   type Step,
 } from "../../lib/agent";
@@ -57,22 +58,27 @@ import { formatTime } from "../../lib/time";
 import { Button, IconButton } from "../ui";
 import { Markdown } from "./Markdown";
 import { ChatGptLogo } from "../ChatGptLogo";
-import { openChatGpt } from "../../lib/chatgpt";
+import { ContinueButton, USAGE_PAGE } from "../ChatGptDialog";
+import { chooseModel, loadModels, openChatGpt, planReady, signIn, useChatGpt } from "../../lib/chatgpt";
 import { moveFloatBy, startMove } from "./AiDock";
 
-const INSTALL: Record<AgentId, string> = {
+const INSTALL: Record<CliAgentId, string> = {
   claude: "https://docs.claude.com/en/docs/claude-code/setup",
   codex: "https://developers.openai.com/codex/cli",
 };
-const COMMAND: Record<AgentId, string> = { claude: "claude", codex: "codex" };
+const COMMAND: Record<CliAgentId, string> = { claude: "claude", codex: "codex" };
 
-/** A small menu under a trigger: ↑/↓ move, Esc closes back to the trigger, no key reaches the editor. */
+/** A small menu under a trigger (`up`: above it): ↑/↓ move, Esc closes back to the trigger, no key reaches the editor. */
 function Menu({
   label,
+  up = false,
+  width = "w-72",
   trigger,
   children,
 }: {
   label: string;
+  up?: boolean;
+  width?: string;
   trigger: (p: { open: boolean; toggle: () => void; ref: React.RefObject<HTMLButtonElement | null> }) => ReactNode;
   children: (close: () => void) => ReactNode;
 }) {
@@ -112,7 +118,7 @@ function Menu({
     <div className="relative" ref={ref}>
       {trigger({ open, toggle: () => setOpen(!open), ref: triggerRef })}
       {open && (
-        <div role="menu" aria-label={label} onKeyDown={onKey} className="overlay absolute left-0 top-9 z-50 w-72 rounded-xl p-1">
+        <div role="menu" aria-label={label} onKeyDown={onKey} className={`overlay absolute left-0 z-50 rounded-xl p-1 ${width} ${up ? "bottom-9" : "top-9"}`}>
           {children(close)}
         </div>
       )}
@@ -194,7 +200,8 @@ function AgentMenu() {
   const agents = useAgent((s) => s.agents);
   const agent = useAgent((s) => s.agent);
   const busy = useAgent((s) => s.status !== "idle");
-  const name = agents?.find((a) => a.id === agent)?.name ?? (agent === "codex" ? "Codex" : "Claude Code");
+  const chatgpt = useChatGpt((s) => s.status);
+  const name = agentName(agent, agents);
   return (
     <Menu
       label="Agent"
@@ -230,6 +237,20 @@ function AgentMenu() {
               <span className="text-[12px] text-muted">{a.path ? (a.version ?? "Installed") : "Not installed"}</span>
             </MenuItem>
           ))}
+          <MenuItem
+            checked={agent === "chatgpt"}
+            disabled={busy}
+            reason="Wait for the answer, or stop it"
+            onClick={() => {
+              chooseAgent("chatgpt");
+              close();
+              // Signing in is how ChatGPT gets ready, so it is offered at once.
+              if (!planReady(chatgpt)) openChatGpt();
+            }}
+          >
+            <span className="flex-1">ChatGPT</span>
+            <span className="text-[12px] text-muted">{planReady(chatgpt) ? "Signed in" : chatgpt?.state === "signedIn" ? "Plan not allowed" : chatgpt ? "Not signed in" : ""}</span>
+          </MenuItem>
           <div className="mx-1.5 my-1 h-px bg-white/[.08]" />
           <MenuItem
             onClick={() => {
@@ -405,23 +426,45 @@ function RunCard({ item, index }: { item: Extract<ChatItem, { kind: "run" }>; in
 function ErrorNotice({ code, message, retryText }: { code: AgentErrorCode; message: string; retryText?: string }) {
   const agents = useAgent((s) => s.agents);
   const agent = useAgent((s) => s.agent);
-  const name = agents?.find((a) => a.id === agent)?.name ?? "The agent";
-  const other = agents?.find((a) => a.id !== agent && a.path);
+  const chatgptReady = useChatGpt((s) => planReady(s.status));
+  const name = agentName(agent, agents);
+  const other = agents?.find((a) => a.id !== agent && a.path)?.id ?? (agent !== "chatgpt" && chatgptReady ? "chatgpt" : undefined);
   const retry = (
     <Button className="h-7 px-2.5 text-[12px]" onClick={() => void (retryText ? send(retryText) : send())}>
       Try again
     </Button>
   );
   const switchTo = other && (
-    <Button variant="ghost" className="h-7 px-2.5 text-[12px]" title="Starts a new conversation; your message stays" onClick={() => chooseAgent(other.id)}>
-      Ask {other.name} instead
+    <Button variant="ghost" className="h-7 px-2.5 text-[12px]" title="Starts a new conversation; your message stays" onClick={() => chooseAgent(other)}>
+      Ask {agentName(other, agents)} instead
+    </Button>
+  );
+  const button = (label: ReactNode, onClick: () => void) => (
+    <Button variant="primary" className="h-7 px-2.5 text-[12px]" onClick={onClick}>
+      {label}
     </Button>
   );
   const term = (text: string) => <code className="rounded bg-white/[.08] px-1">{text}</code>;
-  const cmd = term(COMMAND[agent]);
+  const cmd = agent === "chatgpt" ? null : term(COMMAND[agent]);
   const signIn = agent === "codex" ? <>run {term("codex login")} and choose Sign in with ChatGPT</> : <>run {cmd} and sign in</>;
+  // A message that failed after the agent began answering stays in the conversation, with Try again, not in the field.
+  const kept = retryText ? message : <>{message} Your message is still here.</>;
   const [icon, title, body, buttons]: [ReactNode, string, ReactNode, ReactNode] =
-    code === "NOT_SIGNED_IN"
+    agent === "chatgpt"
+      ? code === "NOT_SIGNED_IN"
+        ? [<AlertCircle size={16} className="text-danger" />, "ChatGPT isn't signed in.", kept, <>{button("Sign in…", openChatGpt)}{retry}{switchTo}</>]
+        : code === "USAGE_LIMIT"
+          ? [
+              // OpenAI asks to keep ChatGPT's identity on its usage-limit message.
+              <ChatGptLogo size={16} className="text-warn" />,
+              "ChatGPT can't run on your plan right now.",
+              kept,
+              <>{button(<>Manage usage <ExternalLink size={12} /></>, () => void openUrl(USAGE_PAGE))}{retry}{switchTo}</>,
+            ]
+          : code === "PLAN_UNAVAILABLE"
+            ? [<AlertTriangle size={16} className="text-warn" />, "Nuzky can't use your ChatGPT plan.", kept, <>{button("ChatGPT account…", openChatGpt)}{switchTo}</>]
+            : [<AlertCircle size={16} className="text-danger" />, "ChatGPT stopped with an error.", <Failure message={message} />, retry]
+      : code === "NOT_SIGNED_IN"
       ? [<AlertCircle size={16} className="text-danger" />, `${name} isn't signed in.`, <>Open a terminal, {signIn}. Your message is still here.</>, <>{retry}{switchTo}</>]
       : code === "USAGE_LIMIT"
         ? [<AlertTriangle size={16} className="text-warn" />, `${name} usage limit reached.`, <>{message} The limit comes from your plan, not from Nuzky. Your message is still here.</>, switchTo]
@@ -430,7 +473,7 @@ function ErrorNotice({ code, message, retryText }: { code: AgentErrorCode; messa
               <AlertCircle size={16} className="text-danger" />,
               `${name} isn't installed.`,
               <>Install it and sign in from a terminal. Your message is still here.</>,
-              <Button className="h-7 px-2.5 text-[12px]" onClick={() => void openUrl(INSTALL[agent])}>
+              <Button className="h-7 px-2.5 text-[12px]" onClick={() => void openUrl(INSTALL[agent as CliAgentId])}>
                 Install <ExternalLink size={12} />
               </Button>,
             ]
@@ -449,13 +492,13 @@ function ErrorNotice({ code, message, retryText }: { code: AgentErrorCode; messa
   );
 }
 
-/** The first line of what went wrong and what to do; the agent's own lines behind Details. */
-function Failure({ message, cmd }: { message: string; cmd: ReactNode }) {
+/** The first line of what went wrong and what to do; the agent's own lines behind Details. `cmd`: the agent to run in a terminal to see why. */
+function Failure({ message, cmd }: { message: string; cmd?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [first, ...rest] = message.trim().split("\n");
   return (
     <>
-      <span className="line-clamp-2">{first}</span> Try again; if it keeps failing, run {cmd} in a terminal to see why.
+      <span className="line-clamp-2">{first}</span> {cmd ? <>Try again; if it keeps failing, run {cmd} in a terminal to see why.</> : "Try again."}
       {rest.length > 0 &&
         (open ? (
           <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-white/[.06] px-2 py-1.5 text-[11px] leading-[16px] text-muted">{rest.join("\n")}</pre>
@@ -484,31 +527,55 @@ const STYLE_STARTERS: [ReactNode, string][] = [
 /** What the panel is about; on the Your style page, the creator's style. */
 const About = createContext<AiAbout>("project");
 
+/** ChatGPT chosen but not ready: signing in, or allowing the plan, is the way on. Without Claude Code or Codex, how to get them too. */
+function ChatGptSignIn() {
+  const agents = useAgent((s) => s.agents) ?? [];
+  const signedIn = useChatGpt((s) => s.status?.state === "signedIn");
+  return (
+    <div className="my-auto flex flex-col items-start px-1">
+      <h3 className="text-[15px] font-semibold text-fg">{signedIn ? "Allow Nuzky to use your ChatGPT plan" : "Use your ChatGPT plan"}</h3>
+      <p className="mb-3 mt-1.5 text-[12px] leading-[18px] text-muted">
+        {signedIn
+          ? "Continue with ChatGPT and allow it when the browser asks. If a work or school workspace blocks it, sign out in ChatGPT account… and use a personal account."
+          : "Sign in with ChatGPT, and ChatGPT edits your video right here. What it uses counts toward your ChatGPT plan's usage limits."}
+      </p>
+      <ContinueButton
+        onClick={() => {
+          void signIn();
+          // The dialog shows the sign-in going on, with Cancel.
+          openChatGpt();
+        }}
+      />
+      {!agents.some((a) => a.path) && (
+        <div className="mt-6 flex w-full flex-col">
+          <p className="mb-1.5 text-[12px] leading-[18px] text-muted">Or use Claude Code or Codex: install one, sign in from your terminal, then check again.</p>
+          {agents.map((a) => (
+            <div key={a.id} className="flex h-9 items-center justify-between border-t border-white/[.07] text-[13px]">
+              {a.name}
+              <Button variant="ghost" className="h-7 px-2 text-[12px] text-accent" onClick={() => void openUrl(INSTALL[a.id])}>
+                Install <ExternalLink size={12} />
+              </Button>
+            </div>
+          ))}
+          <Button className="mt-3 h-7 self-start px-2.5 text-[12px]" onClick={() => void loadAgents()}>
+            <RefreshCw size={13} /> Check again
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Empty() {
   const about = useContext(About);
   const agents = useAgent((s) => s.agents);
+  const agent = useAgent((s) => s.agent);
+  const chatgptReady = useChatGpt((s) => planReady(s.status));
   const error = useAgent((s) => s.agentsError);
   const blocked = useEditor((s) => !!s.aiRun);
   if (error) return <div className="mt-auto"><ErrorNotice code="AGENT_FAILED" message={error} /></div>;
-  if (agents === null) return <p className="mt-auto px-1 text-[12px] text-muted">Looking for Claude Code and Codex…</p>;
-  if (!agents.some((a) => a.path))
-    return (
-      <div className="my-auto flex flex-col px-1">
-        <h3 className="text-[15px] font-semibold text-fg">No AI agent found</h3>
-        <p className="mb-3 mt-1.5 text-[12px] leading-[18px] text-muted">Nuzky runs the AI you already use. Install one, sign in from your terminal, then check again.</p>
-        {agents.map((a) => (
-          <div key={a.id} className="flex h-9 items-center justify-between border-t border-white/[.07] text-[13px]">
-            {a.name}
-            <Button variant="ghost" className="h-7 px-2 text-[12px] text-accent" onClick={() => void openUrl(INSTALL[a.id])}>
-              Install <ExternalLink size={12} />
-            </Button>
-          </div>
-        ))}
-        <Button className="mt-3 h-7 self-start px-2.5 text-[12px]" onClick={() => void loadAgents()}>
-          <RefreshCw size={13} /> Check again
-        </Button>
-      </div>
-    );
+  if (agents === null) return <p className="mt-auto px-1 text-[12px] text-muted">Looking for your AI…</p>;
+  if (agent === "chatgpt" && !chatgptReady) return <ChatGptSignIn />;
   return (
     <div className="mt-auto flex flex-col gap-0.5">
       <p className="mb-2 px-2 text-[12px] text-muted">
@@ -695,7 +762,15 @@ function Composer() {
   const playhead = useEditor((s) => formatTime(s.timeUs, false));
   const otherRun = useEditor((s) => (s.aiRun && status === "idle" ? s.aiRun : null));
   const field = useRef<HTMLTextAreaElement>(null);
-  const name = agents?.find((a) => a.id === agent)?.name ?? "the agent";
+  const name = agentName(agent, agents);
+  const chatgpt = useChatGpt((s) => s.status);
+  const modelsFor = useChatGpt((s) => s.modelsFor);
+  const plan = agent === "chatgpt" && planReady(chatgpt);
+  // The model list is the signed-in account's, loaded again after another account signs in.
+  const account = chatgpt?.email ?? "";
+  useEffect(() => {
+    if (plan && modelsFor !== account) void loadModels();
+  }, [plan, account, modelsFor]);
   const working = status !== "idle";
   const blocked = sendBlocked();
 
@@ -812,7 +887,7 @@ function Composer() {
           rows={2}
           value={draft}
           aria-label={`Message to ${name}`}
-          placeholder={working ? `${name} is working…` : thumbnail ? "Add a note, e.g. the hook (optional)" : about === "style" ? "What should change in how you edit?" : hasItems ? "Ask for changes…" : `Ask ${name} to edit…`}
+          placeholder={working ? `${name} is working…` : agent === "chatgpt" && !plan ? "Sign in to ChatGPT to start" : thumbnail ? "Add a note, e.g. the hook (optional)" : about === "style" ? "What should change in how you edit?" : hasItems ? "Ask for changes…" : `Ask ${name} to edit…`}
           onChange={(e) => useAgent.setState({ draft: e.target.value })}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -834,6 +909,7 @@ function Composer() {
             <ImagePlus size={15} />
           </IconButton>
           )}
+          {plan && <ModelMenu disabled={working} />}
           <span className="flex-1" />
           {!working && why && (
             <span className="min-w-0 truncate text-[12px] text-fg/85" role="status">
@@ -872,7 +948,72 @@ function Composer() {
           )}
         </div>
       </div>
+      {plan && (
+        <div className="mt-1.5 flex items-center gap-1.5 px-1 text-[12px] text-muted">
+          <ChatGptLogo size={12} className="shrink-0" />
+          Using ChatGPT plan
+          <span aria-hidden>·</span>
+          <button type="button" title="Review and limit what Nuzky uses, in ChatGPT's settings" onClick={() => void openUrl(USAGE_PAGE)} className="text-accent hover:underline">
+            Manage usage
+          </button>
+        </div>
+      )}
     </div>
+  );
+}
+
+/** The ChatGPT model the panel sends with, from the signed-in account's list. */
+function ModelMenu({ disabled }: { disabled: boolean }) {
+  const models = useChatGpt((s) => s.models);
+  const model = useChatGpt((s) => s.model);
+  const error = useChatGpt((s) => s.modelsError);
+  const label = models?.find((m) => m.slug === model)?.displayName ?? (error ? "No models" : "Loading models…");
+  return (
+    <Menu
+      label="Model"
+      up
+      // Fits beside the picture button in the narrowest panel, 300 px.
+      width="w-56"
+      trigger={({ open, toggle, ref }) => (
+        <button
+          ref={ref}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-disabled={disabled || undefined}
+          title={disabled ? "Wait for the answer, or stop it" : "Choose the model"}
+          onClick={disabled ? undefined : toggle}
+          className={`flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-[12px] text-fg/85 hover:bg-white/[.08] aria-disabled:cursor-not-allowed aria-disabled:text-muted aria-disabled:hover:bg-transparent ${open ? "bg-white/[.08]" : ""}`}
+        >
+          <span className="truncate">{label}</span>
+          <ChevronDown size={13} className="shrink-0 text-muted" />
+        </button>
+      )}
+    >
+      {(close) =>
+        error ? (
+          <>
+            <p className="px-2 py-1.5 text-[12px] leading-[17px] text-fg/85">{error}</p>
+            <MenuItem onClick={() => void loadModels()}>Try again</MenuItem>
+          </>
+        ) : models === null ? (
+          <p className="px-2 py-1.5 text-[12px] text-muted">Loading models…</p>
+        ) : (
+          models.map((m) => (
+            <MenuItem
+              key={m.slug}
+              checked={m.slug === model}
+              onClick={() => {
+                chooseModel(m.slug);
+                close();
+              }}
+            >
+              {m.displayName}
+            </MenuItem>
+          ))
+        )
+      }
+    </Menu>
   );
 }
 

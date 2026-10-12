@@ -229,6 +229,14 @@ export type CaptionWord = {
   key?: boolean,
 };
 
+/**
+ * The panel shows `display_name` and sends `slug` as the model.
+ */
+export type ChatGptModel = {
+  slug: string,
+  displayName: string,
+};
+
 export type ChatGptNotice = "ended" | "notRevoked";
 
 /**

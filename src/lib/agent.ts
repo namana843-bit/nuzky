@@ -2,16 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { errorText, plainError } from "./api";
+import { check as checkChatGpt, planReady, useChatGpt } from "./chatgpt";
 import { downloadModels, loadModels, useCover } from "./cover";
 import { useDock } from "./dock";
 import { formatTime } from "./time";
 import { useEditor } from "./store";
 import type { Snapshot } from "./types";
 
-/** An agent the panel can run: the user's own installed Claude Code or Codex. */
-export type AgentId = "claude" | "codex";
+/** An agent the panel can run: the user's own installed Claude Code or Codex, or ChatGPT on the user's plan, which runs in Nuzky. */
+export type AgentId = CliAgentId | "chatgpt";
+export type CliAgentId = "claude" | "codex";
 export interface AgentInfo {
-  id: AgentId;
+  id: CliAgentId;
   name: string;
   /** Where the executable was found, or null when it is not installed. */
   path: string | null;
@@ -19,7 +21,7 @@ export interface AgentInfo {
 }
 
 /** What went wrong with a turn, so the panel can say what to do next. */
-export type AgentErrorCode = "NOT_INSTALLED" | "NOT_SIGNED_IN" | "USAGE_LIMIT" | "AGENT_FAILED";
+export type AgentErrorCode = "NOT_INSTALLED" | "NOT_SIGNED_IN" | "USAGE_LIMIT" | "PLAN_UNAVAILABLE" | "AGENT_FAILED";
 
 /** Events from the backend for one chat, in order. */
 export type AgentEvent =
@@ -128,8 +130,15 @@ interface AgentState {
 
 const AGENT_KEY = "nuzky.aiAgent";
 
-const AGENTS: AgentId[] = ["claude", "codex"];
+const AGENTS: AgentId[] = ["claude", "codex", "chatgpt"];
 const usable = (a: AgentInfo) => !!a.path;
+
+export function agentName(id: AgentId, agents = useAgent.getState().agents): string {
+  return id === "chatgpt" ? "ChatGPT" : (agents?.find((a) => a.id === id)?.name ?? (id === "codex" ? "Codex" : "Claude Code"));
+}
+
+/** Whether any agent can answer: an installed one, or ChatGPT signed in with its plan allowed. */
+export const anyAgent = () => !!useAgent.getState().agents?.some(usable) || planReady(useChatGpt.getState().status);
 
 export const useAgent = create<AgentState>(() => ({
   agents: null,
@@ -151,8 +160,8 @@ export const useAgent = create<AgentState>(() => ({
 
 const agentApi = {
   list: () => invoke<AgentInfo[]>("agent_list"),
-  send: (agent: AgentId, chat: string, turn: string, text: string, context: PromptContext) =>
-    invoke<void>("agent_send", { agent, chat, turn, text, context }),
+  send: (agent: AgentId, chat: string, turn: string, text: string, context: PromptContext, model: string | null) =>
+    invoke<void>("agent_send", { agent, chat, turn, text, context, model }),
   stop: (turn: string) => invoke<void>("agent_stop", { turn }),
   jobs: () => invoke<AgentJob[]>("agent_jobs"),
 };
@@ -240,11 +249,11 @@ function offered(input: unknown): Omit<Extract<ChatItem, { kind: "options" }>, "
 
 export async function loadAgents() {
   try {
-    const agents = await agentApi.list();
+    const [agents] = await Promise.all([agentApi.list(), checkChatGpt()]);
     const s = useAgent.getState();
-    // Keep the chosen agent when it is installed; otherwise pick one that is.
-    const chosen = agents.find((a) => a.id === s.agent && usable(a)) ?? agents.find(usable);
-    useAgent.setState({ agents, agentsError: null, agent: chosen?.id ?? s.agent });
+    // Keep the chosen agent when it is installed or is ChatGPT; otherwise pick one that is installed, or else ChatGPT.
+    const chosen = s.agent === "chatgpt" ? s.agent : (agents.find((a) => a.id === s.agent && usable(a)) ?? agents.find(usable))?.id;
+    useAgent.setState({ agents, agentsError: null, agent: chosen ?? "chatgpt" });
   } catch (e) {
     useAgent.setState({ agentsError: plainError(errorText(e)) });
   }
@@ -313,8 +322,12 @@ function describeContext(c: PromptContext): string | null {
 /** Why a message cannot be sent right now, or null; `thumbnail`: whether it asks for one. */
 export function sendBlocked(thumbnail = useAgent.getState().thumbnail): string | null {
   const s = useAgent.getState();
-  const info = s.agents?.find((a) => a.id === s.agent);
-  if (s.agents && !info?.path) return `${info?.name ?? "The agent"} is not installed`;
+  if (s.agent === "chatgpt") {
+    const { status, models, model, modelsError } = useChatGpt.getState();
+    if (status?.state !== "signedIn") return "Sign in to ChatGPT first";
+    if (!status.plan) return "Allow Nuzky to use your ChatGPT plan first";
+    if (!models || !model) return modelsError ? `Your ChatGPT models didn't load. ${modelsError}` : "Loading your ChatGPT models…";
+  } else if (s.agents && !s.agents.find((a) => a.id === s.agent)?.path) return `${agentName(s.agent)} is not installed`;
   if (s.status !== "idle") return "Wait for the answer, or stop it";
   if (useEditor.getState().aiRun) return "Another agent is editing. Wait for it, or stop it in the top bar";
   const models = useCover.getState().models;
@@ -378,7 +391,7 @@ export async function send(text = useAgent.getState().draft.trim(), about: AiAbo
     thumbnail: false,
   });
   try {
-    await agentApi.send(s.agent, chat, turn, text, context);
+    await agentApi.send(s.agent, chat, turn, text, context, s.agent === "chatgpt" ? useChatGpt.getState().model : null);
   } catch (e) {
     const text = errorText(e);
     fail(text.startsWith("NOT_INSTALLED") ? "NOT_INSTALLED" : "AGENT_FAILED", plainError(text));
@@ -430,6 +443,8 @@ function fail(code: AgentErrorCode, message: string) {
     retry = asked?.kind === "user" ? asked.text : undefined;
   }
   useAgent.setState({ items: [...items, { kind: "error", code, message, retry }], draft, status: "idle" });
+  // The sign-in ended or lost the plan meanwhile: the panel stops saying it uses the plan.
+  if (s.agent === "chatgpt" && (code === "NOT_SIGNED_IN" || code === "PLAN_UNAVAILABLE")) void checkChatGpt();
 }
 
 function onEvent(e: AgentEvent) {

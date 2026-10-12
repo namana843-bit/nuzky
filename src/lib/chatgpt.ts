@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
 import { useEditor } from "./store";
-import type { ChatGptStatus } from "./types";
+import type { ChatGptModel, ChatGptStatus } from "./types";
 
 /**
  * The ChatGPT sign-in as the ChatGPT dialog shows it. The backend keeps the tokens; this knows only
@@ -15,9 +15,30 @@ type ChatGpt = {
   action: "signingIn" | "signingOut" | null;
   /** What went wrong last, in plain words. */
   error: string | null;
+  /** The account's models for the AI panel, once loaded; `modelsFor` is the account they belong to. */
+  models: ChatGptModel[] | null;
+  modelsFor: string | null;
+  modelsError: string | null;
+  /** The slug of the model the AI panel sends with. */
+  model: string | null;
 };
 
-export const useChatGpt = create<ChatGpt>(() => ({ open: false, status: null, checking: false, action: null, error: null }));
+const MODEL_KEY = "nuzky.chatgptModel";
+
+export const useChatGpt = create<ChatGpt>(() => ({
+  open: false,
+  status: null,
+  checking: false,
+  action: null,
+  error: null,
+  models: null,
+  modelsFor: null,
+  modelsError: null,
+  model: localStorage.getItem(MODEL_KEY),
+}));
+
+/** Signed in, and ChatGPT lets Nuzky use the plan: the AI panel can run on it. */
+export const planReady = (status: ChatGptStatus | null) => status?.state === "signedIn" && status.plan;
 
 /** Each sign-in's number; a later one, or Cancel, makes an earlier one's answer stale. */
 let attempt = 0;
@@ -27,7 +48,7 @@ export function openChatGpt() {
   if (!useChatGpt.getState().action) void check();
 }
 
-async function check() {
+export async function check() {
   useChatGpt.setState({ checking: true });
   try {
     useChatGpt.setState({ status: await api.chatgptStatus() });
@@ -78,4 +99,25 @@ export async function signOut() {
     // A sign-in started meanwhile keeps its own state.
     if (useChatGpt.getState().action === "signingOut") useChatGpt.setState({ action: null });
   }
+}
+
+/** The account's models for the AI panel's picker; the model picked before stays when the account has it. */
+export async function loadModels() {
+  const { status } = useChatGpt.getState();
+  if (status?.state !== "signedIn" || !status.plan) return;
+  const account = status.email ?? "";
+  useChatGpt.setState({ models: null, modelsFor: account, modelsError: null });
+  try {
+    const models = await api.chatgptModels();
+    if (useChatGpt.getState().modelsFor !== account) return;
+    const saved = localStorage.getItem(MODEL_KEY);
+    useChatGpt.setState({ models, model: models.find((m) => m.slug === saved)?.slug ?? models[0]?.slug ?? null });
+  } catch (e) {
+    if (useChatGpt.getState().modelsFor === account) useChatGpt.setState({ modelsError: plainError(errorText(e)) });
+  }
+}
+
+export function chooseModel(slug: string) {
+  localStorage.setItem(MODEL_KEY, slug);
+  useChatGpt.setState({ model: slug });
 }

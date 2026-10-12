@@ -245,6 +245,9 @@ struct ServerState {
     generation: u64,
     current_refresh: String,
     last_response: Value,
+    models: Value,
+    model_statuses: Vec<u16>,
+    model_headers: Vec<String>,
 }
 impl Default for ServerState {
     fn default() -> Self {
@@ -261,6 +264,9 @@ impl Default for ServerState {
             generation: 0,
             current_refresh: String::new(),
             last_response: Value::Null,
+            models: json!({"models": []}),
+            model_statuses: Vec::new(),
+            model_headers: Vec::new(),
         }
     }
 }
@@ -284,8 +290,11 @@ impl FakeOpenAi {
             while !stopped.load(Ordering::Relaxed) {
                 match socket.accept() {
                     Ok((mut stream, _)) => {
-                        let (method, target, body) = read_request(&mut stream);
+                        let (method, target, body, headers) = read_request(&mut stream);
                         let url = Url::parse(&format!("{origin}{target}")).unwrap();
+                        if url.path() == "/v1/models" {
+                            shared.lock().unwrap().model_headers.push(headers);
+                        }
                         let (status, location, body) =
                             serve(&method, &url, &body, &origin, &mut shared.lock().unwrap());
                         write!(stream,
@@ -313,7 +322,7 @@ impl Drop for FakeOpenAi {
     }
 }
 
-fn read_request(stream: &mut TcpStream) -> (String, String, String) {
+fn read_request(stream: &mut TcpStream) -> (String, String, String, String) {
     // On macOS an accepted socket keeps the listener's non-blocking mode, and a read before the data
     // arrives would fail.
     stream.set_nonblocking(false).unwrap();
@@ -344,11 +353,15 @@ fn read_request(stream: &mut TcpStream) -> (String, String, String) {
         assert!(count > 0, "request ended before body");
         bytes.extend_from_slice(&buffer[..count]);
     }
-    (method, target, String::from_utf8(bytes[header_end..header_end + length].to_vec()).unwrap())
+    (method, target, String::from_utf8(bytes[header_end..header_end + length].to_vec()).unwrap(), headers)
 }
 
 fn serve(method: &str, url: &Url, body: &str, issuer: &str, s: &mut ServerState) -> (u16, Option<String>, String) {
     match (method, url.path()) {
+        ("GET", "/v1/models") => {
+            let status = if s.model_statuses.is_empty() { 200 } else { s.model_statuses.remove(0) };
+            (status, None, s.models.to_string())
+        }
         ("GET", "/api/accounts/authorize") => {
             let query = params(url.query().unwrap());
             let mut redirect = Url::parse(&query["redirect_uri"]).unwrap();
@@ -494,6 +507,136 @@ fn chatgpt_restart_uses_fresh_tokens_without_a_token_request() {
     assert_eq!(f.app().status().unwrap(), signed_in(true));
     assert_eq!(f.server.state.lock().unwrap().token_requests.len(), requests);
     assert_eq!(fs::read(f.tokens_path()).unwrap(), before);
+}
+
+#[test]
+fn chatgpt_access_token_fresh_expiring_and_forced_refresh() {
+    for (expires_in, renew, refreshed) in [(3600, false, false), (60, false, true), (3600, true, true)] {
+        let f = Flow::new();
+        f.server.state.lock().unwrap().expires_in = expires_in;
+        f.sign_in().unwrap();
+        let before = fs::read(f.tokens_path()).unwrap();
+        let token = f.app().access_token(renew).unwrap();
+        assert_eq!(token, if refreshed { "test-access-2" } else { "test-access-1" });
+        assert_eq!(f.tokens()["access_token"], token);
+        let s = f.server.state.lock().unwrap();
+        assert_eq!(s.token_requests.len(), if refreshed { 2 } else { 1 });
+        if refreshed {
+            assert_eq!(f.tokens()["refresh_token"], s.current_refresh);
+            assert_eq!(
+                f.tokens()["scopes"],
+                json!(s.last_response["scope"].as_str().unwrap().split_whitespace().collect::<Vec<_>>())
+            );
+            assert!(f.tokens()["expires_at"].as_u64().unwrap() > now());
+        } else {
+            assert_eq!(fs::read(f.tokens_path()).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn chatgpt_access_token_signed_out_and_missing_plan() {
+    let f = Flow::new();
+    assert!(f.app().access_token(false).unwrap_err().to_string().starts_with("NOT_SIGNED_IN:"));
+    Registration::load_or_create(&f.dir.0).unwrap();
+    assert!(f.app().access_token(false).unwrap_err().to_string().starts_with("NOT_SIGNED_IN:"));
+    f.server.state.lock().unwrap().plan = false;
+    f.server.state.lock().unwrap().expires_in = 60;
+    f.sign_in().unwrap();
+    for renew in [false, true] {
+        assert!(f.app().access_token(renew).unwrap_err().to_string().starts_with("PLAN_UNAVAILABLE:"));
+    }
+    assert_eq!(f.server.state.lock().unwrap().token_requests.len(), 1);
+    f.app().sign_out().unwrap();
+    assert!(f.app().access_token(false).unwrap_err().to_string().starts_with("NOT_SIGNED_IN:"));
+}
+
+#[test]
+fn chatgpt_access_token_refusal_clears_tokens_and_invalid_client_registration() {
+    for code in oauth::UNUSABLE_REFRESH.into_iter().chain(["invalid_client"]) {
+        let f = Flow::new();
+        f.sign_in().unwrap();
+        f.server.state.lock().unwrap().refresh_error = Some((400, json!({"error": code})));
+        assert!(f.app().access_token(true).unwrap_err().to_string().starts_with("NOT_SIGNED_IN:"));
+        assert!(!f.tokens_path().exists());
+        let reg = Registration::load(&f.dir.0).unwrap();
+        assert_eq!(reg.client_id.is_none(), code == "invalid_client");
+        assert_eq!(reg.subject.is_none(), code == "invalid_client");
+        assert_eq!(f.server.state.lock().unwrap().token_requests.len(), 2);
+    }
+}
+
+#[test]
+fn chatgpt_access_token_refresh_503_preserves_tokens() {
+    let f = Flow::new();
+    f.server.state.lock().unwrap().expires_in = 60;
+    f.sign_in().unwrap();
+    let before = fs::read(f.tokens_path()).unwrap();
+    f.server.state.lock().unwrap().refresh_error = Some((503, json!({"error": "unavailable"})));
+    assert_eq!(f.app().access_token(false).unwrap(), "test-access-1");
+    assert!(f.app().access_token(true).unwrap_err().to_string().starts_with("OFFLINE:"));
+    assert_eq!(fs::read(f.tokens_path()).unwrap(), before);
+    let reg = Registration::load(&f.dir.0).unwrap();
+    let mut tokens = f.app().vault.load(&reg.host_id).unwrap().unwrap();
+    tokens.expires_at = now() - 1;
+    f.app().vault.save(&reg.host_id, &tokens).unwrap();
+    assert!(f.app().access_token(false).unwrap_err().to_string().starts_with("OFFLINE:"));
+    assert_eq!(f.tokens()["refresh_token"], "test-refresh-1");
+    assert_eq!(f.server.state.lock().unwrap().token_requests.len(), 4);
+}
+
+#[test]
+fn chatgpt_access_token_renewed_plan_scope_is_required() {
+    let f = Flow::new();
+    f.sign_in().unwrap();
+    f.server.state.lock().unwrap().plan = false;
+    assert!(f.app().access_token(true).unwrap_err().to_string().starts_with("PLAN_UNAVAILABLE:"));
+    assert_eq!(f.tokens()["access_token"], "test-access-2");
+    assert!(!f.app().vault.load(&Registration::load(&f.dir.0).unwrap().host_id).unwrap().unwrap().plan());
+    assert!(f.app().access_token(false).unwrap_err().to_string().starts_with("PLAN_UNAVAILABLE:"));
+    assert_eq!(f.server.state.lock().unwrap().token_requests.len(), 2);
+}
+
+#[test]
+fn chatgpt_models_filter_order_and_bearer_retry() {
+    for statuses in [vec![200], vec![401, 200], vec![401, 401], vec![503]] {
+        let f = Flow::new();
+        f.sign_in().unwrap();
+        f.server.state.lock().unwrap().models = json!({"models": [
+            {"slug": "second", "display_name": "Second", "visibility": "list", "extra": true},
+            {"slug": "hidden", "display_name": "Hidden", "visibility": "hidden"},
+            {"slug": "first", "display_name": "First", "visibility": "list"}
+        ]});
+        f.server.state.lock().unwrap().model_statuses = statuses.clone();
+        assert_eq!(f.app().api(), format!("{}/v1", f.server.issuer));
+        assert_eq!(ChatGpt::new(f.dir.0.clone()).api(), API);
+        let result = f.app().models();
+        match statuses.last().unwrap() {
+            200 => assert_eq!(
+                result.unwrap(),
+                vec![
+                    Model { slug: "second".into(), display_name: "Second".into() },
+                    Model { slug: "first".into(), display_name: "First".into() }
+                ]
+            ),
+            401 => assert_eq!(
+                result.unwrap_err().to_string(),
+                "NOT_SIGNED_IN: ChatGPT didn't accept the sign-in. Sign in again."
+            ),
+            _ => assert_eq!(result.unwrap_err().to_string(), "MODELS_FAILED: ChatGPT didn't list your models (503)."),
+        }
+        let s = f.server.state.lock().unwrap();
+        assert_eq!(s.token_requests.len(), statuses.len());
+        assert_eq!(s.model_headers.len(), statuses.len());
+        for (i, headers) in s.model_headers.iter().enumerate() {
+            assert!(
+                headers
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case(&format!("authorization: Bearer test-access-{}", i + 1)))
+            );
+            assert!(headers.lines().any(|line| line.eq_ignore_ascii_case("accept: application/json")));
+        }
+    }
 }
 
 #[test]

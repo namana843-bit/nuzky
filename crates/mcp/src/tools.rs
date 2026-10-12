@@ -120,6 +120,13 @@ impl Backend {
         self.call_inner(name, arguments).map(crate::limits::tool_result)
     }
 
+    /// The call as a client gets it: a failure, or a panic, is the tool's error result.
+    pub fn answer(&self, name: &str, arguments: Value) -> CallToolResult {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.call(name, arguments)))
+            .unwrap_or_else(|_| Err(anyhow!("TOOL_FAILED: worker panicked")))
+            .unwrap_or_else(|e| tool_error(self, format!("{e:#}")))
+    }
+
     fn call_inner(&self, name: &str, arguments: Value) -> Result<CallToolResult> {
         let rules = crate::rules::find(name);
         let read = rules.is_some_and(|rules| rules.reads(&arguments));
