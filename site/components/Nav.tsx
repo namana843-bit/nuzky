@@ -18,7 +18,7 @@ export function Nav({ base = "" }: { base?: string }) {
         <Image src="/media/icon.png" alt="" width={34} height={34} loading="eager" />
         <span className="text-[16px] font-semibold tracking-[-0.01em]">Nuzky</span>
       </a>
-      <nav aria-label="Sections" className="hidden items-center gap-8 md:flex">
+      <nav aria-label="Sections" className="hidden items-center gap-8 lg:flex">
         {links.map(([label, href]) => (
           <a key={href} href={base + href} className="text-[14px] text-muted transition-colors hover:text-fg">
             {label}
