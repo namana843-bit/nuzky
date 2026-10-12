@@ -41,10 +41,10 @@ fn open_browser(app: &AppHandle, url: &str) -> anyhow::Result<()> {
     Ok(app.opener().open_url(url, None::<&str>)?)
 }
 
-/// The account, its tokens renewed when they are about to expire.
+/// The account; with `renew`, its tokens renewed when they are about to expire.
 #[tauri::command]
-pub async fn chatgpt_status() -> CmdResult<Status> {
-    tauri::async_runtime::spawn_blocking(|| chatgpt().status().map_err(err)).await.map_err(err)?
+pub async fn chatgpt_status(renew: bool) -> CmdResult<Status> {
+    tauri::async_runtime::spawn_blocking(move || chatgpt().status(renew).map_err(err)).await.map_err(err)?
 }
 
 /// Opens the browser to sign in and answers once it came back, was cancelled or timed out.

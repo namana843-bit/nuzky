@@ -48,10 +48,11 @@ export function openChatGpt() {
   if (!useChatGpt.getState().action) void check();
 }
 
-export async function check() {
+/** `renew`: as the dialog does; the AI panel only reads what is stored, so opening it needs no network. */
+export async function check(renew = true) {
   useChatGpt.setState({ checking: true });
   try {
-    useChatGpt.setState({ status: await api.chatgptStatus() });
+    useChatGpt.setState({ status: await api.chatgptStatus(renew) });
   } catch (e) {
     useChatGpt.setState({ error: plainError(errorText(e)) });
   } finally {
@@ -116,15 +117,6 @@ export async function loadModels() {
     if (useChatGpt.getState().modelsFor === account) useChatGpt.setState({ modelsError: plainError(errorText(e)) });
   }
 }
-
-// The model list follows the signed-in account, also while the AI panel is closed, as Find reels and
-// Make it with AI send from elsewhere.
-useChatGpt.subscribe((s, prev) => {
-  if (s.status === prev.status) return;
-  if (s.status?.state === "signedIn" && s.status.plan) {
-    if (s.modelsFor !== (s.status.email ?? "")) void loadModels();
-  } else if (s.modelsFor !== null) useChatGpt.setState({ models: null, modelsFor: null, modelsError: null });
-});
 
 /** Continue with ChatGPT from outside the dialog: the dialog opens to show the sign-in going on, with Cancel. */
 export function continueWithChatGpt() {

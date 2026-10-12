@@ -129,7 +129,9 @@ def setup(r):
     r.env.update(NUZKY_CHATGPT_ISSUER=r.chatgpt.url,
                  NUZKY_TEST_BROWSER=str(Path(__file__).with_name('fake_browser')),
                  NUZKY_FAKE_BROWSER_PAGE=str(r.work / 'browser.html'),
-                 NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_CODEX=str(r.work / 'no-codex'))
+                 # Claude Code is the panel's agent, so the panel's ChatGPT does not ask the fake for its models.
+                 NUZKY_AGENT_CLAUDE=str(Path(__file__).with_name('fake_agent')), NUZKY_FAKE_AGENT_LOG=str(r.work / 'fake'),
+                 NUZKY_AGENT_CODEX=str(r.work / 'no-codex'))
 
 
 def view(r):
@@ -237,6 +239,8 @@ def chatgpt(r):
         require(wait(lambda: r.s.run('return !!window.__nuzky?.store.getState().snap', retries=3), 60), 'the app restarts')
         r.s.run("window.__nuzky.store.setState({view: 'editor'})")
         open_dialog(r)
+        # The AI panel read the stored sign-in already, so the dialog shows it at once and renews it meanwhile.
+        wait(lambda: len(server.issued) == 2, 10)
         r.check('after restart the dialog shows the same email and Using ChatGPT plan',
                 EMAIL in view(r)['text'] and 'Using ChatGPT plan' in view(r)['text'], view(r))
         r.check('opening the dialog refreshes with the first refresh token without another authorization',

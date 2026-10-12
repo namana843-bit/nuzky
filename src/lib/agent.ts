@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { errorText, plainError } from "./api";
-import { check as checkChatGpt, planReady, useChatGpt } from "./chatgpt";
+import { check as checkChatGpt, loadModels as loadChatGptModels, planReady, useChatGpt } from "./chatgpt";
 import { downloadModels, loadModels, useCover } from "./cover";
 import { useDock } from "./dock";
 import { formatTime } from "./time";
@@ -249,8 +249,7 @@ function offered(input: unknown): Omit<Extract<ChatItem, { kind: "options" }>, "
 
 export async function loadAgents() {
   try {
-    // Renewing the ChatGPT sign-in can take a while on a slow network; the installed agents need not wait for it.
-    void checkChatGpt();
+    void checkChatGpt(false);
     const agents = await agentApi.list();
     const s = useAgent.getState();
     // Keep the chosen agent when it is installed or is ChatGPT; otherwise pick one that is installed, or else ChatGPT.
@@ -446,7 +445,7 @@ function fail(code: AgentErrorCode, message: string) {
   }
   useAgent.setState({ items: [...items, { kind: "error", code, message, retry }], draft, status: "idle" });
   // The sign-in ended or lost the plan meanwhile: the panel stops saying it uses the plan.
-  if (s.agent === "chatgpt" && (code === "NOT_SIGNED_IN" || code === "PLAN_UNAVAILABLE")) void checkChatGpt();
+  if (s.agent === "chatgpt" && (code === "NOT_SIGNED_IN" || code === "PLAN_UNAVAILABLE")) void checkChatGpt(false);
 }
 
 function onEvent(e: AgentEvent) {
@@ -526,6 +525,19 @@ export function panelRunEnded(label: string, snap: Snapshot | null): boolean {
 useEditor.subscribe((s, prev) => {
   if (prev.snap && s.snap?.sessionEpoch !== prev.snap.sessionEpoch) useAgent.setState({ chat: null, items: [], jobs: [], status: "idle" });
 });
+
+/**
+ * ChatGPT's model list follows the signed-in account while ChatGPT is the panel's agent, also with the panel
+ * closed, as Find reels and Make it with AI send from elsewhere. Only then: nobody else needs the list.
+ */
+function followModels() {
+  const { status, modelsFor } = useChatGpt.getState();
+  if (status?.state !== "signedIn" || !status.plan) {
+    if (modelsFor !== null) useChatGpt.setState({ models: null, modelsFor: null, modelsError: null });
+  } else if (useAgent.getState().agent === "chatgpt" && modelsFor !== (status.email ?? "")) void loadChatGptModels();
+}
+useChatGpt.subscribe((s, prev) => s.status !== prev.status && followModels());
+useAgent.subscribe((s, prev) => s.agent !== prev.agent && followModels());
 
 let listening = false;
 export function listenAgentEvents() {

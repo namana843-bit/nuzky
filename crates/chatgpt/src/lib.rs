@@ -86,15 +86,16 @@ impl ChatGpt {
         &self.api
     }
 
-    /// The account as stored, its tokens renewed first when they expire within five minutes.
-    pub fn status(&self) -> Result<Status> {
+    /// The account as stored; with `renew`, its tokens renewed first when they expire within five
+    /// minutes. The AI panel looks without renewing, so opening it needs no network.
+    pub fn status(&self, renew: bool) -> Result<Status> {
         let _lock = store::lock(&self.dir)?;
         let Some(mut reg) = Registration::load(&self.dir) else { return Ok(signed_out(None, None)) };
         let Some(client_id) = reg.client_id.clone() else { return Ok(signed_out(None, None)) };
         let Some(tokens) = self.vault.load(&reg.host_id)?.filter(|t| t.client_id == client_id) else {
             return Ok(signed_out(reg.email, None));
         };
-        if tokens.expires_at > now() + RENEW_BEFORE {
+        if !renew || tokens.expires_at > now() + RENEW_BEFORE {
             return Ok(Status::SignedIn { email: reg.email, plan: tokens.plan() });
         }
         match self.refresh(&mut reg, tokens, Some(u64::MAX))? {

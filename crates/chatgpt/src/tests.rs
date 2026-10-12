@@ -504,8 +504,19 @@ fn chatgpt_restart_uses_fresh_tokens_without_a_token_request() {
     assert_eq!(f.sign_in().unwrap(), signed_in(true));
     let before = fs::read(f.tokens_path()).unwrap();
     let requests = f.server.state.lock().unwrap().token_requests.len();
-    assert_eq!(f.app().status().unwrap(), signed_in(true));
+    assert_eq!(f.app().status(true).unwrap(), signed_in(true));
     assert_eq!(f.server.state.lock().unwrap().token_requests.len(), requests);
+    assert_eq!(fs::read(f.tokens_path()).unwrap(), before);
+}
+
+#[test]
+fn chatgpt_status_without_renewing_needs_no_network() {
+    let f = Flow::new();
+    f.server.state.lock().unwrap().expires_in = 60;
+    f.sign_in().unwrap();
+    let before = fs::read(f.tokens_path()).unwrap();
+    assert_eq!(f.app().status(false).unwrap(), signed_in(true));
+    assert_eq!(f.server.state.lock().unwrap().token_requests.len(), 1);
     assert_eq!(fs::read(f.tokens_path()).unwrap(), before);
 }
 
@@ -647,7 +658,7 @@ fn chatgpt_refresh_rotation_saves_the_whole_replacement() {
     let original = f.tokens();
     for generation in 2..=3 {
         let before = now();
-        assert_eq!(f.app().status().unwrap(), signed_in(true));
+        assert_eq!(f.app().status(true).unwrap(), signed_in(true));
         let after = now();
         let tokens = f.tokens();
         let s = f.server.state.lock().unwrap();
@@ -677,9 +688,9 @@ fn chatgpt_refused_refresh_clears_tokens_and_keeps_email() {
         f.server.state.lock().unwrap().expires_in = 60;
         f.sign_in().unwrap();
         f.server.state.lock().unwrap().refresh_error = Some((400, error));
-        assert_eq!(f.app().status().unwrap(), signed_out(Some(EMAIL.into()), Some(Notice::Ended)));
+        assert_eq!(f.app().status(true).unwrap(), signed_out(Some(EMAIL.into()), Some(Notice::Ended)));
         assert!(!f.tokens_path().exists());
-        assert_eq!(f.app().status().unwrap(), signed_out(Some(EMAIL.into()), None));
+        assert_eq!(f.app().status(true).unwrap(), signed_out(Some(EMAIL.into()), None));
         assert_eq!(f.server.state.lock().unwrap().token_requests.len(), 2);
     }
 }
@@ -691,7 +702,7 @@ fn chatgpt_refresh_503_preserves_sign_in_and_tokens() {
     f.sign_in().unwrap();
     let before = fs::read(f.tokens_path()).unwrap();
     f.server.state.lock().unwrap().refresh_error = Some((503, json!({"error": "unavailable"})));
-    assert_eq!(f.app().status().unwrap(), signed_in(true));
+    assert_eq!(f.app().status(true).unwrap(), signed_in(true));
     assert_eq!(fs::read(f.tokens_path()).unwrap(), before);
     assert_eq!(f.server.state.lock().unwrap().token_requests.len(), 2);
 }
@@ -701,7 +712,7 @@ fn chatgpt_missing_plan_scope_requests_consent_next_time() {
     let f = Flow::new();
     f.server.state.lock().unwrap().plan = false;
     assert_eq!(f.sign_in().unwrap(), signed_in(false));
-    assert_eq!(f.app().status().unwrap(), signed_in(false));
+    assert_eq!(f.app().status(true).unwrap(), signed_in(false));
     assert_eq!(f.sign_in().unwrap(), signed_in(false));
     let s = f.server.state.lock().unwrap();
     assert!(!s.authorize[0].contains_key("prompt"));
@@ -722,7 +733,7 @@ fn chatgpt_sign_out_revokes_and_clears_tokens_even_on_503() {
             signed_out(Some(EMAIL.into()), (status == 503).then_some(Notice::NotRevoked))
         );
         assert!(!f.tokens_path().exists());
-        assert_eq!(f.app().status().unwrap(), signed_out(Some(EMAIL.into()), None));
+        assert_eq!(f.app().status(true).unwrap(), signed_out(Some(EMAIL.into()), None));
         let s = f.server.state.lock().unwrap();
         assert_eq!(s.revokes.len(), if status == 200 { 1 } else { 3 });
         for revoke in &s.revokes {
