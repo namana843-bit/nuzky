@@ -10,7 +10,6 @@ import { JsonLd } from "@/components/JsonLd";
 import { Maker } from "@/components/Maker";
 import { Nav } from "@/components/Nav";
 import { Showcase } from "@/components/Showcase";
-import { Steps } from "@/components/Steps";
 import { Waves } from "@/components/Waves";
 import { faq, features } from "@/lib/content";
 import { description, releaseNotes, repo, url, version } from "@/lib/site";
@@ -55,16 +54,15 @@ export default function Home() {
       <JsonLd data={structuredData} />
       <Nav />
       <main>
-        {/* One light surface behind the hero and the editor tour, so the two never meet in a seam. */}
+        {/* The light reaches up behind the nav, so the page starts on one surface. */}
         <div id="top" className="relative -mt-[72px] overflow-hidden pt-[72px]">
-          <Waves swellAt="[data-waves=swell]" glowAt="[data-waves=glow]" height={0.75} intensity={1.4} />
+          <Waves swellAt="[data-waves=swell]" height={0.75} intensity={1.4} />
           <Hero />
-          <Showcase />
         </div>
         <Maker />
-        <Steps />
         <Agent />
         <EditStyle />
+        <Showcase />
         <Features />
         <Faq />
         <Download />

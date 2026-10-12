@@ -3,8 +3,8 @@ import { GitHubLogo } from "./Logos";
 import { repo } from "@/lib/site";
 
 const links = [
-  ["Editor", "#editor"],
   ["AI agents", "#agents"],
+  ["Editor", "#editor"],
   ["Features", "#features"],
   ["Download", "#download"],
 ] as const;
