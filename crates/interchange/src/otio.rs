@@ -10,7 +10,9 @@ use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{ImportedTimeline, Marker, MediaClip, Read, TextClip, Track, TrackKind, Transition, local_path};
+use crate::{
+    ImportedTimeline, Marker, MediaClip, Read, TextClip, Track, TrackKind, Transition, TransitionKind, local_path,
+};
 
 /// Times further from zero than this, eleven days, are no timeline's.
 const MAX_US: f64 = 1e12;
@@ -272,8 +274,10 @@ fn track(value: &Value, folder: &Path, out: &mut ImportedTimeline, unread: &mut 
             // A transition takes no time: it overlaps the items on either side of the cut.
             "Transition" => {
                 let t: OtioTransition = parse(child)?;
+                let name = t.transition_type.unwrap_or_default();
                 transition = Some(Transition {
-                    kind: t.transition_type.unwrap_or_default(),
+                    kind: if name == "SMPTE_Dissolve" { TransitionKind::Dissolve } else { TransitionKind::Other },
+                    name,
                     before_us: t.in_offset.us()?,
                     after_us: t.out_offset.us()?,
                 });
@@ -345,7 +349,7 @@ fn clip_item(
     };
     match media_reference.parameters.get("text").and_then(Value::as_str) {
         Some(text) if media_reference.generator_kind.is_some() => {
-            track.texts.push(TextClip { text: text.to_owned(), start_us, duration_us, transform: None });
+            track.texts.push(TextClip { text: text.to_owned(), start_us, duration_us, transform: None, style: None });
             return Ok(duration_us);
         }
         _ => {}
@@ -528,7 +532,12 @@ mod tests {
         assert_eq!(video.clips[1].path.as_deref(), Some(Path::new("/edits/talk.mov")), "relative to the .otio file");
         assert_eq!(
             video.clips[2].transition_in,
-            Some(Transition { kind: "SMPTE_Dissolve".into(), before_us: 250_000, after_us: 250_000 })
+            Some(Transition {
+                name: "SMPTE_Dissolve".into(),
+                kind: TransitionKind::Dissolve,
+                before_us: 250_000,
+                after_us: 250_000
+            })
         );
         assert_eq!(t.tracks[1].kind, TrackKind::Audio);
         assert_eq!(t.duration_us(), 5_001_000);
@@ -598,7 +607,13 @@ mod tests {
         assert_eq!(starts, [("zoomed", 0), ("last", 7_000_000)], "each part keeps its time on the track");
         assert_eq!(
             video.texts,
-            [TextClip { text: "Hello there".into(), start_us: 3_000_000, duration_us: 1_000_000, transform: None }]
+            [TextClip {
+                text: "Hello there".into(),
+                start_us: 3_000_000,
+                duration_us: 1_000_000,
+                transform: None,
+                style: None
+            }]
         );
         assert_eq!(
             read.unread,

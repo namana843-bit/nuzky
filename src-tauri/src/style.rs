@@ -1,12 +1,14 @@
 //! The creator's style, as the app shows and changes it, and learning from what the user does.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use nuzky_analysis::style as learning;
+use nuzky_interchange::capcut;
 use nuzky_mcp::style::{Evidence, Moment, Store, StyleAction, StyleView, TimelinePlan, moment, plan};
 use nuzky_session::host::Host;
 use nuzky_session::transcripts::TranscriptStore;
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{AppState, CmdResult, err, jobs};
@@ -33,6 +35,39 @@ pub fn start_style_learning(app: AppHandle, pairs: Vec<jobs::StylePair>) -> CmdR
 #[tauri::command]
 pub async fn style_read_timelines(paths: Vec<String>) -> CmdResult<Vec<TimelinePlan>> {
     tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| plan(Path::new(p))).collect()).await.map_err(err)
+}
+
+/// A CapCut draft as the Learn dialog lists it.
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapCutDraft {
+    /// The draft's folder.
+    pub path: String,
+    pub name: String,
+    /// Milliseconds since 1970.
+    pub modified_ms: i64,
+    pub duration_us: Option<i64>,
+}
+
+/// CapCut's drafts, newest first: in the folder CapCut keeps them in on this computer, or in
+/// `folder`, which may also be one draft's own folder.
+#[tauri::command]
+pub async fn style_capcut_drafts(folder: Option<String>) -> CmdResult<Vec<CapCutDraft>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(folder) = folder.map(PathBuf::from).or_else(capcut::default_folder) else { return Vec::new() };
+        capcut::drafts(&folder)
+            .into_iter()
+            .map(|d| CapCutDraft {
+                path: d.path.display().to_string(),
+                name: d.name,
+                modified_ms: d.modified_ms,
+                duration_us: d.duration_us,
+            })
+            .collect()
+    })
+    .await
+    .map_err(err)
 }
 
 #[tauri::command]

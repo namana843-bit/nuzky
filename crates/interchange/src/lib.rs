@@ -1,12 +1,13 @@
 //! Timelines cut in other editors, read into one neutral model, whichever editor made them. Each
 //! format reads its files into an `ImportedTimeline` and says in plain words what it did not read.
-//! A timeline file comes from anyone: reading opens only that file, never the media it names nor
-//! the network, and a broken file is an error, never a crash.
+//! A timeline file comes from anyone: reading opens only that file and what lies beside it, never
+//! the media it names nor the network, and a broken file is an error, never a crash.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 
+pub mod capcut;
 pub mod otio;
 
 /// A larger file is not a timeline.
@@ -80,12 +81,14 @@ impl MediaClip {
     }
 }
 
-/// As Nuzky has it: scale 1 fits the frame, x and y move the picture by fractions of the frame.
+/// As Nuzky has it: scale 1 fits the frame, x and y move the picture by fractions of the frame,
+/// down for y, and rotation turns it clockwise in degrees.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transform {
     pub scale: f32,
     pub x: f32,
     pub y: f32,
+    pub rotation: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,10 +100,21 @@ pub struct Keyframe {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Transition {
     /// As the editor calls it, such as SMPTE_Dissolve.
-    pub kind: String,
+    pub name: String,
+    pub kind: TransitionKind,
     /// How long it plays before the cut and after it.
     pub before_us: i64,
     pub after_us: i64,
+}
+
+/// The Nuzky transition one looks like, for the most common ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransitionKind {
+    Dissolve,
+    FadeBlack,
+    Zoom,
+    Slide,
+    Other,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -109,6 +123,21 @@ pub struct TextClip {
     pub start_us: i64,
     pub duration_us: i64,
     pub transform: Option<Transform>,
+    /// How it is drawn, when the file says.
+    pub style: Option<TextStyle>,
+}
+
+/// As Nuzky draws text; sizes are pixels of the timeline's frame, before the clip's scale.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextStyle {
+    /// None for the editor's default font.
+    pub font: Option<String>,
+    pub size: f32,
+    /// `#rrggbb`
+    pub color: String,
+    pub bold: bool,
+    /// Colour and width.
+    pub outline: Option<(String, f32)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -127,17 +156,24 @@ pub struct Read {
     pub unread: Vec<String>,
 }
 
-/// Reads the timeline file at `path`, by its extension.
+/// Reads the timeline file at `path`, by its extension, or the CapCut draft in the folder `path`.
 pub fn read(path: &Path) -> Result<Read> {
     let meta = std::fs::metadata(path).with_context(|| format!("Cannot find {}", path.display()))?;
+    if meta.is_dir() {
+        let file = capcut::timeline_file(path).with_context(|| {
+            format!("{} is not a CapCut draft: it has no draft_info.json or draft_content.json", path.display())
+        })?;
+        return read(&file);
+    }
     ensure!(meta.is_file(), "{} is not a file", path.display());
     ensure!(meta.len() <= MAX_FILE, "{} is too large for a timeline", path.display());
     let bytes = std::fs::read(path).with_context(|| format!("Cannot read {}", path.display()))?;
     let folder = std::path::absolute(path)?.parent().map(Path::to_path_buf).unwrap_or_default();
     match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
         Some("otio") => otio::read(&bytes, &folder),
+        Some("json") if capcut::is_timeline(path) => capcut::read(&bytes, &folder),
         _ => bail!(
-            "{} is not a timeline Nuzky reads. Export the timeline from your editor as OpenTimelineIO (.otio).",
+            "{} is not a timeline Nuzky reads. Export the timeline from your editor as OpenTimelineIO (.otio), or choose a CapCut draft's folder.",
             path.display()
         ),
     }

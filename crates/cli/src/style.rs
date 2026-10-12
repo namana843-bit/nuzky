@@ -1,5 +1,5 @@
 //! `nuzky style`: learn a creator's EDIT.md from recordings and their finished cuts or from
-//! timelines they cut in another editor, and score any cut of a recording against the creator's
+//! timelines they cut in another editor, CapCut drafts among them, and score any cut of a recording against the creator's
 //! own. Everything runs on this computer.
 
 use std::collections::{HashMap, HashSet};
@@ -14,7 +14,7 @@ use nuzky_mcp::transcript::best_model;
 use nuzky_session::transcripts::TranscriptStore;
 use serde_json::json;
 
-pub const USAGE: &str = "  nuzky style learn [--out <EDIT.md>] [--replace] [--lang auto|cs|en] [--from <timeline.otio>]... [<recording> <cut>]...
+pub const USAGE: &str = "  nuzky style learn [--out <EDIT.md>] [--replace] [--lang auto|cs|en] [--from <timeline.otio|CapCut draft folder>]... [<recording> <cut>]...
   nuzky style compare [--lang auto|cs|en] <recording> <cut> <project.nuzky>";
 
 pub fn run(args: &[String], cache: &Path) -> Result<()> {
@@ -29,7 +29,8 @@ pub fn run(args: &[String], cache: &Path) -> Result<()> {
             "--lang" => language = rest.next().context("--lang needs a value")?.clone(),
             "--out" => out = Some(PathBuf::from(rest.next().context("--out needs a path")?)),
             "--replace" => replace = true,
-            "--from" => timelines.push(PathBuf::from(rest.next().context("--from needs a timeline file")?)),
+            "--from" => timelines
+                .push(PathBuf::from(rest.next().context("--from needs a timeline file or a CapCut draft's folder")?)),
             _ if arg.starts_with("--") => bail!("Unknown option {arg}\n{USAGE}"),
             _ => files.push(PathBuf::from(arg)),
         }

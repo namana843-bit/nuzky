@@ -1200,6 +1200,7 @@ pub fn run() {
             style::style_act,
             style::start_style_learning,
             style::style_read_timelines,
+            style::style_capcut_drafts,
             style::start_timeline_learning,
             style::style_use_learned,
             updates::check_for_update,

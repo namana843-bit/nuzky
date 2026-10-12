@@ -1,12 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertTriangle, ArrowRight, Check, Film, Plus, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, Film, FolderPlus, Plus, X } from "lucide-react";
 import { api, plainError } from "../../lib/api";
-import { NO_PAIR, addProjects, fileName, loadStyle, openStyle, saveLearned, startLearning, startProjectsLearning, useStyle } from "../../lib/style";
+import {
+  NO_PAIR,
+  type ProjectsLearning,
+  type ProjectsTab,
+  addProjects,
+  chooseDraft,
+  fileName,
+  findDrafts,
+  loadStyle,
+  openStyle,
+  saveLearned,
+  startLearning,
+  startProjectsLearning,
+  useStyle,
+} from "../../lib/style";
 import { useEditor } from "../../lib/store";
-import { formatLength } from "../../lib/time";
+import { formatLength, when } from "../../lib/time";
 import type { StylePair, StyleTimelineResult, TimelinePlan } from "../../lib/types";
-import { AiLock, Button, IconButton, ProgressBar, TabBar, TabPanel, trapTab } from "../ui";
+import { AiLock, Button, Checkbox, IconButton, ProgressBar, TabBar, TabPanel, trapTab } from "../ui";
 
 const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts"];
 
@@ -18,6 +32,11 @@ async function pickVideo(): Promise<string | null> {
 async function pickProjects() {
   const picked = await open({ multiple: true, filters: [{ name: "OpenTimelineIO", extensions: ["otio"] }] });
   if (picked?.length) await addProjects(picked);
+}
+
+async function pickDraftFolder() {
+  const picked = await open({ directory: true, multiple: false });
+  if (typeof picked === "string") await findDrafts(picked);
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -63,7 +82,7 @@ function Warning({ text }: { text: string }) {
   );
 }
 
-/** Learns the style from videos the creator cut before: a recording with the finished video cut from it, or projects cut in another editor. */
+/** Learns the style from videos the creator cut before: a recording with the finished video cut from it, or projects cut in another editor, CapCut's drafts among them. */
 export function LearnDialog() {
   const tab = useStyle((s) => s.learnTab);
   const dialog = useRef<HTMLDivElement>(null);
@@ -106,12 +125,13 @@ export function LearnDialog() {
           tabs={[
             { id: "videos", label: "Videos" },
             { id: "projects", label: "Projects (.otio)" },
+            { id: "capcut", label: "CapCut" },
           ]}
           value={tab}
           onChange={(learnTab) => useStyle.setState({ learnTab })}
         />
         <TabPanel group="learn" id={tab} className="flex min-h-0 flex-1 flex-col">
-          {tab === "videos" ? <Videos /> : <Projects />}
+          {tab === "videos" ? <Videos /> : <Projects key={tab} tab={tab} />}
         </TabPanel>
       </div>
     </div>
@@ -265,13 +285,76 @@ function Outcome({ plan, result }: { plan: TimelinePlan; result: StyleTimelineRe
   );
 }
 
-/** Timelines the creator cut in another editor, as OpenTimelineIO files. */
-function Projects() {
-  const learning = useStyle((s) => s.projectsLearning);
+/** CapCut's drafts to choose from, newest first; a chosen one says at once what it will teach, and after learning how it went. */
+function Drafts({ results }: { results: Map<string, StyleTimelineResult> }) {
+  const drafts = useStyle((s) => s.capcutDrafts);
+  const ticked = useStyle((s) => s.capcutTicked);
+  const chosen = useStyle((s) => s.capcut);
+
+  useEffect(() => {
+    if (!drafts) void findDrafts();
+  }, [drafts]);
+
+  if (!drafts) return <p className="px-6 py-8 text-center text-[13px] text-muted">Looking for CapCut's drafts…</p>;
+  if (drafts.length === 0)
+    return (
+      <div className="flex flex-col items-center gap-4 px-6 py-8 text-center">
+        <p className="max-w-[440px] text-[13px] text-muted">No CapCut drafts on this computer. If CapCut saves them elsewhere, add that folder.</p>
+        <Button pill variant="primary" data-autofocus onClick={() => void pickDraftFolder()}>
+          Add a draft folder…
+        </Button>
+      </div>
+    );
+  return (
+    <>
+      <ul aria-label="CapCut drafts" className="flex min-h-0 flex-col overflow-y-auto">
+        {drafts.map((draft) => {
+          const plan = chosen.find((p) => p.path === draft.path);
+          const result = results.get(draft.path);
+          return (
+            <li key={draft.path} className="flex items-center gap-3 border-b border-white/[.06] py-2 last:border-b-0">
+              <Checkbox label={draft.name} checked={ticked.includes(draft.path)} onChange={(on) => void chooseDraft(draft.path, on)}>
+                <span className="flex min-w-0 flex-1 flex-col text-[12px]">
+                  <span className="flex min-w-0 items-baseline gap-2">
+                    <span className="truncate text-[13px] font-medium text-fg" title={draft.path}>
+                      {draft.name}
+                    </span>
+                    <span className="tabular shrink-0 text-muted">{when(draft.modifiedMs)}</span>
+                  </span>
+                  {plan ? (
+                    <Plan plan={plan} />
+                  ) : ticked.includes(draft.path) ? (
+                    <span className="text-muted">Reading…</span>
+                  ) : draft.durationUs ? (
+                    <span className="tabular text-muted">{formatLength(draft.durationUs)}</span>
+                  ) : null}
+                </span>
+              </Checkbox>
+              {plan && result && (
+                <div className="flex min-h-8 w-[196px] shrink-0 items-center justify-end text-[12px]">
+                  <Outcome plan={plan} result={result} />
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <Button className="mt-3 h-8 gap-1.5 self-start px-2.5" onClick={() => void pickDraftFolder()}>
+        <FolderPlus size={14} /> Add a draft folder…
+      </Button>
+    </>
+  );
+}
+
+/** Timelines the creator cut in another editor: OpenTimelineIO files, or CapCut's drafts. */
+function Projects({ tab }: { tab: ProjectsTab }) {
+  const learning = useStyle((s) => (s.projectsLearning?.tab === tab ? s.projectsLearning : null));
   const job = useEditor((s) => (learning ? s.jobs[learning.jobId] : undefined));
   const running = job?.status === "running";
   const ended = !!learning && !!job && !running;
-  const draft = useStyle((s) => s.projects);
+  const capcut = tab === "capcut";
+  const draft = useStyle((s) => (capcut ? s.capcut : s.projects));
+  const drafts = useStyle((s) => s.capcutDrafts);
   const plans = learning && (running || ended) ? learning.plans : draft;
   const view = useStyle((s) => s.view);
   const [confirming, setConfirming] = useState(false);
@@ -291,13 +374,18 @@ function Projects() {
   }, [empty, running, previewed, confirming]);
 
   // Another choice of projects after learning ended leaves its results, which were about the old ones.
-  const setDraft = (change: (plans: TimelinePlan[]) => TimelinePlan[]) => useStyle.setState((s) => ({ projects: change(s.projects), projectsLearning: null }));
+  // Learning from the other tab goes on, so only this tab's is left.
+  const leave = (s: { projectsLearning: ProjectsLearning | null }) => (s.projectsLearning?.tab === tab ? null : s.projectsLearning);
+  const setDraft = (change: (plans: TimelinePlan[]) => TimelinePlan[]) => useStyle.setState((s) => ({ projects: change(s.projects), projectsLearning: leave(s) }));
   const choose = async () => {
-    useStyle.setState({ projectsLearning: null });
+    useStyle.setState((s) => ({ projectsLearning: leave(s) }));
     await pickProjects();
   };
   const editable = !running && !preview;
   const ready = draft.some((p) => !p.error && p.recordings.some((r) => !r.missing));
+  // How each draft fared when learning stopped or failed, shown beside it while it can be chosen again.
+  const results = new Map(learning ? learning.plans.flatMap((p, i) => (learning.results[i] ? [[p.path, learning.results[i]] as const] : [])) : []);
+  const footer = capcut && editable ? !!drafts?.length : plans.length > 0;
   const runningRow = learning?.results.findIndex((r) => r === null) ?? -1;
   const rowProgress = job ? Math.min(1, Math.max(0, job.progress * plans.length - runningRow)) : 0;
 
@@ -315,7 +403,9 @@ function Projects() {
 
   return (
     <div ref={panel} className="contents">
-      {plans.length === 0 ? (
+      {capcut && editable ? (
+        <Drafts results={results} />
+      ) : plans.length === 0 ? (
         <div className="flex flex-col items-center gap-4 px-6 py-8 text-center">
           <p className="max-w-[440px] text-[13px] text-muted">
             Export each timeline as OpenTimelineIO (.otio), which DaVinci Resolve and other editors can write. The recordings it uses must be on this computer.
@@ -325,7 +415,7 @@ function Projects() {
           </Button>
         </div>
       ) : (
-        <ul aria-label="Projects" className={`flex min-h-0 flex-col overflow-y-auto ${preview ? "max-h-[132px] shrink-0" : ""}`}>
+        <ul aria-label="Projects" className={`flex min-h-0 flex-col overflow-y-auto ${preview ? "max-h-[172px] shrink-0" : ""}`}>
           {plans.map((plan, i) => {
             const result = learning && (running || ended) ? learning.results[i] : null;
             return (
@@ -354,7 +444,7 @@ function Projects() {
           })}
         </ul>
       )}
-      {editable && plans.length > 0 && (
+      {editable && !capcut && plans.length > 0 && (
         <Button className="mt-3 h-8 gap-1.5 self-start px-2.5" onClick={() => void choose()}>
           <Plus size={14} /> Add projects
         </Button>
@@ -376,7 +466,7 @@ function Projects() {
           {plainError(job.message ?? "Learning failed.")}
         </p>
       )}
-      {plans.length > 0 && (
+      {footer && (
         <div
           className="mt-6 flex shrink-0 items-center gap-2 border-t border-white/[.08] pt-4"
           onKeyDown={(e) => {
@@ -397,7 +487,7 @@ function Projects() {
                   ? replacing
                     ? ""
                     : "Nothing changes until you use it."
-                  : "Each project's recordings are compared with its cut here, on this computer."}
+                  : `Each ${capcut ? "draft" : "project"}'s recordings are compared with its cut here, on this computer.`}
           </p>
           {running ? (
             <Button pill data-autofocus onClick={() => job && void api.cancelJob(job.id)}>
@@ -431,8 +521,8 @@ function Projects() {
               variant="primary"
               data-autofocus
               disabled={!ready}
-              disabledReason="Choose a project whose recordings are on this computer"
-              onClick={() => void startProjectsLearning(draft)}
+              disabledReason={`Choose a ${capcut ? "draft" : "project"} whose recordings are on this computer`}
+              onClick={() => void startProjectsLearning(draft, tab)}
             >
               Learn
             </Button>

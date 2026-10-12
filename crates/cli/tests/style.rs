@@ -389,6 +389,188 @@ fn learns_from_a_timeline_cut_in_another_editor() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The creator's pieces as CapCut for macOS keeps them in a draft, cut down to what Nuzky reads: the
+/// pieces on the main track with a gap after the third and a Mix after the fourth, the second and fifth
+/// zoomed in and the first a slow push in keyed in the recording's own time, a two-word caption every
+/// half second in yellow Montserrat Bold, and a song that is not on this computer. Returns the draft's
+/// folder and the pieces it must give.
+fn capcut(fixture: &Fixture) -> (PathBuf, Vec<Piece>) {
+    let us = |seconds: f64| ((seconds * 30.0).round() / 30.0 * 1e6).round() as i64;
+    let (mut video, mut reference) = (Vec::new(), Vec::new());
+    let mut at_us = 0;
+    for (k, (start, end)) in fixture.pieces.iter().enumerate() {
+        let (from, duration) = (us(*start), us(end - start));
+        let mut segment = json!({
+            "material_id": "talk",
+            "target_timerange": {"start": at_us, "duration": duration},
+            "source_timerange": {"start": from, "duration": duration},
+            "clip": {"scale": {"x": if k == 1 || k == 4 { ZOOM } else { 1.0 }}, "transform": {"y": 0.1}},
+        });
+        if k == 0 {
+            segment["common_keyframes"] = json!([{
+                "property_type": "KFTypeScaleX", "keyframe_list": [
+                    {"time_offset": from, "values": [1.0]},
+                    {"time_offset": from + duration, "values": [1.2]},
+                ],
+            }]);
+        }
+        if k == 3 {
+            segment["extra_material_refs"] = json!(["mix"]);
+        }
+        video.push(segment);
+        reference.push(Piece { start_us: at_us, end_us: at_us + duration, offset_us: from - at_us });
+        at_us += duration;
+        if k == 2 {
+            at_us += 500_000;
+        }
+    }
+    let srt = std::fs::read_to_string(fixture.dir.join("captions.srt")).unwrap();
+    let words: Vec<&str> = srt.split("\n\n").filter_map(|cue| cue.lines().nth(2)).collect();
+    let (mut texts, mut captions) = (Vec::new(), Vec::new());
+    for (i, start) in (0..at_us).step_by(500_000).enumerate() {
+        let text = words[i % words.len()];
+        let id = format!("caption{i}");
+        texts.push(json!({"id": id, "content": json!({
+            "text": text, "styles": [{
+                "fill": {"content": {"solid": {"color": [1, 0.941, 0.349]}}},
+                "font": {"path": "/Users/creator/Library/Fonts/Montserrat-Bold.otf"},
+                "size": 12, "range": [0, text.chars().count()],
+            }],
+        }).to_string()}));
+        captions.push(json!({
+            "material_id": id, "target_timerange": {"start": start, "duration": (at_us - start).min(500_000)},
+            "clip": {"scale": {"x": 1.5}, "transform": {"y": -0.3}},
+        }));
+    }
+    let draft = json!({
+        "canvas_config": {"width": 540, "height": 960}, "fps": 30,
+        "materials": {
+            "videos": [{"id": "talk", "path": fixture.recording}],
+            "texts": texts,
+            "transitions": [{"id": "mix", "name": "Mix", "duration": 400_000}],
+            "audios": [{"id": "song", "path": fixture.dir.join("not here/song.wav")}],
+        },
+        "tracks": [
+            {"type": "video", "segments": video},
+            {"type": "text", "segments": captions},
+            {"type": "audio", "segments": [{"material_id": "song",
+                "target_timerange": {"start": 0, "duration": at_us},
+                "source_timerange": {"start": 0, "duration": at_us}}]},
+        ],
+    });
+    let folder = fixture.dir.join("Reel draft");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("draft_info.json"), serde_json::to_vec(&draft).unwrap()).unwrap();
+    std::fs::write(folder.join("draft_meta_info.json"), json!({"draft_name": "Reel"}).to_string()).unwrap();
+    (folder, reference)
+}
+
+#[test]
+#[ignore = "Recognises speech: needs ffmpeg, espeak-ng and the models in tmp-test/xdg/data/nuzky/models (scripts/fixtures.sh)"]
+fn learns_from_a_capcut_draft() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let dir = root.join("tmp-test/style-tests").join(format!("capcut-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fixture = fixture(&dir);
+    let (draft, reference) = capcut(&fixture);
+    let learn = |out: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_nuzky"))
+            .args(["style", "learn", "--from"])
+            .arg(&draft)
+            .arg("--out")
+            .arg(out)
+            .env("XDG_DATA_HOME", data())
+            .env("XDG_CACHE_HOME", dir.join("cache"))
+            .output()
+            .unwrap()
+    };
+    let (first, second) = (dir.join("EDIT.md"), dir.join("again.md"));
+    let out = learn(&first);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains("Learning from talk.mp4 as Reel cut it") && said.contains("Not learning from song.wav"),
+        "{said}"
+    );
+    let out = learn(&second);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap());
+    let style = std::fs::read_to_string(&first).unwrap();
+    assert!(style.contains("| talk.mp4 | en |") && style.contains("| Reel |"), "{style}");
+    assert!(style.contains(&format!("{} cuts,", fixture.pieces.len() - 1)), "{style}");
+    assert!(style.contains("| build_captions max_words | 2 |"), "{style}");
+    assert!(style.contains("their middle at 65% of the frame height (transform y 0.15)"), "{style}");
+    let font_size = (12.0_f32 * 5.1 * 540.0 / 1080.0 * 1.5 * 1080.0 / 540.0).round();
+    let look = json!({"fontFamily": "Montserrat", "fontSize": font_size, "bold": true,
+        "color": "#fff059", "strokeWidth": 0});
+    assert!(style.contains(&format!("| build_captions style | {look} |")), "{style}");
+    assert!(!style.contains("Captions and zoom not measured in Reel"), "{style}");
+    // Framed as the draft says, never measured: the picture moves up by 0.1 of half the frame.
+    assert!(style.contains("| Base framing | scale 1.00, x 0.000, y -0.050 |"), "{style}");
+    assert!(style.contains("The zoom changes 5 times,"), "{style}");
+
+    let store = TranscriptStore::at(data().join("nuzky/transcripts")).unwrap();
+    let cache = dir.join("cache");
+    let taught = style::timeline_lessons(&draft, &store, &|| false, |path| {
+        style::video(path, "auto", &store, &cache, &AtomicBool::new(false), |_| panic!("the words are stored"))
+    })
+    .unwrap();
+    assert_eq!(taught.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["talk.mp4", "song.wav"]);
+    let evidence = taught[0].1.as_ref().unwrap();
+    assert_eq!(evidence.alignment.pieces, reference);
+    assert_eq!(evidence.alignment.matched, 1.0);
+    assert_eq!(taught[1].1.as_ref().unwrap_err(), "not on this computer");
+    let picture = &evidence.picture;
+    assert!(!picture.captions.is_empty() && picture.captions.iter().all(|c| c.words == 2));
+    let look = picture.look.as_ref().unwrap();
+    assert_eq!(look.font.as_deref(), Some("Montserrat"));
+    assert!(look.bold);
+    assert_eq!(look.size, font_size);
+    // A slow push in over the first piece, then zooms at the cuts into and out of the two zoomed pieces;
+    // none across the gap after the third.
+    let round = |v: f32| (v * 100.0).round() / 100.0;
+    let zooms: Vec<_> =
+        picture.zooms.iter().map(|z| (z.start_us, z.end_us, round(z.from), round(z.to), z.at_cut)).collect();
+    let at = |k: usize| reference[k].start_us;
+    assert_eq!(
+        zooms,
+        [
+            (0, reference[0].end_us, 1.0, 1.2, false),
+            (at(1), at(1), 1.2, 1.25, true),
+            (at(2), at(2), 1.25, 1.0, true),
+            (at(4), at(4), 1.0, 1.25, true),
+            (at(5), at(5), 1.25, 1.0, true),
+        ]
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn an_encrypted_capcut_draft_teaches_nothing() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let dir = root.join("tmp-test/style-tests").join(format!("capcut-encrypted-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("draft_content.json"),
+        "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0123456789abcdefghijklmnopqrstuv",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_nuzky"))
+        .args(["style", "learn", "--from"])
+        .arg(&dir)
+        .arg("--out")
+        .arg(dir.join("EDIT.md"))
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("JianYing encrypts its drafts, so Nuzky cannot read this one. Learn from the exported video and its recording instead."), "{said}");
+    assert!(!dir.join("EDIT.md").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn a_timeline_of_nothing_on_this_computer_teaches_nothing() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();

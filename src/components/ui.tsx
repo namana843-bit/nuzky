@@ -446,6 +446,7 @@ export function Checkbox({
   hideLabel = false,
   tabIndex,
   detail,
+  children,
 }: {
   label: string;
   checked: boolean;
@@ -459,6 +460,8 @@ export function Checkbox({
   tabIndex?: number;
   /** A read-only value at the right end of the line, such as the gain it gives. */
   detail?: ReactNode;
+  /** What it says in place of `label`, such as a name over a line about it; `label` still names it. */
+  children?: ReactNode;
 }) {
   const lock = useLockReason();
   disabled = disabled || !!lock;
@@ -467,8 +470,11 @@ export function Checkbox({
     if (input.current) input.current.indeterminate = mixed;
   }, [mixed]);
   return (
-    <label className="flex cursor-pointer items-center gap-2 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40" title={lock ?? title}>
-      <span className="relative inline-flex">
+    <label
+      className={`flex cursor-pointer has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40 ${children ? "min-w-0 flex-1 items-start gap-3" : "items-center gap-2"}`}
+      title={lock ?? title}
+    >
+      <span className={`relative inline-flex ${children ? "mt-0.5" : ""}`}>
         <input
           ref={input}
           type="checkbox"
@@ -476,6 +482,7 @@ export function Checkbox({
           disabled={disabled}
           tabIndex={tabIndex}
           onChange={(e) => onChange(e.target.checked)}
+          aria-label={children ? label : undefined}
           className="peer absolute inset-0 m-0 h-full w-full cursor-[inherit] opacity-0"
         />
         <span
@@ -487,7 +494,7 @@ export function Checkbox({
           {mixed ? <Minus size={12} strokeWidth={3} /> : checked && <Check size={12} strokeWidth={3} />}
         </span>
       </span>
-      <span className={hideLabel ? "sr-only" : "text-[12px] text-fg"}>{label}</span>
+      {children ?? <span className={hideLabel ? "sr-only" : "text-[12px] text-fg"}>{label}</span>}
       {detail && <span className="tabular ml-auto text-[12px] text-muted">{detail}</span>}
     </label>
   );

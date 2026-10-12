@@ -3623,6 +3623,7 @@ dependencies = [
  "nuzky-analysis",
  "nuzky-chatgpt",
  "nuzky-engine",
+ "nuzky-interchange",
  "nuzky-mcp",
  "nuzky-session",
  "nuzky-vision",
@@ -3710,6 +3711,7 @@ name = "nuzky-interchange"
 version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
+ "dirs 6.0.0",
  "percent-encoding",
  "serde",
  "serde_json",

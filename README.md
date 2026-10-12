@@ -25,7 +25,7 @@ Cut a talking video by deleting words from its transcript, caption it with speec
 - Style text with an outline, a background box, size, colour, position, rotation and opacity.
 - Export MP4 (H.264 and AAC) from the same renderer as the preview, so the file matches what you saw. Presets for Reels & TikTok, YouTube Shorts, YouTube 1080p and 4K, the Instagram feed and square posts write the platform's size with the sound levelled to −14 LUFS and true peak at most −1 dBTP.
 - Let any MCP-capable AI agent edit the open project while you watch; each run undoes as one step. Connect agent sets up Claude Code and Codex in one click, and the AI panel chats with your own Claude Code or Codex.
-- Teach Nuzky a creator's style from raw recordings and their finished cuts, or from timelines they cut in another editor and exported as OpenTimelineIO (.otio), on Your style in the app or with `nuzky style learn`. It writes an `EDIT.md` that agents follow, takes the creator's own rules in plain words, and lets them talk the style through with the AI.
+- Teach Nuzky a creator's style from raw recordings and their finished cuts, or from timelines they cut in another editor: CapCut drafts as they are, or exported as OpenTimelineIO (.otio), on Your style in the app or with `nuzky style learn`. It writes an `EDIT.md` that agents follow, takes the creator's own rules in plain words, and lets them talk the style through with the AI.
 
 Nuzky itself sends nothing you edit anywhere. It goes online only to download models with a pinned checksum and, at most once a day, to read the latest version number from GitHub; you can turn that check off on the home screen. An AI agent you connect runs under your own account and sends what it reads to its provider.
 
@@ -81,6 +81,7 @@ cargo run -p nuzky-cli -- render project.nuzky reel.mp4 --preset reels
 cargo run -p nuzky-cli -- render project.nuzky video.mp4 --preset youtube_1080p
 cargo run -p nuzky-cli -- style learn raw.mov reel.mp4 raw2.mov reel2.mp4
 cargo run -p nuzky-cli -- style learn --from reel.otio --from reel2.otio
+cargo run -p nuzky-cli -- style learn --from "$HOME/Movies/CapCut/User Data/Projects/com.lveditor.draft/0928"
 cargo run -p nuzky-cli -- style compare raw.mov reel.mp4 project.nuzky
 ```
 

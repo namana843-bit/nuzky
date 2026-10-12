@@ -1189,7 +1189,7 @@ fn project_picture(project: &Project, clips: &[&nuzky_engine::model::Clip]) -> P
         }
     }
     zooms.sort_by_key(|z| z.start_us);
-    Picture { skipped: None, captions, caption_band, framing, zooms }
+    Picture { skipped: None, captions, caption_band, framing, zooms, look: None }
 }
 
 /// A project to learn from as it was at one moment, with the AI runs before it, so what it
@@ -1480,6 +1480,7 @@ mod tests {
                 caption_band: Some((0.6, 0.66)),
                 framing: Vec::new(),
                 zooms: Vec::new(),
+                look: None,
             },
             places: None,
             corrections: Vec::new(),

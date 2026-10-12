@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CaptionPreset, ChatGptStatus, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelCandidate, ReelFraming, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CapCutDraft, CaptionPreset, ChatGptStatus, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelCandidate, ReelFraming, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -173,6 +173,8 @@ export const api = {
   startStyleLearning: (pairs: StylePair[]) => invoke<string>("start_style_learning", { pairs }),
   /** What each timeline file from another editor offers to learn from, read at once. */
   styleReadTimelines: (paths: string[]) => invoke<TimelinePlan[]>("style_read_timelines", { paths }),
+  /** CapCut's drafts, newest first: where CapCut keeps them on this computer, or in `folder`, which may be one draft. */
+  styleCapCutDrafts: (folder: string | null) => invoke<CapCutDraft[]>("style_capcut_drafts", { folder }),
   /** Learns from timelines cut in another editor as a `style` job, which ends with EDIT.md as it would be. */
   startTimelineLearning: (paths: string[]) => invoke<string>("start_timeline_learning", { paths }),
   /** Makes what that job learned the style, as it showed it; STYLE_CHANGED when the style changed since. */
