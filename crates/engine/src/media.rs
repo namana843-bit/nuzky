@@ -136,16 +136,17 @@ fn tile_grid(input: &ff::format::context::Input) -> Option<TileGrid> {
     fits.then_some(TileGrid { tiles, canvas, picture, orientation })
 }
 
-/// Decodes every tile of `grid` and joins them into the picture, as FFmpeg's command-line tool does.
 fn join_tiles(
     input: &mut ff::format::context::Input,
     decoder: &mut ff::decoder::Video,
     grid: &TileGrid,
 ) -> Result<frame::Video> {
+    // A grid may show one tile in several places.
     let mut packets = input.packets().filter_map(|(stream, mut packet)| {
-        let tile = grid.tiles.iter().position(|tile| tile.0 == stream.index())?;
-        packet.set_pts(Some(tile as i64));
-        Some(packet)
+        grid.tiles.iter().any(|tile| tile.0 == stream.index()).then(|| {
+            packet.set_pts(Some(stream.index() as i64));
+            packet
+        })
     });
     let (mut canvas, mut tile, mut sent_all) = (None, frame::Video::empty(), false);
     while !sent_all {
@@ -161,12 +162,13 @@ fn join_tiles(
             }
         }
         while decoder.receive_frame(&mut tile).is_ok() {
-            let Some(&(_, x, y)) = tile.pts().and_then(|i| grid.tiles.get(usize::try_from(i).ok()?)) else { continue };
             let canvas = match &mut canvas {
                 Some(canvas) => canvas,
                 None => canvas.insert(blank(&tile, grid.canvas)?),
             };
-            paste(canvas, &tile, x, y);
+            for &(_, x, y) in grid.tiles.iter().filter(|(stream, _, _)| tile.pts() == Some(*stream as i64)) {
+                paste(canvas, &tile, x, y);
+            }
         }
     }
     let mut canvas = canvas.ok_or_else(|| anyhow!("No tile of the picture decodes"))?;
@@ -183,7 +185,7 @@ fn join_tiles(
     Ok(canvas)
 }
 
-/// A black picture of `width` × `height` in the pixel format and colours of `like`.
+/// Black, so a tile that does not decode never shows what the memory held.
 fn blank(like: &frame::Video, (width, height): (u32, u32)) -> Result<frame::Video> {
     let mut canvas = frame::Video::empty();
     canvas.set_format(like.format());
@@ -205,10 +207,14 @@ fn blank(like: &frame::Video, (width, height): (u32, u32)) -> Result<frame::Vide
             height as i32,
         );
     }
+    // HEIF without a colour matrix is BT.601, as FFmpeg and libheif read it; by its height the joined picture
+    // would pass for HD video.
+    if canvas.color_space() == color::Space::Unspecified {
+        canvas.set_color_space(color::Space::SMPTE170M);
+    }
     Ok(canvas)
 }
 
-/// Copies `tile` onto `canvas` with its top left corner at (`x`, `y`), cut at the canvas edges.
 fn paste(canvas: &mut frame::Video, tile: &frame::Video, x: i32, y: i32) {
     let format = canvas.format();
     let Some(descriptor) = format.descriptor() else { return };
@@ -495,7 +501,6 @@ pub struct VideoDecoder {
     /// The only frame of a still image, replayed after seeking: image2 loses it when seeked.
     image: Option<DecodedFrame>,
     image_rewound: bool,
-    /// The tiles of a picture stored as a grid, joined into that frame.
     grid: Option<TileGrid>,
     /// First frame after a seek, decoded to check where the seek landed.
     pending: Option<DecodedFrame>,

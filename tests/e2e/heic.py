@@ -1,5 +1,6 @@
 import base64
 import io
+import json
 import math
 import struct
 import subprocess
@@ -43,20 +44,12 @@ def heic(path, source, columns, rows, width, height, rotation=0, mirror=None, hl
     table = data
     for kind in ('moov', 'trak', 'mdia', 'minf', 'stbl'):
         table = next(payload for name, payload, _ in boxes(table) if name == kind)
-    entries = {name: payload for name, payload, _ in boxes(table)}
-    visual = next(payload for name, payload, _ in boxes(entries['stsd'], 8) if name == 'hvc1')
+    stsd = next(payload for name, payload, _ in boxes(table) if name == 'stsd')
+    visual = next(payload for name, payload, _ in boxes(stsd, 8) if name == 'hvc1')
     hvcc = next(raw for name, _, raw in boxes(visual, 78) if name == 'hvcC')
-    fixed, count = struct.unpack_from('>II', entries['stsz'], 4)
-    sizes = [fixed] * count if fixed else list(struct.unpack_from(f'>{count}I', entries['stsz'], 12))
-    chunks = list(struct.iter_unpack('>I', entries['stco'][8:]))
-    mapping = list(struct.iter_unpack('>III', entries['stsc'][8:]))
-    samples = []
-    for chunk, (offset,) in enumerate(chunks, 1):
-        per_chunk = next(row[1] for row in reversed(mapping) if row[0] <= chunk)
-        for _ in range(per_chunk):
-            length = sizes[len(samples)]
-            samples.append(data[offset:offset + length])
-            offset += length
+    packets = json.loads(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'packet=pos,size', '-of', 'json', str(mp4)],
+                                        capture_output=True, text=True, check=True).stdout)['packets']
+    samples = [data[int(p['pos']):int(p['pos']) + int(p['size'])] for p in packets]
     mp4.unlink()
     assert len(samples) == columns * rows, (len(samples), columns, rows)
     ids = list(range(2, len(samples) + 2))
