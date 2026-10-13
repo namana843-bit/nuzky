@@ -869,6 +869,25 @@ async fn new_project_from_media(app: AppHandle, paths: Vec<String>) -> CmdResult
     Ok(ImportResult { snapshot, added, failed })
 }
 
+/// A new project of the CapCut draft in the folder `path`, opened at once; the draft stays as it was. The
+/// snapshot's project says what did not come over.
+#[tauri::command]
+async fn open_capcut_draft(app: AppHandle, path: String) -> CmdResult<Snapshot> {
+    let draft = std::fs::canonicalize(&path).map_err(|_| format!("The draft {path} is not there any more."))?;
+    let families = list_fonts(app.state());
+    let fonts: Vec<String> = families.bundled.into_iter().chain(families.system).collect();
+    let project = tauri::async_runtime::spawn_blocking(move || nuzky_mcp::import::capcut_draft(&draft, &fonts))
+        .await
+        .map_err(err)?
+        .map_err(err)?;
+    let path = store::new_project_path();
+    store::create(&path, &project).map_err(err)?;
+    // The panel's agent works on the open project only; never stopped while holding the session.
+    app.state::<agent_panel::AgentPanel>().stop();
+    let state = app.state::<AppState>();
+    state.replace_project(&mut state.session.lock().unwrap(), path)
+}
+
 /// The canvas for a picture of this size: a common format of the same shape, or 1080 on its short side.
 fn canvas_for(width: u32, height: u32) -> (u32, u32) {
     const FORMATS: [(u32, u32); 4] = [(1080, 1920), (1920, 1080), (1080, 1080), (1080, 1350)];
@@ -1146,6 +1165,7 @@ pub fn run() {
             list_fonts,
             new_project,
             new_project_from_media,
+            open_capcut_draft,
             open_project,
             library::library,
             library::project_poster,
@@ -1201,6 +1221,7 @@ pub fn run() {
             style::start_style_learning,
             style::style_read_timelines,
             style::style_capcut_drafts,
+            style::capcut_draft_cover,
             style::start_timeline_learning,
             style::style_use_learned,
             updates::check_for_update,

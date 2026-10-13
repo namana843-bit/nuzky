@@ -71,9 +71,11 @@ pub struct Renderer {
 /// What a renderer draws for a clip with a background whose person matte is not made yet.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pending {
-    /// Fails with `MATTE_MISSING`, as export, a saved frame and anything an agent inspects must.
+    /// Fails with `MATTE_MISSING`, as export, a saved frame and anything an agent inspects must; a media file
+    /// that is not there or does not decode fails too.
     Fail,
-    /// The clip as recorded, as the preview shows it until the matte is made.
+    /// The clip as recorded, as the preview shows it until the matte is made; a media file that is not there or
+    /// does not decode draws nothing, as in playback, so the rest of the frame still shows.
     Original,
 }
 
@@ -561,6 +563,9 @@ impl Renderer {
                 let frame = worker.get(source_t, size, playing, wait == Wait::Exact);
                 if wait == Wait::Exact {
                     if let Some(error) = worker.error() {
+                        if matches!(self.mattes, Some((_, Pending::Original))) {
+                            return Ok(None);
+                        }
                         bail!("Cannot decode {}: {error}", asset.path);
                     }
                     if !worker.exact || frame.is_none() {

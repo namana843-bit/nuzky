@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { followPointer } from "../../lib/drag";
+import { addDraftFolder, useCapCut } from "../../lib/capcut";
 import { useStyle } from "../../lib/style";
 import { StylePage } from "../style/StylePage";
 import { AiPanel } from "../ai/AiPanel";
@@ -62,6 +63,7 @@ import type { Collection, LibraryProject, Said } from "../../lib/types";
 import { AiRunBar, JobIndicator } from "../TopBar";
 import { Button, IconButton, Menu, type MenuEntry } from "../ui";
 import { ProjectCard } from "./ProjectCard";
+import { DraftsSection } from "./Drafts";
 import { Poster } from "./Poster";
 import { VersionRow } from "../Updates";
 import { FeedbackRow } from "../Feedback";
@@ -79,6 +81,7 @@ function newProjectItems(): MenuEntry[] {
     ...FORMATS.map((f) => ({ label: f.label, shortcut: f.hint, icon: <FormatShape width={f.width} height={f.height} size={14} />, run: () => newProject(f.width, f.height) })),
     "separator" as const,
     { label: "From videos…", shortcut: "First video's format", icon: <Film size={15} />, run: () => void pickVideosForNewProject() },
+    { label: "From a CapCut draft…", shortcut: "Its cut, captions and zooms", icon: <FolderInput size={15} />, run: () => void addDraftFolder() },
     { label: "Reels from a long video…", shortcut: "AI finds the moments", icon: <GalleryVerticalEnd size={15} />, run: () => void pickVideoForReels(openReelsToFind) },
   ];
 }
@@ -151,6 +154,9 @@ export function Home() {
   const searching = query.trim().length > 0;
   const found = useMemo(() => (searching ? sorted.filter((p) => matches(p, query, collections)) : sorted), [sorted, searching, query, collections]);
   const firstRun = filter === "all" && !searching && onlyPristine(projects, current);
+  // CapCut's drafts sit above all the projects, never in a collection or a search.
+  const drafts = filter === "all" && !searching && !firstRun;
+  const hasDrafts = useCapCut((s) => (s.drafts?.length ?? 0) > 0) && drafts;
   const hits = useMemo(
     () => (said.result && said.query === query ? said.result.hits.filter((h) => inView.some((p) => p.path === h.path)) : []),
     [said, query, inView],
@@ -454,7 +460,10 @@ export function Home() {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-24">
             {firstRun ? (
-              <FirstRun />
+              <>
+                <FirstRun />
+                <DraftsSection title="Continue a CapCut draft" className="mx-auto mt-12 max-w-[748px]" />
+              </>
             ) : projects === null ? (
               loadError ? (
                 <Empty icon={<AlertCircle size={28} className="text-danger" />} title="Your projects couldn't be listed">
@@ -468,11 +477,12 @@ export function Home() {
               )
             ) : (
               <>
+                {drafts && <DraftsSection title="CapCut drafts" className="mb-7 pt-1" />}
                 {found.length > 0 && (
                   <div ref={grid} role="listbox" aria-label="Projects" aria-multiselectable onKeyDown={onGridKey} className="flex flex-col gap-7 pt-1">
                     {sections.map((section) => (
                       <section key={section.title ?? "all"} role="group" aria-label={section.title ?? undefined}>
-                        {(section.title ?? (searching ? "Projects" : null)) && <h2 className="mb-3 text-[13px] font-semibold text-fg">{section.title ?? "Projects"}</h2>}
+                        {(section.title ?? (searching || hasDrafts ? "Projects" : null)) && <h2 className="mb-3 text-[13px] font-semibold text-fg">{section.title ?? "Projects"}</h2>}
                         <div className="grid grid-cols-[repeat(auto-fill,minmax(148px,168px))] gap-x-4 gap-y-5">
                           {section.items.map((p) => (
                             <ProjectCard

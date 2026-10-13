@@ -4,7 +4,7 @@
 //! write them. JianYing, CapCut's Chinese edition, encrypts its drafts: such a draft is recognised and
 //! refused, never decrypted.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -28,6 +28,8 @@ const COPY_DEPTH: usize = 3;
 const COPY_ENTRIES: usize = 5_000;
 
 pub const ENCRYPTED: &str = "JianYing encrypts its drafts, so Nuzky cannot read this one. Learn from the exported video and its recording instead.";
+/// The same, said where a draft is being opened as a project.
+pub const ENCRYPTED_OPEN: &str = "JianYing encrypts its drafts, so Nuzky cannot open this one. Export the video from JianYing and start a project from it instead.";
 
 /// Where CapCut keeps its drafts on this computer: under the local app data on Windows, under Movies
 /// in the home folder elsewhere.
@@ -177,6 +179,10 @@ struct Segment {
     common_keyframes: Vec<Value>,
     #[serde(default)]
     extra_material_refs: Vec<String>,
+    #[serde(default)]
+    enable_adjust: Option<bool>,
+    #[serde(default)]
+    enable_smart_color_adjust: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -187,6 +193,18 @@ struct Clip {
     transform: Option<Xy>,
     #[serde(default)]
     rotation: Option<f32>,
+    #[serde(default)]
+    alpha: Option<f32>,
+    #[serde(default)]
+    flip: Option<Flip>,
+}
+
+#[derive(Default, Deserialize)]
+struct Flip {
+    #[serde(default)]
+    horizontal: bool,
+    #[serde(default)]
+    vertical: bool,
 }
 
 #[derive(Clone, Copy, Default, Deserialize)]
@@ -272,6 +290,7 @@ pub fn read(bytes: &[u8], folder: &Path) -> Result<Read> {
     };
     // Text sizes are on a frame 1080 pixels across its shorter side.
     let text_scale = canvas.map_or(1.0, |c| c.width.min(c.height) as f32 / 1080.0);
+    let canvas_width = canvas.map(|c| c.width as f32);
     let mut unread = Unread::default();
     let mut copies = Copies { folder, found: HashMap::new() };
     for (index, value) in content.tracks.iter().enumerate() {
@@ -295,7 +314,7 @@ pub fn read(bytes: &[u8], folder: &Path) -> Result<Read> {
                 continue;
             }
             "adjust" => {
-                unread.add("Adjustments");
+                unread.add("Adjustment layers");
                 continue;
             }
             "sticker" => {
@@ -303,18 +322,18 @@ pub fn read(bytes: &[u8], folder: &Path) -> Result<Read> {
                 continue;
             }
             other => {
-                unread.add(format!("A track of kind {}", if other.is_empty() { "none" } else { other }));
+                unread.add(format!("A {} track", if other.is_empty() { "nameless" } else { other }));
                 continue;
             }
         };
-        // A hidden track is not in the finished video.
-        if track.attribute & 2 != 0 {
-            unread.add("A hidden track");
-            continue;
-        }
-        let muted = track.attribute & 1 != 0;
-        let mut read =
-            Track { name: format!("{} {}", track.kind, index + 1), kind, clips: Vec::new(), texts: Vec::new() };
+        let mut read = Track {
+            name: format!("{} {}", track.kind, index + 1),
+            kind,
+            hidden: track.attribute & 2 != 0,
+            muted: track.attribute & 1 != 0,
+            clips: Vec::new(),
+            texts: Vec::new(),
+        };
         let mut segments: Vec<Segment> = Vec::new();
         for value in &track.segments {
             match Segment::deserialize(value) {
@@ -336,22 +355,31 @@ pub fn read(bytes: &[u8], folder: &Path) -> Result<Read> {
                 };
                 match (track.kind.as_str(), category) {
                     ("text" | "subtitle", "texts") => {
-                        if let Some(text) = text_clip(segment, material, text_scale, &mut unread)? {
+                        if let Some(text) = text_clip(segment, material, text_scale, canvas_width, &mut unread)? {
+                            settings(segment, &materials, &mut unread);
+                            if !segment.common_keyframes.is_empty() {
+                                unread.add("Keyframes on texts");
+                            }
                             read.texts.push(text);
                         }
                     }
                     ("video", "videos") | ("audio", "audios") => {
-                        let clip = media_clip(segment, material, &materials, &mut copies, muted, &mut unread)?;
+                        let clip = media_clip(segment, material, &materials, &mut copies, &mut unread)?;
                         if let Some(mut clip) = clip {
                             // Into this clip from the one it follows straight on.
                             let joins = read.clips.last().is_some_and(|c| (c.end_us() - clip.start_us).abs() < 1_000);
                             clip.transition_in = before.filter(|_| joins);
+                            settings(segment, &materials, &mut unread);
                             read.clips.push(clip);
                         }
                         transition = segment.extra_material_refs.iter().find_map(|id| materials.transition(id));
                     }
                     (_, "drafts") => unread.add("A compound clip"),
-                    (kind, category) => unread.add(format!("{category} on a {kind} track")),
+                    (_, "stickers") => unread.add("Stickers"),
+                    (_, "text_templates") => unread.add("Text templates"),
+                    (kind, category) => {
+                        unread.add(format!("A part Nuzky does not read on a {kind} track ({category})"))
+                    }
                 }
                 Ok(())
             };
@@ -391,8 +419,8 @@ impl<'a> Materials<'a> {
             return None;
         }
         let name = material.get("name").and_then(Value::as_str).unwrap_or("").to_owned();
-        let half = us(material.get("duration").and_then(Value::as_f64).unwrap_or(0.0)).ok()?.max(0) / 2;
-        Some(Transition { kind: transition_kind(&name), name, before_us: half, after_us: half })
+        let whole = us(material.get("duration").and_then(Value::as_f64).unwrap_or(0.0)).ok()?.max(0);
+        Some(Transition { kind: transition_kind(&name), name, before_us: whole / 2, after_us: whole - whole / 2 })
     }
 
     /// A speed that changes along the clip, which CapCut calls a curve.
@@ -402,6 +430,74 @@ impl<'a> Materials<'a> {
                 && material.get("mode").and_then(Value::as_i64) == Some(1)
                 && material.get("curve_speed").is_some_and(|c| !c.is_null())
         })
+    }
+
+    fn refs<'r>(&'r self, refs: &'r [String], category: &'r str) -> impl Iterator<Item = &'a Value> + 'r {
+        refs.iter().filter_map(|id| self.get(id)).filter(move |(c, _)| *c == category).map(|(_, m)| m)
+    }
+}
+
+/// What CapCut does to a clip that Nuzky does not, each said once per clip that has it on.
+fn settings(segment: &Segment, materials: &Materials, unread: &mut Unread) {
+    let refs = &segment.extra_material_refs;
+    let number = |m: &Value, key: &str| m.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+    let on = |m: &Value, key: &str| m.get(key).and_then(Value::as_bool).unwrap_or(false);
+    // Every clip keeps its adjustments at 0, and automatic colour stays off until switched on.
+    let kind = |m: &Value| m.get("type").and_then(Value::as_str).unwrap_or("").to_owned();
+    let adjusted: Vec<String> =
+        materials.refs(refs, "effects").filter(|m| number(m, "value") != 0.0).map(kind).collect();
+    if adjusted.iter().any(|k| k == "filter") {
+        unread.add("Filters");
+    }
+    let automatic = segment.enable_smart_color_adjust && adjusted.iter().any(|k| k == "smart_color_adjust");
+    let by_hand =
+        segment.enable_adjust != Some(false) && adjusted.iter().any(|k| k != "filter" && k != "smart_color_adjust");
+    if automatic || by_hand {
+        unread.add("Color adjustments");
+    }
+    if materials.refs(refs, "realtime_denoises").any(|m| on(m, "is_denoise")) {
+        unread.add("Noise reduction");
+    }
+    let lists = [
+        ("video_effects", "Effects"),
+        ("filters", "Filters"),
+        ("audio_effects", "Voice effects"),
+        ("masks", "Masks"),
+        ("common_mask", "Masks"),
+        ("chromas", "Chroma key"),
+    ];
+    for (category, what) in lists {
+        if materials.refs(refs, category).next().is_some() {
+            unread.add(what);
+        }
+    }
+    if materials.refs(refs, "loudnesses").any(|m| on(m, "enable")) {
+        unread.add("Normalize loudness");
+    }
+    if materials.refs(refs, "vocal_beautifys").any(|m| on(m, "enable")) {
+        unread.add("Enhance voice");
+    }
+    if materials.refs(refs, "vocal_separations").any(|m| number(m, "choice") != 0.0) {
+        unread.add("Vocal isolation");
+    }
+    let animated = |m: &Value| m.get("animations").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+    if materials.refs(refs, "material_animations").any(animated) {
+        unread.add("Animations");
+    }
+    let custom = |m: &Value| {
+        m.get("type").and_then(Value::as_str).is_some_and(|t| t != "canvas_color")
+            || m.get("color").and_then(Value::as_str).is_some_and(|c| !c.is_empty() && !c.starts_with("#000000"))
+    };
+    if materials.refs(refs, "canvases").any(custom) {
+        unread.add("Canvas backgrounds");
+    }
+    if let Some(clip) = &segment.clip {
+        if clip.alpha.is_some_and(|a| a < 1.0) {
+            unread.add("Opacity");
+        }
+        if clip.flip.as_ref().is_some_and(|f| f.horizontal || f.vertical) {
+            unread.add("Flipped clips");
+        }
     }
 }
 
@@ -478,23 +574,24 @@ fn media_clip(
     material: &Value,
     materials: &Materials,
     copies: &mut Copies,
-    muted: bool,
     unread: &mut Unread,
 ) -> Result<Option<MediaClip>> {
     let (start_us, duration_us) = segment.target_timerange.us()?;
-    if material.get("type").and_then(Value::as_str) == Some("photo") {
-        unread.add("A photo");
-        return Ok(None);
-    }
-    let (source_in_us, source_us) = segment.source_timerange.context("it has no source range")?.us()?;
+    let still = material.get("type").and_then(Value::as_str) == Some("photo");
+    // A photo shows the same picture all along, whatever range of its own it names.
+    let (source_in_us, source_us) = match segment.source_timerange {
+        Some(range) if !still => range.us()?,
+        _ if still => (0, duration_us),
+        _ => bail!("it has no source range"),
+    };
     ensure!(source_in_us >= 0, "it starts before its media");
     if segment.reverse {
         unread.add("A clip played backwards");
         return Ok(None);
     }
-    let mut speed = segment.speed.unwrap_or(1.0);
+    let mut speed = if still { 1.0 } else { segment.speed.unwrap_or(1.0) };
     ensure!(speed.is_finite() && speed > 0.0, "its speed is {speed}");
-    if materials.curved(&segment.extra_material_refs) && duration_us > 0 {
+    if materials.curved(&segment.extra_material_refs) && duration_us > 0 && !still {
         unread.add("A speed ramp, read as its average speed");
         speed = source_us as f64 / duration_us as f64;
     }
@@ -508,6 +605,15 @@ fn media_clip(
         unread.add(format!("Media that is not a file on this computer: {name}"));
         return Ok(None);
     }
+    if cropped(material) {
+        unread.add("Cropping");
+    }
+    let size = |key: &str| material.get(key).and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok());
+    let media_size = size("width").zip(size("height")).filter(|(w, h)| *w > 0 && *h > 0);
+    let fade = |key: &str| -> i64 {
+        let fades = materials.refs(&segment.extra_material_refs, "audio_fades");
+        fades.filter_map(|m| m.get(key)?.as_f64()).find_map(|v| us(v).ok()).unwrap_or(0).max(0)
+    };
     let transform = segment.clip.as_ref().map(Clip::transform);
     let keyframes = match &segment.clip {
         Some(clip) => keyframes(segment, clip, source_in_us, speed, unread),
@@ -522,11 +628,24 @@ fn media_clip(
         start_us,
         duration_us,
         speed,
-        volume: Some(if muted { 0.0 } else { segment.volume.unwrap_or(1.0) }),
+        volume: Some(segment.volume.unwrap_or(1.0)),
         transform,
         keyframes,
         transition_in: None,
+        still,
+        media_size,
+        fade_in_us: fade("fade_in_duration"),
+        fade_out_us: fade("fade_out_duration"),
     }))
+}
+
+/// A part of the picture cut away: CapCut keeps the corners left, from 0 to 1 of the picture.
+fn cropped(material: &Value) -> bool {
+    let Some(crop) = material.get("crop") else { return false };
+    let at = |key: &str, whole: f64| crop.get(key).and_then(Value::as_f64).unwrap_or(whole);
+    [("upper_left_x", 0.0), ("upper_left_y", 0.0), ("lower_right_x", 1.0), ("lower_right_y", 1.0)]
+        .iter()
+        .any(|(key, whole)| (at(key, *whole) - whole).abs() > 1e-4)
 }
 
 /// Keyframes of where the picture sits, at every time any of its properties has one. CapCut times
@@ -614,7 +733,13 @@ struct TextContent {
     styles: Vec<Value>,
 }
 
-fn text_clip(segment: &Segment, material: &Value, text_scale: f32, unread: &mut Unread) -> Result<Option<TextClip>> {
+fn text_clip(
+    segment: &Segment,
+    material: &Value,
+    text_scale: f32,
+    canvas_width: Option<f32>,
+    unread: &mut Unread,
+) -> Result<Option<TextClip>> {
     let (start_us, duration_us) = segment.target_timerange.us()?;
     let raw = material.get("content").and_then(Value::as_str).unwrap_or("");
     let Ok(content) = serde_json::from_str::<TextContent>(raw) else {
@@ -634,19 +759,44 @@ fn text_clip(segment: &Segment, material: &Value, text_scale: f32, unread: &mut 
         .and_then(|s| s.get(0))
         .and_then(|s| Some((solid(s)?, s.get("width")?.as_f64()? as f32 * size_px)))
         .filter(|(_, width)| *width > 0.0);
+    // CapCut wraps lines at a share of the frame's width, before the text's own scale.
+    let number = |key: &str| material.get(key).and_then(Value::as_f64);
+    let wrap = number("line_max_width")
+        .filter(|w| w.is_finite() && *w > 0.0 && *w <= 4.0)
+        .zip(canvas_width)
+        .map(|(share, width)| share as f32 * width);
     let text_style = (size_px > 0.0).then(|| TextStyle {
         font,
         size: size_px,
         color: color.unwrap_or_else(|| "#ffffff".into()),
         bold: heavy || style("bold").and_then(Value::as_bool).unwrap_or(false),
         outline,
+        wrap,
     });
+    let shadow = material.get("has_shadow").and_then(Value::as_bool).unwrap_or(false)
+        || style("shadows").and_then(Value::as_array).is_some_and(|s| !s.is_empty());
+    let looks = [
+        (shadow, "Text shadows"),
+        (number("background_style").is_some_and(|s| s != 0.0), "Text backgrounds"),
+        (number("alignment").is_some_and(|a| a != 1.0), "Text aligned left or right"),
+        (number("typesetting").is_some_and(|t| t != 0.0), "Vertical text"),
+        (number("letter_spacing").is_some_and(|l| l != 0.0), "Letter spacing"),
+        (number("text_alpha").is_some_and(|a| a < 1.0), "Opacity"),
+        (
+            content.styles.iter().filter_map(|s| s.get("fill").and_then(solid)).collect::<HashSet<_>>().len() > 1,
+            "Words in other colours",
+        ),
+    ];
+    for (_, what) in looks.iter().filter(|(has, _)| *has) {
+        unread.add(*what);
+    }
     Ok(Some(TextClip {
         text: content.text,
         start_us,
         duration_us,
         transform: segment.clip.as_ref().map(Clip::transform),
         style: text_style,
+        caption: material.get("type").and_then(Value::as_str) == Some("subtitle"),
     }))
 }
 
@@ -730,7 +880,7 @@ mod tests {
     fn reads_the_cut_its_zoom_and_its_captions_from_a_macos_draft() {
         let read = read(MAC, Path::new("/drafts/Reel")).unwrap();
         let t = &read.timeline;
-        assert!(read.unread.is_empty(), "{:?}", read.unread);
+        assert_eq!(read.unread, ["Text shadows (3 times)"]);
         assert_eq!((t.name.as_str(), t.fps, t.size), ("Reel", Some(30.0), Some((1080, 1920))));
         let main = &t.tracks[0];
         assert_eq!(main.kind, TrackKind::Video);
@@ -746,6 +896,7 @@ mod tests {
         );
         assert_eq!(main.clips[0].path.as_deref(), Some(Path::new("/Users/creator/Movies/talk.mov")));
         assert_eq!(main.clips[0].volume, Some(1.0));
+        assert_eq!((main.clips[0].media_size, main.clips[0].still), (Some((1080, 1920)), false));
         // CapCut moves the picture up by 0.055 of half the frame: Nuzky moves it up by a quarter of that.
         let framed = main.clips[0].transform.unwrap();
         assert!(close(framed.scale, 1.3) && close(framed.x, 0.0) && close(framed.y, -0.02734375), "{framed:?}");
@@ -761,6 +912,7 @@ mod tests {
             said,
             [("Hello there", 0, 733_333), ("two words", 733_333, 233_333), ("and three more", 966_666, 500_000)]
         );
+        assert!(texts.iter().all(|t| t.caption), "CapCut made them from the speech");
         let place = texts[0].transform.unwrap();
         assert!(close(place.scale, 1.52) && close(place.y, 0.144_423_8), "{place:?}");
         let style = texts[0].style.clone().unwrap();
@@ -769,6 +921,8 @@ mod tests {
         assert!(close(style.size, 61.2), "{style:?}");
         let (outline, width) = style.outline.unwrap();
         assert!(outline == "#000000" && (width - 3.672).abs() < 0.01, "{width}");
+        // Lines wrap at 82% of the frame's width, before the caption's own scale.
+        assert!(close(style.wrap.unwrap(), 885.6), "{:?}", style.wrap);
 
         let song = &t.tracks[2].clips[0];
         assert_eq!(t.tracks[2].kind, TrackKind::Audio);
@@ -805,7 +959,7 @@ mod tests {
         clip["source_timerange"]["duration"] = json!(4_533_332);
         let read = read_value(&draft, Path::new("/d")).unwrap();
         assert_eq!(read.timeline.tracks[0].clips[1].speed, 2.0);
-        assert_eq!(read.unread, ["A speed ramp, read as its average speed"]);
+        assert_eq!(read.unread, ["A speed ramp, read as its average speed", "Text shadows (3 times)"]);
     }
 
     #[test]
@@ -867,14 +1021,13 @@ mod tests {
     }
 
     #[test]
-    fn hidden_tracks_photos_and_clips_played_backwards_are_not_in_the_cut() {
+    fn hidden_and_muted_tracks_and_photos_come_along_and_learning_leaves_them_out() {
         let mut draft = mac();
         let mut overlay = draft["tracks"][0].clone();
         overlay["attribute"] = json!(2);
         let tracks = draft["tracks"].as_array_mut().unwrap();
         tracks.push(overlay);
         tracks.push(json!({"type": "effect", "attribute": 0, "segments": []}));
-        // The audio track muted: its song plays at nothing.
         draft["tracks"][2]["attribute"] = json!(1);
         draft["tracks"][0]["segments"][1]["reverse"] = json!(true);
         draft["materials"]["videos"]
@@ -885,12 +1038,39 @@ mod tests {
         draft["tracks"][0]["segments"][0]["material_id"] = json!("gone");
         let read = read_value(&draft, Path::new("/d")).unwrap();
         let tracks = &read.timeline.tracks;
-        assert_eq!(tracks.len(), 3, "the hidden track and the effects are left out");
+        assert_eq!(tracks.len(), 4, "only the effects are left out");
+        // The photo keeps its place and shows its one picture all along, whatever range it names.
+        let photo = &tracks[0].clips[..];
+        assert_eq!(photo.len(), 1);
+        assert!(photo[0].still && photo[0].speed == 1.0 && photo[0].source_in_us == 0, "{photo:?}");
+        assert_eq!(
+            (photo[0].start_us, photo[0].duration_us, photo[0].source_out_us),
+            (4_466_666, 5_333_334, 5_333_334)
+        );
+        assert!(tracks[3].hidden && !tracks[0].hidden && tracks[3].clips.len() == 3);
+        // A muted track keeps its clips' own volume, so turning its sound back on brings them back as they were.
+        assert!(tracks[2].muted && tracks[2].clips[0].volume.is_some_and(|v| v > 0.0));
+        assert_eq!(
+            read.unread,
+            ["A clip played backwards", "A part whose material is missing", "Effects", "Text shadows (3 times)"]
+        );
+
+        // Learning hears and sees only what the finished video plays.
+        let played = read.played();
+        let tracks = &played.timeline.tracks;
+        assert_eq!(tracks.len(), 3);
         assert!(tracks[0].clips.is_empty());
         assert_eq!(tracks[2].clips[0].volume, Some(0.0));
         assert_eq!(
-            read.unread,
-            ["A clip played backwards", "A hidden track", "A part whose material is missing", "A photo", "Effects"]
+            played.unread,
+            [
+                "A clip played backwards",
+                "A hidden track",
+                "A part whose material is missing",
+                "A photo",
+                "Effects",
+                "Text shadows (3 times)"
+            ]
         );
     }
 
@@ -923,7 +1103,7 @@ mod tests {
         let read = read_value(&draft, &dir).unwrap();
         let paths: Vec<_> = read.timeline.tracks[0].clips.iter().map(|c| c.path.clone().unwrap()).collect();
         assert_eq!(paths, [dir.join("Resources/combination/part.mp4"), dir.join("assets/video/broll.mp4")]);
-        assert_eq!(read.unread, [r"Media that is not a file on this computer: talk.mov"]);
+        assert_eq!(read.unread, [r"Media that is not a file on this computer: talk.mov", "Text shadows (3 times)"]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

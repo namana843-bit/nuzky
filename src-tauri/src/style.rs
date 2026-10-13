@@ -59,7 +59,8 @@ pub async fn style_capcut_drafts(folder: Option<String>) -> CmdResult<Vec<CapCut
         capcut::drafts(&folder)
             .into_iter()
             .map(|d| CapCutDraft {
-                path: d.path.display().to_string(),
+                // As a project opened from it names it.
+                path: std::fs::canonicalize(&d.path).unwrap_or(d.path).display().to_string(),
                 name: d.name,
                 modified_ms: d.modified_ms,
                 duration_us: d.duration_us,
@@ -67,6 +68,24 @@ pub async fn style_capcut_drafts(folder: Option<String>) -> CmdResult<Vec<CapCut
             .collect()
     })
     .await
+    .map_err(err)
+}
+
+/// The picture CapCut keeps of the draft in the folder `path`, as a PNG data URL, or none.
+#[tauri::command]
+pub async fn capcut_draft_cover(app: AppHandle, path: String) -> CmdResult<Option<String>> {
+    const MAX_COVER: u64 = 16 << 20;
+    const HEIGHT: f32 = 360.0;
+    let cover = Path::new(&path).join("draft_cover.jpg");
+    tauri::async_runtime::spawn_blocking(move || {
+        if !std::fs::metadata(&cover).is_ok_and(|m| m.is_file() && m.len() <= MAX_COVER) {
+            return Ok(None);
+        }
+        let asset = nuzky_engine::media::probe(&cover, nuzky_engine::edit::new_id())?;
+        crate::thumbs::picture(&app.state::<AppState>().cache_dir, &asset, HEIGHT)
+    })
+    .await
+    .map_err(err)?
     .map_err(err)
 }
 

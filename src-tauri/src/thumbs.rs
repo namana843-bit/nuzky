@@ -11,6 +11,11 @@ const THUMB_HEIGHT: f32 = 120.0;
 const MAX_SPRITE_PIXELS: u64 = 4_000_000;
 
 pub fn thumbnail(cache_dir: &Path, asset: &Asset) -> Result<Option<String>> {
+    picture(cache_dir, asset, THUMB_HEIGHT)
+}
+
+/// A PNG of the asset's picture `height` pixels high, from a tenth of the way in for a video.
+pub fn picture(cache_dir: &Path, asset: &Asset, height: f32) -> Result<Option<String>> {
     if asset.kind == AssetKind::Audio || asset.width == 0 {
         return Ok(None);
     }
@@ -26,7 +31,7 @@ pub fn thumbnail(cache_dir: &Path, asset: &Asset) -> Result<Option<String>> {
         }
     }
     let Some((t, f)) = picked else { return Ok(None) };
-    let display = (asset.width as f32 * THUMB_HEIGHT / asset.height as f32, THUMB_HEIGHT);
+    let display = (asset.width as f32 * height / asset.height as f32, height);
     let (w, h) = decode_size(decoder.source_size(), asset.rotation, display, u32::MAX);
     let frame = decoder.convert(&f, t, w, h)?;
     let (rgba, w, h) = orient(&frame.data, frame.width, frame.height, asset);

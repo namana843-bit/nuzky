@@ -58,6 +58,10 @@ export const api = {
   /** A new project with the media on its timeline, in the format of the first picture. */
   newProjectFromMedia: (paths: string[]) =>
     invoke<{ snapshot: Snapshot; added: string[]; failed: { path: string; error: string }[] }>("new_project_from_media", { paths }),
+  /** The CapCut draft in that folder as a new project, opened at once; the draft stays as it was. */
+  openCapCutDraft: (path: string) => invoke<Snapshot>("open_capcut_draft", { path }),
+  /** A PNG data URL of the picture CapCut keeps of a draft, or null. */
+  capCutDraftCover: (path: string) => invoke<string | null>("capcut_draft_cover", { path }),
   library: () => invoke<Library>("library"),
   /** A PNG data URL of the project's picture, or null when it has none. */
   projectPoster: (path: string) => invoke<string | null>("project_poster", { path }),

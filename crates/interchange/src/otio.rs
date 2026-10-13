@@ -246,7 +246,14 @@ fn track(value: &Value, folder: &Path, out: &mut ImportedTimeline, unread: &mut 
     }
     effects(&track.effects, unread);
     markers(&track.markers, 0, 0, 1.0, &mut out.markers, unread);
-    let mut read = Track { name: track.name.unwrap_or_default(), kind, clips: Vec::new(), texts: Vec::new() };
+    let mut read = Track {
+        name: track.name.unwrap_or_default(),
+        kind,
+        hidden: false,
+        muted: false,
+        clips: Vec::new(),
+        texts: Vec::new(),
+    };
     let mut start_us = 0;
     let mut transition: Option<Transition> = None;
     for child in &track.children {
@@ -349,7 +356,14 @@ fn clip_item(
     };
     match media_reference.parameters.get("text").and_then(Value::as_str) {
         Some(text) if media_reference.generator_kind.is_some() => {
-            track.texts.push(TextClip { text: text.to_owned(), start_us, duration_us, transform: None, style: None });
+            track.texts.push(TextClip {
+                text: text.to_owned(),
+                start_us,
+                duration_us,
+                transform: None,
+                style: None,
+                caption: false,
+            });
             return Ok(duration_us);
         }
         _ => {}
@@ -396,6 +410,10 @@ fn clip_item(
         transform: None,
         keyframes: Vec::new(),
         transition_in: None,
+        still: false,
+        media_size: None,
+        fade_in_us: 0,
+        fade_out_us: 0,
     });
     Ok(duration_us)
 }
@@ -612,7 +630,8 @@ mod tests {
                 start_us: 3_000_000,
                 duration_us: 1_000_000,
                 transform: None,
-                style: None
+                style: None,
+                caption: false
             }]
         );
         assert_eq!(

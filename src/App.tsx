@@ -30,6 +30,8 @@ import { Button, DisabledHint, Splitter } from "./components/ui";
 import { Home } from "./components/home/Home";
 import { Launcher } from "./components/home/Launcher";
 import { SwitchDialog } from "./components/home/SwitchConfirm";
+import { OpenedDraftDialog } from "./components/home/OpenedDraftDialog";
+import { openDraft, useCapCut, openDraftFolder } from "./lib/capcut";
 import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
 import { useSounds } from "./lib/sounds";
@@ -408,7 +410,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __nuzky: { importPaths, store: useEditor, cover: useCover, reels: useReels, openReelsToFind, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, addProjects, findDrafts, newProjectFromMedia, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds, previewWindow: appWindow },
+    __nuzky: { importPaths, store: useEditor, cover: useCover, reels: useReels, openReelsToFind, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, addProjects, findDrafts, newProjectFromMedia, capcut: useCapCut, openDraft, openDraftFolder, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds, previewWindow: appWindow },
   });
 
 async function startEditor() {
@@ -608,6 +610,7 @@ export default function App() {
       {learnOpen && <LearnDialog />}
       <SwitchDialog />
       <SpeechModelDialog />
+      <OpenedDraftDialog />
       {/* On the home screen they sit at the grid's left edge, clear of the sidebar; in the editor, clear of a panel docked left. */}
       <Toasts bottom={home ? 18 : panes.timeline + 18} left={home ? 268 : dock.open && dock.mode === "left" ? dock.width + 24 : 18} />
       <DisabledHint />

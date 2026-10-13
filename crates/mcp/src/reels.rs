@@ -230,6 +230,7 @@ pub fn make(
         reel.name = candidate.title.clone();
         reel.reel_candidates.clear();
         reel.thumbnails.clear();
+        reel.imported = None;
         frame(&mut reel, framing)?;
         nuzky_session::validate(&reel)?;
         planned.push((candidate, reel));

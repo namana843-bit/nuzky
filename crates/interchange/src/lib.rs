@@ -45,6 +45,10 @@ pub enum TrackKind {
 pub struct Track {
     pub name: String,
     pub kind: TrackKind,
+    /// Left out of the finished video.
+    pub hidden: bool,
+    /// Its clips play no sound, whatever their volume.
+    pub muted: bool,
     /// In timeline order.
     pub clips: Vec<MediaClip>,
     pub texts: Vec<TextClip>,
@@ -73,6 +77,13 @@ pub struct MediaClip {
     pub keyframes: Vec<Keyframe>,
     /// Into this clip from the one before it, or from nothing.
     pub transition_in: Option<Transition>,
+    /// A still picture, such as a photo, shown for the whole clip.
+    pub still: bool,
+    /// Width and height of the media's picture, when the file says.
+    pub media_size: Option<(u32, u32)>,
+    /// How long its sound fades in and out.
+    pub fade_in_us: i64,
+    pub fade_out_us: i64,
 }
 
 impl MediaClip {
@@ -125,6 +136,8 @@ pub struct TextClip {
     pub transform: Option<Transform>,
     /// How it is drawn, when the file says.
     pub style: Option<TextStyle>,
+    /// Words said in the video, as captions made from speech are.
+    pub caption: bool,
 }
 
 /// As Nuzky draws text; sizes are pixels of the timeline's frame, before the clip's scale.
@@ -138,6 +151,8 @@ pub struct TextStyle {
     pub bold: bool,
     /// Colour and width.
     pub outline: Option<(String, f32)>,
+    /// How wide its lines run before they wrap, when the file says.
+    pub wrap: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -154,6 +169,32 @@ pub struct Marker {
 pub struct Read {
     pub timeline: ImportedTimeline,
     pub unread: Vec<String>,
+}
+
+impl Read {
+    /// Only what the finished video plays sound and picture of from its media: hidden tracks and
+    /// stills left out and muted tracks silent, each kind said among what was not read.
+    pub fn played(mut self) -> Self {
+        let hidden = self.timeline.tracks.iter().filter(|t| t.hidden).count();
+        self.timeline.tracks.retain(|t| !t.hidden);
+        let mut stills = 0;
+        for track in &mut self.timeline.tracks {
+            stills += track.clips.iter().filter(|c| c.still).count();
+            track.clips.retain(|c| !c.still);
+            if track.muted {
+                track.clips.iter_mut().for_each(|c| c.volume = Some(0.0));
+            }
+        }
+        for (n, what) in [(hidden, "A hidden track"), (stills, "A photo")] {
+            match n {
+                0 => {}
+                1 => self.unread.push(what.into()),
+                n => self.unread.push(format!("{what} ({n} times)")),
+            }
+        }
+        self.unread.sort();
+        self
+    }
 }
 
 /// Reads the timeline file at `path`, by its extension, or the CapCut draft in the folder `path`.

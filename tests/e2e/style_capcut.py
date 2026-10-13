@@ -198,5 +198,7 @@ def style_capcut(r):
 
     r.s.run(CLICK_TEXT, 'Use as my style', DIALOG)
     r.check('Use as my style writes EDIT.md as shown', wait(lambda: edit_md(r) == preview, 10), (edit_md(r) or '')[:200])
-    r.check('the style says where it was learned', any(s['kind'] == 'timeline' and s['title'] == 'talk.mp4 in Talking reel' for s in view(r)['sources']), view(r)['sources'])
+    # What was learned is kept just after EDIT.md is written.
+    learned = lambda: any(s['kind'] == 'timeline' and s['title'] == 'talk.mp4 in Talking reel' for s in view(r)['sources'])
+    r.check('the style says where it was learned', wait(learned, 10), view(r)['sources'])
     r.check('no error toast', not r.errors(), r.errors())

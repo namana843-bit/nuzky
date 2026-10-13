@@ -24,6 +24,7 @@ import {
   MessageSquareText,
   RefreshCw,
   Scissors,
+  Sparkles,
   SquarePen,
   Undo2,
   X,
@@ -52,6 +53,7 @@ import {
 import { DOCK_LABELS, TOO_NARROW, useDock, useDockLayout, type DockMode } from "../../lib/dock";
 import { api } from "../../lib/api";
 import { copyText } from "../../lib/clipboard";
+import { FINISH_DRAFT } from "../../lib/capcut";
 import { downloadModels, useCover } from "../../lib/cover";
 import { openRecap, undoAction, undoStep, useEditor } from "../../lib/store";
 import { formatTime } from "../../lib/time";
@@ -518,6 +520,8 @@ const STARTERS: [ReactNode, string][] = [
   // Puts its chip in the field rather than its text: the agent then gets the MCP prompt `thumbnail`.
   [<ImageIcon size={14} />, "Make a thumbnail"],
 ];
+/** First for a project opened from a CapCut draft; it puts the whole request in the field. */
+const DRAFT_STARTER: [ReactNode, string] = [<Sparkles size={14} />, "Finish this draft in my style"];
 const STYLE_STARTERS: [ReactNode, string][] = [
   [<MessageSquareText size={14} />, "What do you cut in my videos, and why?"],
   [<MessageSquareText size={14} />, "Never cut my sign-off at the end"],
@@ -567,6 +571,7 @@ function Empty() {
   const chatgptReady = useChatGpt((s) => planReady(s.status));
   const error = useAgent((s) => s.agentsError);
   const blocked = useEditor((s) => !!s.aiRun);
+  const draft = useEditor((s) => !!s.snap?.project.imported) && about === "project";
   if (error) return <div className="mt-auto"><ErrorNotice code="AGENT_FAILED" message={error} /></div>;
   if (agents === null) return <p className="mt-auto px-1 text-[12px] text-muted">Looking for your AI…</p>;
   if (agent === "chatgpt" && !chatgptReady) return <ChatGptSignIn />;
@@ -575,7 +580,7 @@ function Empty() {
       <p className="mb-2 px-2 text-[12px] text-muted">
         {about === "style" ? "Tell the AI how you edit. Once you agree, your style changes here at once, with Undo." : "Edits show up live. One Undo takes back a whole run."}
       </p>
-      {(about === "style" ? STYLE_STARTERS : STARTERS).map(([icon, text]) => (
+      {(about === "style" ? STYLE_STARTERS : draft ? [DRAFT_STARTER, ...STARTERS] : STARTERS).map(([icon, text]) => (
         <button
           key={text}
           type="button"
@@ -586,7 +591,7 @@ function Empty() {
               ? undefined
               : (e) => {
                   if (text === "Make a thumbnail") makeThumbnail();
-                  else useAgent.setState({ draft: text });
+                  else useAgent.setState({ draft: text === DRAFT_STARTER[1] ? FINISH_DRAFT : text });
                   // The field of this panel: the editor's stays mounted behind the home screen.
                   e.currentTarget.closest("aside")?.querySelector("textarea")?.focus();
                 }

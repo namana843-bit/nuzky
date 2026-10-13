@@ -6,8 +6,9 @@ use nuzky_engine::{
     Project,
     model::{
         Asset, AssetKind, Background, Clip, ClipContent, MAX_BORDER_WIDTH, MAX_CORRECTION_CHARS, MAX_FONT_HEIGHT_RATIO,
-        MAX_REEL_HOOK_CHARS, MAX_REEL_TITLE_CHARS, MAX_REEL_WHY_CHARS, MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION,
-        ReelCandidate, ReelStatus, TextStyle, Thumbnail, TrackKind, Transform, max_stroke_width,
+        MAX_LEFT_OUT, MAX_LEFT_OUT_CHARS, MAX_REEL_HOOK_CHARS, MAX_REEL_TITLE_CHARS, MAX_REEL_WHY_CHARS,
+        MAX_TEXT_WIDTH_RATIO, PROJECT_VERSION, ReelCandidate, ReelStatus, TextStyle, Thumbnail, TrackKind, Transform,
+        max_stroke_width,
     },
 };
 
@@ -60,7 +61,23 @@ pub fn validate(project: &Project) -> Result<()> {
     }
     word_corrections(project)?;
     thumbnails(project)?;
+    imported(project)?;
     reel_candidates(project)
+}
+
+/// The app shows these lines as they are, so each is one short line, and there are not unboundedly many.
+fn imported(project: &Project) -> Result<()> {
+    let Some(imported) = &project.imported else { return Ok(()) };
+    let line = |text: &str, max: usize| text.chars().count() <= max && !text.chars().any(char::is_control);
+    ensure!(
+        line(&imported.editor, 40) && line(&imported.path, 4096) && imported.modified_ms >= 0,
+        "INVALID_PROJECT: the editor and the path an imported timeline came from are single lines"
+    );
+    ensure!(
+        imported.left_out.len() <= MAX_LEFT_OUT && imported.left_out.iter().all(|l| line(l, MAX_LEFT_OUT_CHARS)),
+        "INVALID_PROJECT: at most {MAX_LEFT_OUT} lines of what did not come over, each one line of up to {MAX_LEFT_OUT_CHARS} characters"
+    );
+    Ok(())
 }
 
 /// More than a long recording has words, so a project file cannot grow without bound.
