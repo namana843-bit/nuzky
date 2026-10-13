@@ -30,7 +30,29 @@ pub struct Project {
     /// Moments of a long video that could each be a reel of their own, in timeline order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reel_candidates: Vec<ReelCandidate>,
+    /// The timeline of another editor the project was opened from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional = nullable))]
+    pub imported: Option<Imported>,
 }
+
+/// A timeline cut in another editor, such as a CapCut draft, as it was opened into this project.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Imported {
+    /// Such as "CapCut".
+    pub editor: String,
+    /// The timeline's folder or file, as it was opened. Opening never changes it.
+    pub path: String,
+    /// One line for each kind of thing in it that did not come over, in plain words.
+    pub left_out: Vec<String>,
+}
+
+/// The most lines an imported timeline keeps of what did not come over, and the longest of them.
+pub const MAX_LEFT_OUT: usize = 200;
+pub const MAX_LEFT_OUT_CHARS: usize = 300;
 
 /// A moment an agent proposed as a reel. It is the transcript's words `from` to `to`, inclusive, which played
 /// from `start_us` to `end_us` when it was proposed; a reel is made of it only while they still do.
@@ -877,6 +899,7 @@ impl Project {
             word_corrections: Vec::new(),
             thumbnails: Vec::new(),
             reel_candidates: Vec::new(),
+            imported: None,
         }
     }
 

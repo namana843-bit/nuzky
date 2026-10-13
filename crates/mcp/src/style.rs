@@ -1263,10 +1263,10 @@ pub struct PlannedRecording {
     pub missing: Option<String>,
 }
 
-/// An imported timeline with its media made canonical, so one file is one recording however its
-/// clips name it.
+/// What an imported timeline plays, with its media made canonical, so one file is one recording
+/// however its clips name it.
 fn read_timeline(path: &Path) -> Result<(nuzky_interchange::Read, String)> {
-    let mut read = nuzky_interchange::read(path)?;
+    let mut read = nuzky_interchange::read(path)?.played();
     for clip in read.timeline.tracks.iter_mut().flat_map(|t| &mut t.clips) {
         if let Some(canonical) = clip.path.as_ref().and_then(|p| fs::canonicalize(p).ok()) {
             clip.path = Some(canonical);

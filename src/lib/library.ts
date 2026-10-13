@@ -316,6 +316,11 @@ export function newProjectFromMedia(paths: string[], then?: () => void) {
   });
 }
 
+/** A new project that `run` makes of the CapCut draft `name` and opens; the draft stays as it was. */
+export function newProjectFromDraft(name: string, run: () => Promise<Snapshot>, then?: () => void) {
+  switchTo({ what: `open “${name}” from CapCut`, verb: "start", run, then });
+}
+
 export async function pickVideosForNewProject() {
   const picked = await pickFiles({ multiple: true, filters: [{ name: "Video, audio and images", extensions: MEDIA_EXTENSIONS }] });
   if (picked && picked.length > 0) newProjectFromMedia(Array.isArray(picked) ? picked : [picked]);

@@ -79,6 +79,8 @@ pub struct Entry {
     missing: usize,
     /// Why a broken project cannot be read.
     error: Option<String>,
+    /// The folder of the CapCut draft it was opened from.
+    imported_from: Option<String>,
 }
 
 #[cfg_attr(test, derive(ts_rs::TS))]
@@ -281,6 +283,7 @@ impl Library {
                         state: Some("broken"),
                         missing: 0,
                         error: Some(format!("{error:#}")),
+                        imported_from: None,
                     });
                     continue;
                 }
@@ -315,6 +318,7 @@ impl Library {
                 state,
                 missing,
                 error: None,
+                imported_from: project.imported.map(|i| i.path),
             });
         }
         projects.sort_by_key(|p| std::cmp::Reverse(p.modified_ms));

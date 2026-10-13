@@ -18,6 +18,8 @@ const USAGE: &str = "Usage:
   nuzky mcp (--project <path> | --current) [--allow-write] [--cache <dir>]
   nuzky probe <media>
   nuzky new <project.json> [<media>...]   empty project, or main-track project from media files
+  nuzky new <project.json> --from <CapCut draft folder>
+      the draft as a project; the draft stays as it was, and what did not come over is listed
   nuzky frame <project.json> <seconds> <out.png> [width]
   nuzky bench <project.json> [width] [seconds] [--proxy]
       plays and scrubs the preview; --proxy first makes the preview proxies of heavy video and plays from them
@@ -242,6 +244,20 @@ fn main() -> Result<()> {
         ["mcp", ..] => nuzky_mcp::bridge::run_args(&args[1..], cache_dir())?,
         ["probe", media] => {
             println!("{}", serde_json::to_string_pretty(&probe(Path::new(media), new_id())?)?);
+        }
+        ["new", out, "--from", draft] => {
+            let out = Path::new(out);
+            let _lock = nuzky_session::lock_project(out, true)?;
+            if out.symlink_metadata().is_ok() {
+                bail!("Project already exists: {}", out.display());
+            }
+            let draft = std::fs::canonicalize(draft).with_context(|| format!("Cannot find {draft}"))?;
+            let fonts = nuzky_engine::text::TextRenderer::new().font_families();
+            let project = nuzky_mcp::import::capcut_draft(&draft, &fonts)?;
+            nuzky_session::publish_new(out, &project)?;
+            for line in project.imported.iter().flat_map(|i| &i.left_out) {
+                eprintln!("Not brought over: {line}");
+            }
         }
         ["new", out, media @ ..] => {
             let out = Path::new(out);

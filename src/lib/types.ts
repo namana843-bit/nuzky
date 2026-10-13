@@ -681,6 +681,24 @@ export type FontFamilies = {
   system: Array<string>,
 };
 
+/**
+ * A timeline cut in another editor, such as a CapCut draft, as it was opened into this project.
+ */
+export type Imported = {
+  /**
+   * Such as "CapCut".
+   */
+  editor: string,
+  /**
+   * The timeline's folder or file, as it was opened. Opening never changes it.
+   */
+  path: string,
+  /**
+   * One line for each kind of thing in it that did not come over, in plain words.
+   */
+  leftOut: Array<string>,
+};
+
 export type JobEvent = {
   id: string,
   kind: "audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels" | "speech-model" | "agent",
@@ -766,6 +784,10 @@ export type LibraryProject = {
    * Why a broken project cannot be read.
    */
   error: string | null,
+  /**
+   * The folder of the CapCut draft it was opened from.
+   */
+  importedFrom: string | null,
 };
 
 /**
@@ -839,6 +861,10 @@ export type Project = {
    * Moments of a long video that could each be a reel of their own, in timeline order.
    */
   reelCandidates?: Array<ReelCandidate>,
+  /**
+   * The timeline of another editor the project was opened from.
+   */
+  imported?: Imported | null,
 };
 
 export type ProjectSummary = {

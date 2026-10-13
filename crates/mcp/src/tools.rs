@@ -463,6 +463,7 @@ impl Backend {
         object.insert("tracks".into(), json!(project.tracks));
         object.insert("thumbnails".into(), json!(project.thumbnails));
         object.insert("reel_candidates".into(), json!(project.reel_candidates));
+        object.insert("imported".into(), json!(project.imported));
         object.insert("duration_us".into(), json!(state.project.duration_us()));
         object.insert("caption_stats".into(), caption_stats(&state.project));
         object.insert("filtered".into(), json!(args.range.is_some() || args.clip_ids.is_some()));

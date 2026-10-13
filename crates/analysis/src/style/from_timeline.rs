@@ -319,11 +319,15 @@ mod tests {
             transform: None,
             keyframes: Vec::new(),
             transition_in: None,
+            still: false,
+            media_size: None,
+            fade_in_us: 0,
+            fade_out_us: 0,
         }
     }
 
     fn track(kind: TrackKind, clips: Vec<MediaClip>) -> Track {
-        Track { name: String::new(), kind, clips, texts: Vec::new() }
+        Track { name: String::new(), kind, hidden: false, muted: false, clips, texts: Vec::new() }
     }
 
     /// A word every second, "w0" at 0.2 to 0.6 s, "w1" at 1.2 to 1.6 s and so on.
@@ -461,7 +465,8 @@ mod tests {
         let mut second = clip("t.mov", 2 * S, 5 * S, 2 * S, 1.0);
         second.transform = Some(at(1.6));
         let look = |size: f32, color: &str| {
-            Some(TextStyle { font: Some("Montserrat".into()), size, color: color.into(), bold: false, outline: None })
+            let font = Some("Montserrat".into());
+            Some(TextStyle { font, size, color: color.into(), bold: false, outline: None, wrap: None })
         };
         let text = |start_us, style| TextClip {
             text: "two words".into(),
@@ -469,6 +474,7 @@ mod tests {
             duration_us: 500_000,
             transform: Some(Transform { scale: 1.5, x: 0.0, y: 0.15, rotation: 0.0 }),
             style,
+            caption: true,
         };
         let mut titles = track(TrackKind::Video, Vec::new());
         titles.texts =
@@ -508,6 +514,7 @@ mod tests {
             duration_us: 500_000,
             transform: Some(Transform { scale: 1.0, x: 0.0, y: 0.15, rotation: 0.0 }),
             style: None,
+            caption: true,
         };
         let mut titles = track(TrackKind::Video, Vec::new());
         titles.texts = vec![text(0, "two words"), text(S, "three short words"), text(9 * S, "after the cut")];

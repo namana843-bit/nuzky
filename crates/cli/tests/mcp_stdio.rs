@@ -147,6 +147,71 @@ impl Drop for Client {
     }
 }
 
+#[test]
+fn an_opened_capcut_draft_keeps_its_import_report_over_read_only_stdio() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let dir = root.join("tmp-test").join(format!("capcut-open-mcp-{}", std::process::id()));
+    let draft = dir.join("draft");
+    std::fs::create_dir_all(&draft).unwrap();
+    let talk = draft.join("talk.mp4");
+    let out = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=540x960:r=30:d=1",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(&talk)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let clip = |id: &str, at: i64| {
+        json!({"material_id": id,
+        "target_timerange": {"start": at, "duration": 1_000_000},
+        "source_timerange": {"start": 0, "duration": 1_000_000}, "speed": 1.0})
+    };
+    let content = json!({"fps": 30, "canvas_config": {"width": 540, "height": 960},
+        "materials": {"videos": [
+            {"id": "talk", "type": "video", "path": talk, "material_name": "talk.mp4"},
+            {"id": "gone", "type": "video", "path": "/nonexistent/gone.mov", "material_name": "gone.mov", "width": 540, "height": 960}]},
+        "tracks": [{"type": "video", "attribute": 0, "segments": [clip("talk", 0), clip("gone", 1_000_000)]}]});
+    std::fs::write(draft.join("draft_info.json"), content.to_string()).unwrap();
+    let project = dir.join("project.nuzky");
+    let out = Command::new(env!("CARGO_BIN_EXE_nuzky"))
+        .arg("new")
+        .arg(&project)
+        .arg("--from")
+        .arg(&draft)
+        .env("HOME", dir.join("home"))
+        .env("XDG_DATA_HOME", dir.join("data"))
+        .env("XDG_CACHE_HOME", dir.join("cache"))
+        .env("XDG_RUNTIME_DIR", dir.join("runtime"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let saved: Value = serde_json::from_slice(&std::fs::read(&project).unwrap()).unwrap();
+    let mut c = Client::spawn_at(dir, &project, false, Some(None));
+    let state = c.call("get_state", json!({}));
+    assert_eq!(state["imported"]["editor"], "CapCut");
+    assert_eq!(state["imported"]["path"], draft.canonicalize().unwrap().to_str().unwrap());
+    assert!(
+        state["imported"]["leftOut"].as_array().unwrap().iter().any(|line| line.as_str().unwrap().contains("gone.mov")),
+        "{state}"
+    );
+    assert_eq!(state["imported"], saved["imported"]);
+    c.finish();
+}
+
 /// The built-in sound effects need no network: listing finds them, and add_sound places one at the time
 /// asked as an edit of the run, with its credit saved in the project and its file in Nuzky's library.
 #[test]
