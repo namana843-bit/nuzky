@@ -7,7 +7,7 @@ import type { Asset } from "../../lib/types";
 import { lockedProps, useLockReason } from "../ui";
 
 export const AUDIO_EXTENSIONS = ["mp3", "wav", "m4a", "aac", "flac", "ogg", "opus"];
-export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
+export const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "heic", "heif", "webp", "gif", "bmp"];
 export const VIDEO_EXTENSIONS = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mts"];
 export const MEDIA_EXTENSIONS = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS, ...IMAGE_EXTENSIONS];
 

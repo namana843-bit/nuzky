@@ -68,7 +68,159 @@ fn origin_us(input: &ff::format::context::Input) -> i64 {
 pub(crate) fn is_image_format(input: &ff::format::context::Input) -> bool {
     let format = input.format();
     let name = format.name();
-    name == "image2" || name.ends_with("_pipe")
+    name == "image2" || name.ends_with("_pipe") || tile_grid(input).is_some()
+}
+
+/// A picture stored as tiles, as iPhones keep HEIC photos. FFmpeg demuxes each tile as a stream of its own; only
+/// its command-line tool joins them.
+struct TileGrid {
+    /// The stream of each tile and where its top left corner goes on the canvas.
+    tiles: Vec<(usize, i32, i32)>,
+    canvas: (u32, u32),
+    /// The part of the canvas that is the picture: left, top, width, height.
+    picture: [u32; 4],
+    orientation: Orientation,
+}
+
+unsafe fn slice<'a, T>(data: *const T, len: usize) -> &'a [T] {
+    if len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(data, len) } }
+}
+
+fn tile_grid(input: &ff::format::context::Input) -> Option<TileGrid> {
+    use ff::ffi::*;
+    let input = unsafe { &*input.as_ptr() };
+    let groups: Vec<&AVStreamGroup> = unsafe { slice(input.stream_groups, input.nb_stream_groups as usize) }
+        .iter()
+        .map(|group| unsafe { &**group })
+        .filter(|group| group.type_ == AVStreamGroupParamsType::AV_STREAM_GROUP_PARAMS_TILE_GRID)
+        .collect();
+    // An iPhone photo also keeps its HDR gain map as tiles, and the picture of a file can be a single image beside
+    // grids of other items: the picture is the primary item.
+    let primary = |disposition: i32| disposition & AV_DISPOSITION_DEFAULT != 0;
+    let group = match groups.iter().find(|group| primary(group.disposition)) {
+        Some(group) => group,
+        None if unsafe { slice(input.streams, input.nb_streams as usize) }
+            .iter()
+            .any(|stream| primary(unsafe { (**stream).disposition })) =>
+        {
+            return None;
+        }
+        None => groups.first()?,
+    };
+    let grid = unsafe { &*group.params.tile_grid };
+    let tiles = unsafe { slice(grid.offsets, grid.nb_tiles as usize) }
+        .iter()
+        .map(|tile| {
+            (unsafe { (**group.streams.add(tile.idx as usize)).index } as usize, tile.horizontal, tile.vertical)
+        })
+        .collect();
+    let orientation = unsafe { slice(grid.coded_side_data, grid.nb_coded_side_data as usize) }
+        .iter()
+        .filter(|sd| sd.type_ == AVPacketSideDataType::AV_PKT_DATA_DISPLAYMATRIX)
+        .find_map(|sd| matrix_orientation(unsafe { slice(sd.data, sd.size) }))
+        .unwrap_or((0, false));
+    let size = |v: i32| u32::try_from(v).ok();
+    let canvas = (size(grid.coded_width)?, size(grid.coded_height)?);
+    let picture = [size(grid.horizontal_offset)?, size(grid.vertical_offset)?, size(grid.width)?, size(grid.height)?];
+    let [left, top, width, height] = picture;
+    let fits = width > 0 && height > 0 && left + width <= canvas.0 && top + height <= canvas.1;
+    fits.then_some(TileGrid { tiles, canvas, picture, orientation })
+}
+
+/// Decodes every tile of `grid` and joins them into the picture, as FFmpeg's command-line tool does.
+fn join_tiles(
+    input: &mut ff::format::context::Input,
+    decoder: &mut ff::decoder::Video,
+    grid: &TileGrid,
+) -> Result<frame::Video> {
+    let mut packets = input.packets().filter_map(|(stream, mut packet)| {
+        let tile = grid.tiles.iter().position(|tile| tile.0 == stream.index())?;
+        packet.set_pts(Some(tile as i64));
+        Some(packet)
+    });
+    let (mut canvas, mut tile, mut sent_all) = (None, frame::Video::empty(), false);
+    while !sent_all {
+        match packets.next() {
+            Some(packet) => {
+                if let Err(e) = decoder.send_packet(&packet) {
+                    log::warn!("Skipping a corrupt tile: {e}");
+                }
+            }
+            None => {
+                decoder.send_eof().ok();
+                sent_all = true;
+            }
+        }
+        while decoder.receive_frame(&mut tile).is_ok() {
+            let Some(&(_, x, y)) = tile.pts().and_then(|i| grid.tiles.get(usize::try_from(i).ok()?)) else { continue };
+            let canvas = match &mut canvas {
+                Some(canvas) => canvas,
+                None => canvas.insert(blank(&tile, grid.canvas)?),
+            };
+            paste(canvas, &tile, x, y);
+        }
+    }
+    let mut canvas = canvas.ok_or_else(|| anyhow!("No tile of the picture decodes"))?;
+    let [left, top, width, height] = grid.picture;
+    unsafe {
+        let f = canvas.as_mut_ptr();
+        ((*f).crop_left, (*f).crop_top) = (left as usize, top as usize);
+        ((*f).crop_right, (*f).crop_bottom) =
+            ((grid.canvas.0 - left - width) as usize, (grid.canvas.1 - top - height) as usize);
+        if ff::ffi::av_frame_apply_cropping(f, ff::ffi::AV_FRAME_CROP_UNALIGNED as i32) < 0 {
+            bail!("Cannot cut the picture out of its tiles");
+        }
+    }
+    Ok(canvas)
+}
+
+/// A black picture of `width` × `height` in the pixel format and colours of `like`.
+fn blank(like: &frame::Video, (width, height): (u32, u32)) -> Result<frame::Video> {
+    let mut canvas = frame::Video::empty();
+    canvas.set_format(like.format());
+    canvas.set_width(width);
+    canvas.set_height(height);
+    unsafe {
+        let f = canvas.as_mut_ptr();
+        if ff::ffi::av_frame_get_buffer(f, 0) < 0 {
+            bail!("A picture of {width}×{height} does not fit in memory");
+        }
+        ff::ffi::av_frame_copy_props(f, like.as_ptr());
+        let linesize = std::array::from_fn::<_, 4, _>(|i| (*f).linesize[i] as isize);
+        ff::ffi::av_image_fill_black(
+            (*f).data.as_ptr(),
+            linesize.as_ptr(),
+            like.format().into(),
+            (*f).color_range,
+            width as i32,
+            height as i32,
+        );
+    }
+    Ok(canvas)
+}
+
+/// Copies `tile` onto `canvas` with its top left corner at (`x`, `y`), cut at the canvas edges.
+fn paste(canvas: &mut frame::Video, tile: &frame::Video, x: i32, y: i32) {
+    let format = canvas.format();
+    let Some(descriptor) = format.descriptor() else { return };
+    let (sub_x, sub_y) = (1 << descriptor.log2_chroma_w(), 1 << descriptor.log2_chroma_h());
+    let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else { return };
+    if tile.format() != format || x >= canvas.width() || y >= canvas.height() || x % sub_x != 0 || y % sub_y != 0 {
+        log::warn!("Skipping a tile that does not fit its picture");
+        return;
+    }
+    let (width, height) = (tile.width().min(canvas.width() - x), tile.height().min(canvas.height() - y));
+    for plane in 0..canvas.planes() {
+        let bytes =
+            |px: u32| unsafe { ff::ffi::av_image_get_linesize(format.into(), px as i32, plane as i32) } as usize;
+        let rows = |px: u32| if plane == 1 || plane == 2 { px.div_ceil(sub_y) } else { px } as usize;
+        let (left, row, top) = (bytes(x), bytes(width), rows(y));
+        let (from_stride, to_stride) = (tile.stride(plane), canvas.stride(plane));
+        let (from, to) = (tile.data(plane), canvas.data_mut(plane));
+        for r in 0..rows(height) {
+            to[(top + r) * to_stride + left..][..row].copy_from_slice(&from[r * from_stride..][..row]);
+        }
+    }
 }
 
 /// The file at `path` as it is now: its size, modification time and a hash of the path, so a changed or
@@ -185,7 +337,11 @@ pub fn probe(path: &Path, id: String) -> Result<Asset> {
         credit: None,
     };
 
-    if let Some(stream) = video {
+    if let Some(grid) = tile_grid(&input) {
+        let ([_, _, w, h], (rotation, mirror)) = (grid.picture, grid.orientation);
+        (asset.width, asset.height) = if rotation % 180 == 90 { (h, w) } else { (w, h) };
+        (asset.rotation, asset.mirror) = (rotation, mirror);
+    } else if let Some(stream) = video {
         let decoder = ff::codec::context::Context::from_parameters(stream.parameters())?.decoder().video()?;
         let (mut rotation, mut mirror) = display_orientation(&stream);
         let (w, h) = (decoder.width(), decoder.height());
@@ -330,6 +486,8 @@ pub struct VideoDecoder {
     /// The only frame of a still image, replayed after seeking: image2 loses it when seeked.
     image: Option<DecodedFrame>,
     image_rewound: bool,
+    /// The tiles of a picture stored as a grid, joined into that frame.
+    grid: Option<TileGrid>,
     /// First frame after a seek, decoded to check where the seek landed.
     pending: Option<DecodedFrame>,
     scaler: Option<Scaler>,
@@ -343,9 +501,14 @@ impl VideoDecoder {
     pub fn open(path: &Path) -> Result<Self> {
         let input = open_input(path)?;
         let is_image = is_image_format(&input);
-        let stream = video_stream(&input).ok_or_else(|| anyhow!("{} has no video", path.display()))?;
+        let grid = tile_grid(&input);
+        let stream = match &grid {
+            Some(grid) => grid.tiles.first().and_then(|tile| input.stream(tile.0)),
+            None => video_stream(&input),
+        }
+        .ok_or_else(|| anyhow!("{} has no video", path.display()))?;
         let stream_index = stream.index();
-        let rotation = display_orientation(&stream).0;
+        let rotation = grid.as_ref().map_or_else(|| display_orientation(&stream), |grid| grid.orientation).0;
         let time_base = stream.time_base();
         let rate = stream.avg_frame_rate();
         let fps = if rate.numerator() > 0 && rate.denominator() > 0 { f64::from(rate) } else { 30.0 };
@@ -364,6 +527,7 @@ impl VideoDecoder {
             is_image,
             image: None,
             image_rewound: false,
+            grid,
             pending: None,
             scaler: None,
             rotation,
@@ -387,7 +551,10 @@ impl VideoDecoder {
     }
 
     pub fn source_size(&self) -> (u32, u32) {
-        (self.decoder.width(), self.decoder.height())
+        match &self.grid {
+            Some(grid) => (grid.picture[2], grid.picture[3]),
+            None => (self.decoder.width(), self.decoder.height()),
+        }
     }
 
     pub fn is_eof(&self) -> bool {
@@ -452,6 +619,12 @@ impl VideoDecoder {
         }
         if self.eof {
             return Ok(None);
+        }
+        if let Some(grid) = &self.grid {
+            self.eof = true;
+            let f = join_tiles(&mut self.input, &mut self.decoder, grid)?;
+            self.image = Some((0, f.clone()));
+            return Ok(Some((0, f)));
         }
         let mut f = frame::Video::empty();
         loop {
