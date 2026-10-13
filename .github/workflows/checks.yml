@@ -2,7 +2,7 @@ name: Checks
 
 # Lint, types, both builds, Rust tests, dependency audits and the check without AVX2 on Linux for every
 # non-draft pull request and push to main. Public-repository runners are free. scripts/check.sh adds
-# the full tests with media and models and the UI flows locally.
+# the full tests with media and models and the UI flows locally before a release.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]

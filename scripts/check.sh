@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Local gate before every merge to main and before every release. GitHub runs the Linux checks, the dependency
+# Local gate before every release. GitHub runs the Linux checks, the dependency
 # audits and the check without AVX2 on every non-draft pull request and push to main (.github/workflows/checks.yml).
-# The full tests with media and models and the UI flows run here, on Linux and macOS. A pull request that changes
-# only the website or only Markdown documentation skips it (AGENTS.md says when).
+# The full tests with media and models and the UI flows run here, on Linux and macOS.
 # Stops at the first failing step and names it. Needs the tools listed in scripts/repro.py.
 # A rerun after a failure skips the builds, clippy and Rust tests that passed for the same state; NUZKY_CHECK_FRESH=1
 # starts fresh.
