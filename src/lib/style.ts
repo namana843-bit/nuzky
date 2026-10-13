@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { api, errorText, plainError } from "./api";
+import { listDrafts, rememberDraftFolder } from "./capcut";
 import { showHome, useLibrary } from "./library";
 import { useEditor } from "./store";
 import type { CapCutDraft, JobEvent, StyleAction, StylePair, StylePairResult, StyleTimelineResult, StyleView, TimelinePlan } from "./types";
@@ -116,11 +117,13 @@ export async function addProjects(paths: string[]) {
 export async function findDrafts(folder?: string) {
   const toast = useEditor.getState().toast;
   try {
-    const found = await api.styleCapCutDrafts(folder ?? null);
+    // The home screen and this dialog share the folders added by hand.
+    const found = folder ? await api.styleCapCutDrafts(folder) : await listDrafts();
     if (folder && found.length === 0) {
       toast({ kind: "info", text: "No CapCut drafts in this folder. Choose the folder that holds them, or one draft's folder." });
       return;
     }
+    if (folder && found.length > 1) rememberDraftFolder(folder);
     const paths = found.map((d) => d.path);
     const drafts = (old: CapCutDraft[]) => [...found, ...old.filter((d) => !paths.includes(d.path))].sort((a, b) => b.modifiedMs - a.modifiedMs);
     useStyle.setState((s) => ({ capcutDrafts: drafts(s.capcutDrafts ?? []) }));

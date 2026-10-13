@@ -37,12 +37,23 @@ function folders(): string[] {
   }
 }
 
-/** Looks for the drafts again: where CapCut keeps them, and in the folders added by hand. */
-export async function findDrafts() {
+/** A folder of drafts added by hand, here or in Learn my style, stays on later starts. */
+export function rememberDraftFolder(folder: string) {
+  localStorage.setItem(FOLDERS_KEY, JSON.stringify([...new Set([...folders(), folder])]));
+}
+
+/** CapCut's drafts where CapCut keeps them and in the folders added by hand, newest first. */
+export async function listDrafts(): Promise<CapCutDraft[]> {
   const lists = await Promise.all([null, ...folders()].map((folder) => api.styleCapCutDrafts(folder).catch(() => [])));
   const seen = new Set<string>();
-  const drafts = lists.flat().filter((d) => !seen.has(d.path) && !!seen.add(d.path));
-  useCapCut.setState({ drafts: drafts.sort((a, b) => b.modifiedMs - a.modifiedMs) });
+  return lists
+    .flat()
+    .filter((d) => !seen.has(d.path) && !!seen.add(d.path))
+    .sort((a, b) => b.modifiedMs - a.modifiedMs);
+}
+
+export async function findDrafts() {
+  useCapCut.setState({ drafts: await listDrafts() });
 }
 
 /** Asks for a folder: one draft opens at once, a folder of drafts joins the list. */
@@ -55,7 +66,7 @@ export async function openDraftFolder(picked: string) {
   const found = await api.styleCapCutDrafts(picked).catch(() => []);
   if (found.length === 0) return toast({ kind: "info", text: "No CapCut drafts in this folder. Choose a draft's folder, or the folder that holds them." });
   if (found.length === 1) return openDraft(found[0]);
-  localStorage.setItem(FOLDERS_KEY, JSON.stringify([...new Set([...folders(), picked])]));
+  rememberDraftFolder(picked);
   useCapCut.setState({ showAll: true });
   await findDrafts();
 }
@@ -64,9 +75,9 @@ export async function openDraftFolder(picked: string) {
 export const projectOf = (draft: CapCutDraft) => useLibrary.getState().projects?.find((p) => p.importedFrom === draft.path && p.state !== "broken");
 
 /** Opens the project made of the draft before, or makes one; what did not come over shows once it is open. */
-export function openDraft(draft: CapCutDraft) {
+export function openDraft(draft: CapCutDraft, again = false) {
   const made = projectOf(draft);
-  if (made) return openProject(made);
+  if (made && !again) return openProject(made);
   newProjectFromDraft(
     draft.name,
     async () => {
@@ -113,6 +124,6 @@ export function plural(n: number, one: string, many = `${one}s`) {
 export function leftOutLine(line: string): { what: string; count: string | null; missing: boolean } {
   const counted = /^(.*) \((\d+) (?:times|clips)\)$/.exec(line);
   const what = counted ? counted[1] : line;
-  const missing = /^(Missing media|Media Nuzky cannot open|A picture Nuzky cannot show):/.test(what);
+  const missing = /^(Missing media|Media Nuzky cannot open|Media that is not a file on this computer|A picture Nuzky cannot show):/.test(what);
   return { what, count: counted ? (line.endsWith("clips)") ? `${counted[2]} clips` : `${counted[2]}×`) : null, missing };
 }

@@ -462,7 +462,7 @@ export function Home() {
             {firstRun ? (
               <>
                 <FirstRun />
-                <DraftsSection title="Or continue a CapCut draft" className="mt-12" />
+                <DraftsSection title="Continue a CapCut draft" className="mx-auto mt-12 max-w-[748px]" />
               </>
             ) : projects === null ? (
               loadError ? (

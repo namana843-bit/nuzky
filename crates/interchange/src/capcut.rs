@@ -322,7 +322,7 @@ pub fn read(bytes: &[u8], folder: &Path) -> Result<Read> {
                 continue;
             }
             other => {
-                unread.add(format!("A track of kind {}", if other.is_empty() { "none" } else { other }));
+                unread.add(format!("A {} track", if other.is_empty() { "nameless" } else { other }));
                 continue;
             }
         };
@@ -374,7 +374,9 @@ pub fn read(bytes: &[u8], folder: &Path) -> Result<Read> {
                     (_, "drafts") => unread.add("A compound clip"),
                     (_, "stickers") => unread.add("Stickers"),
                     (_, "text_templates") => unread.add("Text templates"),
-                    (kind, category) => unread.add(format!("{category} on a {kind} track")),
+                    (kind, category) => {
+                        unread.add(format!("A part Nuzky does not read on a {kind} track ({category})"))
+                    }
                 }
                 Ok(())
             };
@@ -449,7 +451,7 @@ fn settings(segment: &Segment, materials: &Materials, unread: &mut Unread) {
     let by_hand =
         segment.enable_adjust != Some(false) && adjusted.iter().any(|k| k != "filter" && k != "smart_color_adjust");
     if automatic || by_hand {
-        unread.add("Colour adjustments");
+        unread.add("Color adjustments");
     }
     if materials.refs(refs, "realtime_denoises").any(|m| on(m, "is_denoise")) {
         unread.add("Noise reduction");

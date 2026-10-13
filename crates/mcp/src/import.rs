@@ -271,7 +271,7 @@ fn media(clip: &MediaClip, track: TrackKind, assets: &Assets, project: &Project,
             timeline::TransitionKind::Zoom => TransitionKind::ZoomIn,
             timeline::TransitionKind::Slide => TransitionKind::SlideLeft,
             timeline::TransitionKind::Other => {
-                left.add(format!("The transition {}", if t.name.is_empty() { "without a name" } else { &t.name }));
+                left.add(format!("Transition: {}", if t.name.is_empty() { "without a name" } else { &t.name }));
                 return None;
             }
         };
@@ -334,7 +334,7 @@ fn text(clip: &TextClip, project: &Project, fonts: &[String], left: &mut Left) -
         && !fonts.is_empty()
         && !fonts.iter().any(|f| f.eq_ignore_ascii_case(font))
     {
-        left.add(format!("The font {font}, which this computer does not have"));
+        left.add(format!("Font not on this computer: {font}"));
     }
     let content = ClipContent::Text {
         text: clip.text.clone(),

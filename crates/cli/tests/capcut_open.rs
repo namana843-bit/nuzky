@@ -204,7 +204,7 @@ fn a_capcut_draft_opens_as_a_project_that_plays_as_cut() {
     let out = run(cli(&dir).arg("new").arg(dir.join("out.nuzky")).arg("--from").arg(&draft));
     let said = String::from_utf8_lossy(&out.stderr);
     let left: Vec<_> = said.lines().filter_map(|line| line.strip_prefix("Not brought over: ")).collect();
-    for what in ["gone.mov", "The transition Woosh", "Text shadows", "Effects", "Colour adjustments"] {
+    for what in ["gone.mov", "Transition: Woosh", "Text shadows", "Effects", "Color adjustments"] {
         assert!(left.iter().any(|line| line.contains(what)), "missing {what}: {said}");
     }
     let project: Value = serde_json::from_slice(&std::fs::read(dir.join("out.nuzky")).unwrap()).unwrap();

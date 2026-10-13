@@ -49,12 +49,17 @@ export function Poster({ p, box, ai = false, compact = false }: { p: LibraryProj
             </div>
           )
         )}
-        {!compact && p.state !== "busy" && <span className={`tabular absolute bottom-1.5 right-1.5 ${chip}`}>{formatLength(p.durationUs)}</span>}
-        {!compact && (ai || p.state === "missing") && (
-          <span className={`absolute bottom-1.5 left-1.5 ${chip}`}>
-            {ai ? <Sparkles size={11} className="text-accent" /> : <TriangleAlert size={11} className="text-warn" />}
-            {ai ? "AI" : `${p.missing} missing`}
-          </span>
+        {!compact && (
+          // The length keeps the bottom right; on a frame too narrow for both, the other chip sits above it.
+          <div className="absolute inset-x-1.5 bottom-1.5 flex flex-row-reverse flex-wrap-reverse justify-between gap-1">
+            {p.state !== "busy" && <span className={`tabular ${chip}`}>{formatLength(p.durationUs)}</span>}
+            {(ai || p.state === "missing") && (
+              <span className={`whitespace-nowrap ${chip}`}>
+                {ai ? <Sparkles size={11} className="text-accent" /> : <TriangleAlert size={11} className="text-warn" />}
+                {ai ? "AI" : `${p.missing} missing`}
+              </span>
+            )}
+          </div>
         )}
       </div>
       {!compact && p.state === "busy" && (

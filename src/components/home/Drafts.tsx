@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Film, FolderPlus, Loader2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { CopyPlus, Film, FolderOpen, FolderPlus, Loader2 } from "lucide-react";
 import { addDraftFolder, findDrafts, loadCover, openDraft, useCapCut } from "../../lib/capcut";
-import { useLibrary, whenLabel } from "../../lib/library";
+import { openProject, useLibrary, whenLabel } from "../../lib/library";
 import { formatLength } from "../../lib/time";
-import type { CapCutDraft } from "../../lib/types";
-import { Button, IconButton } from "../ui";
+import type { CapCutDraft, LibraryProject } from "../../lib/types";
+import { Button, IconButton, Menu, type MenuEntry } from "../ui";
 
 /** Width over height of a card's picture box, as a project card's. */
 const CARD_BOX = 152 / 180;
@@ -28,11 +28,16 @@ function useColumns() {
   return [grid, columns] as const;
 }
 
+const madeOf = (projects: LibraryProject[] | null, draft: CapCutDraft) => projects?.find((p) => p.importedFrom === draft.path && p.state !== "broken");
+
 /** CapCut's drafts on this computer as cards, newest first: one row of them, or all. */
 export function DraftsSection({ title, className = "" }: { title: string; className?: string }) {
   const drafts = useCapCut((s) => s.drafts);
   const showAll = useCapCut((s) => s.showAll);
+  const projects = useLibrary((s) => s.projects);
   const [grid, columns] = useColumns();
+  const [focused, setFocused] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ items: MenuEntry[]; at: { x: number; y: number }; label: string; keyboard: boolean; back: HTMLElement } | null>(null);
 
   useEffect(() => {
     void findDrafts();
@@ -43,6 +48,36 @@ export function DraftsSection({ title, className = "" }: { title: string; classN
   }, []);
 
   const shown = showAll ? (drafts ?? []) : (drafts ?? []).slice(0, columns);
+  const tabStop = shown.some((d) => d.path === focused) ? focused : shown[0]?.path;
+
+  /** Opening the project made of a draft, or the draft again as a new project once it changed in CapCut. */
+  const showMenu = (draft: CapCutDraft, at: { x: number; y: number }, keyboard: boolean, back: HTMLElement) => {
+    const made = madeOf(projects, draft);
+    const items: MenuEntry[] = [
+      ...(made ? [{ label: `Open “${made.name}”`, icon: <FolderOpen size={15} />, run: () => openProject(made) }] : []),
+      { label: "Open as a new project", icon: <CopyPlus size={15} />, run: () => openDraft(draft, true) },
+    ];
+    setMenu({ items, at, label: draft.name, keyboard, back });
+  };
+
+  /** One Tab stop; the arrow keys move by where the cards sit, Home and End to the ends, as in the projects grid. */
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const card = (e.target as HTMLElement).closest<HTMLElement>("[data-draft]");
+    const index = shown.findIndex((d) => d.path === card?.dataset.draft);
+    if (!card || index < 0) return;
+    const step: Record<string, number> = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: columns, ArrowUp: -columns };
+    const to = e.key === "Home" ? 0 : e.key === "End" ? shown.length - 1 : e.key in step ? index + step[e.key] : null;
+    if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+      e.preventDefault();
+      const r = card.getBoundingClientRect();
+      return showMenu(shown[index], { x: r.left + 12, y: r.top + 24 }, true, card);
+    }
+    if (to === null || to < 0 || to >= shown.length) return;
+    e.preventDefault();
+    setFocused(shown[to].path);
+    grid.current?.querySelector<HTMLElement>(`[data-draft="${CSS.escape(shown[to].path)}"]`)?.focus();
+  };
+
   return (
     <section aria-label="CapCut drafts" hidden={!drafts?.length} className={className}>
       <div className="mb-3 flex h-7 items-center gap-2">
@@ -53,38 +88,82 @@ export function DraftsSection({ title, className = "" }: { title: string; classN
           <FolderPlus size={15} />
         </IconButton>
         {(drafts?.length ?? 0) > columns && (
-          <Button variant="ghost" onClick={() => useCapCut.setState({ showAll: !showAll })} className="h-7 px-2 text-accent! hover:text-accent!">
+          <Button variant="ghost" onClick={() => useCapCut.setState({ showAll: !showAll })} className="h-7 px-2 text-[12px] text-accent! hover:text-accent!">
             {showAll ? "Show fewer" : "Show all"}
           </Button>
         )}
       </div>
-      <div ref={grid} className="grid grid-cols-[repeat(auto-fill,minmax(148px,168px))] gap-x-4 gap-y-5">
+      <div ref={grid} role="group" aria-label="CapCut drafts, newest first" onKeyDown={onKey} className="grid grid-cols-[repeat(auto-fill,minmax(148px,168px))] gap-x-4 gap-y-5">
         {shown.map((d) => (
-          <DraftCard key={d.path} draft={d} />
+          <DraftCard
+            key={d.path}
+            draft={d}
+            made={madeOf(projects, d)}
+            focusable={d.path === tabStop}
+            onFocus={() => setFocused(d.path)}
+            onMenu={(at, back) => showMenu(d, at, false, back)}
+          />
         ))}
       </div>
+      {menu && (
+        <Menu
+          items={menu.items}
+          at={menu.at}
+          label={menu.label}
+          keyboard={menu.keyboard}
+          onClose={(chose) => {
+            const back = menu.back;
+            setMenu(null);
+            if (!chose) back.focus();
+          }}
+        />
+      )}
     </section>
   );
 }
 
 /** A draft with its cover; it opens as a new project, or as the project made of it before. */
-function DraftCard({ draft }: { draft: CapCutDraft }) {
+function DraftCard({
+  draft,
+  made,
+  focusable,
+  onFocus,
+  onMenu,
+}: {
+  draft: CapCutDraft;
+  made: LibraryProject | undefined;
+  focusable: boolean;
+  onFocus: () => void;
+  onMenu: (at: { x: number; y: number }, back: HTMLElement) => void;
+}) {
   const cover = useCapCut((s) => s.covers[draft.path]);
   const opening = useCapCut((s) => s.opening === draft.path);
-  const made = useLibrary((s) => s.projects?.find((p) => p.importedFrom === draft.path && p.state !== "broken"));
   const [ratio, setRatio] = useState(9 / 16);
   useEffect(() => loadCover(draft), [draft]);
 
   const when = whenLabel(draft.modifiedMs);
+  // Saved in CapCut after the project was last changed: opening it again as a new project brings that over.
+  const changed = !!made && draft.modifiedMs > made.modifiedMs;
+  const meta = made ? `${changed ? "Changed since" : "In Nuzky"} · ${when}` : when;
   const frame = ratio < CARD_BOX ? { height: "100%", aspectRatio: `${ratio}` } : { width: "100%", aspectRatio: `${ratio}` };
   return (
     <button
       type="button"
       data-draft={draft.path}
+      tabIndex={focusable ? 0 : -1}
       aria-busy={opening || undefined}
-      aria-label={`${draft.name}, changed ${when}${made ? `, in Nuzky as ${made.name}` : ""}`}
-      title={made ? `Open “${made.name}”, the project made of this draft` : "Open as a new project. The draft in CapCut stays as it is."}
+      aria-label={`${draft.name}, changed ${when}${made ? `, in Nuzky as ${made.name}${changed ? ", changed in CapCut since" : ""}` : ""}`}
+      title={
+        made
+          ? `Open “${made.name}”, the project made of this draft.${changed ? " It changed in CapCut since; right-click to open it again as a new project." : ""}`
+          : "Open as a new project. The draft in CapCut stays as it is."
+      }
       onClick={() => !opening && openDraft(draft)}
+      onFocus={onFocus}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu({ x: e.clientX, y: e.clientY }, e.currentTarget);
+      }}
       className="group/card flex min-w-0 flex-col text-left outline-none"
     >
       <div
@@ -102,7 +181,6 @@ function DraftCard({ draft }: { draft: CapCutDraft }) {
             )
           )}
           {draft.durationUs !== null && <span className={`tabular absolute bottom-1.5 right-1.5 ${chip}`}>{formatLength(draft.durationUs)}</span>}
-          {made && <span className={`absolute bottom-1.5 left-1.5 ${chip}`}>In Nuzky</span>}
         </div>
         {opening && (
           <span className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap ${chip}`}>
@@ -110,8 +188,12 @@ function DraftCard({ draft }: { draft: CapCutDraft }) {
           </span>
         )}
       </div>
-      <span data-name className="mt-2 truncate text-[13px] font-medium text-fg">{draft.name}</span>
-      <span className="tabular mt-0.5 truncate text-[12px] text-muted">{when}</span>
+      <span data-name className="mt-2 truncate text-[13px] font-medium text-fg">
+        {draft.name}
+      </span>
+      <span data-meta className="tabular mt-0.5 truncate text-[12px] text-muted">
+        {meta}
+      </span>
     </button>
   );
 }

@@ -26,6 +26,8 @@ return {{title: d.querySelector('h2').textContent, lines: [...d.querySelectorAll
 PROJECT = "return window.__nuzky.store.getState().snap.project;"
 CLICK_CARD = """const b = [...document.querySelectorAll('section[aria-label="CapCut drafts"] button[data-draft]')]
   .find((b) => b.querySelector('[data-name]').textContent === arguments[0]); if (!b) return false; b.focus(); b.click(); return true;"""
+MENU_ITEM = """const m = [...document.querySelectorAll('[role=menu] [role=menuitem]')].find((m) => m.textContent.trim().startsWith(arguments[0]));
+if (!m) return false; m.click(); return true;"""
 CLICK = """const b = [...document.querySelectorAll(arguments[1] + ' button')].find((b) => b.textContent.trim().startsWith(arguments[0]));
 if (!b) return false; b.click(); return true;"""
 
@@ -137,6 +139,7 @@ def setup(r):
     (root / '0825/draft_meta_info.json').write_text(json.dumps({'draft_name': 'Empty', 'tm_draft_modified': int(now * 1e6), 'tm_duration': 0}))
     r.elsewhere = r.work / 'Backup/Short reel'
     draft(r.elsewhere, 'Short reel', files, now - 86400 * 30)
+    draft(r.work / 'Backup/Second reel', 'Second reel', files, now - 86400 * 31)
     r.prints = {d: fingerprint(d) for d in (r.reel, r.older, r.elsewhere)}
     # The fake stands in for Claude Code, so Finish with AI never spends anyone's subscription.
     r.env.update(NUZKY_AGENT_CLAUDE=str(FAKE), NUZKY_AGENT_CODEX=str(r.work / 'no-codex'), NUZKY_FAKE_AGENT_LOG=str(r.work / 'fake'))
@@ -172,7 +175,11 @@ def hex_rgb(colour):
                      'CapCut had them, one list says what did not come over, Finish with AI, reopening, an encrypted draft, '
                      'and the draft stays unchanged', before=setup, home=True)
 def capcut_open(r):
-    r.check('the first start offers CapCut\'s drafts under the formats', wait(lambda: r.s.run(SECTION) == 'Or continue a CapCut draft', 15), r.s.run(SECTION))
+    r.check('the first start offers CapCut\'s drafts under the formats', wait(lambda: r.s.run(SECTION) == 'Continue a CapCut draft', 15), r.s.run(SECTION))
+    aligned = r.s.run("""const s = document.querySelector('section[aria-label="CapCut drafts"]').getBoundingClientRect();
+        const t = [...document.querySelectorAll('main button')].find((b) => b.textContent.includes('9:16')).getBoundingClientRect();
+        return Math.abs(s.left - t.left) < 2""")
+    r.check('lined up with the format tiles', aligned)
     found = wait(lambda: r.s.run(DRAFT_CARDS), 10) or []
     names = [c['name'] for c in found]
     r.check('newest first, by name, without the empty one', names == ['Talking reel', 'From JianYing', 'Older reel'], names)
@@ -181,6 +188,12 @@ def capcut_open(r):
     cover = "return document.querySelector('section[aria-label=\"CapCut drafts\"] button[data-draft] img')?.naturalWidth ?? 0"
     r.check('and the picture CapCut keeps of the draft', wait(lambda: r.s.run(cover) > 0, 10), r.s.run(cover))
     r.shot('drafts-first-start')
+    # One Tab stop, the arrow keys move between the cards.
+    tabs = r.s.run("return [...document.querySelectorAll('section[aria-label=\"CapCut drafts\"] button[data-draft]')].map((b) => b.tabIndex)")
+    r.s.run("document.querySelector('section[aria-label=\"CapCut drafts\"] button[data-draft]').focus()")
+    r.key('ArrowRight')
+    moved = r.s.run("return document.activeElement?.querySelector('[data-name]')?.textContent ?? null")
+    r.check('the cards are one Tab stop and the arrow keys move between them', tabs == [0, -1, -1] and moved == 'From JianYing', [tabs, moved])
 
     r.check('clicking a draft opens it', r.s.run(CLICK_CARD, 'Talking reel'))
     dialog = wait(lambda: r.s.run(DIALOG_STATE), 20)
@@ -189,7 +202,7 @@ def capcut_open(r):
     r.check('a dialog says it opened from CapCut and what came over',
             dialog and dialog['title'] == 'Opened “Talking reel” from CapCut' and '6 clips, 1 sound' in dialog['text'] and '3 captions' in dialog['text'] and '1 title' in dialog['text'], dialog)
     lines = dialog['lines'] if dialog else []
-    wanted = ['Missing media: gone.mov', 'The transition Woosh', 'Text shadows', 'Effects', 'Colour adjustments']
+    wanted = ['Missing media: gone.mov', 'Transition: Woosh', 'Text shadows', 'Effects', 'Color adjustments']
     r.check('and lists in one list everything that did not come over, missing media first',
             all(any(l.startswith(w) for l in lines) for w in wanted) and lines[0].startswith('Missing media: gone.mov'), lines)
     time.sleep(0.4)
@@ -245,6 +258,12 @@ def capcut_open(r):
     r.check('once there are projects, the drafts sit above them', wait(lambda: r.s.run(SECTION) == 'CapCut drafts', 10), r.s.run(SECTION))
     opened = wait(lambda: next((c for c in r.s.run(DRAFT_CARDS) if c['name'] == 'Talking reel' and 'In Nuzky' in c['text']), None), 10)
     r.check('the draft opened before says In Nuzky', opened, r.s.run(DRAFT_CARDS))
+    clear = wait(lambda: r.s.run("""const card = [...document.querySelectorAll('[role=option][data-path]')].find((c) => c.innerText.includes('missing'));
+        const chips = card && [...card.querySelectorAll('span')].filter((x) => /missing|^\\d+:\\d\\d$/.test(x.textContent.trim()) && x.children.length <= 1);
+        if (!chips || chips.length < 2) return null;
+        const [a, b] = chips.map((c) => c.getBoundingClientRect());
+        return a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top"""), 10)
+    r.check('the project\'s missing file chip and its length do not cover each other', clear)
     r.shot('drafts-home')
     count = len(list(projects_dir(r).glob('*.nuzky')))
     path = view(r)['path']
@@ -282,6 +301,21 @@ def capcut_open(r):
     # A draft kept elsewhere: the native folder dialog cannot be driven, so the flow hands its path to what it calls.
     r.s.call('window.__nuzky.openDraftFolder(arguments[0])', str(r.elsewhere))
     r.check('a draft folder added by hand opens at once', wait(lambda: view(r)['name'] == 'Short reel', 20), view(r))
+    wait(lambda: r.s.run(DIALOG_STATE), 10)
+    r.s.run(CLICK, 'Done', DIALOG)
+    r.s.call('window.__nuzky.openDraftFolder(arguments[0])', str(r.elsewhere.parent))
+    r.s.run("window.__nuzky.store.setState({view: 'home'})")
+    r.check('a folder of drafts joins the cards', wait(lambda: {'Short reel', 'Second reel'} <= {c['name'] for c in r.s.run(DRAFT_CARDS)}, 10), r.s.run(DRAFT_CARDS))
+    r.s.call('window.__nuzky.findDrafts()')
+    learn = "return (window.__nuzky.style.getState().capcutDrafts ?? []).map((d) => d.name)"
+    r.check('and Learn my style lists them too', wait(lambda: 'Second reel' in r.s.run(learn), 10), r.s.run(learn))
+
+    # Saved again in CapCut: the menu brings it over once more, beside the project made before.
+    count = len(list(projects_dir(r).glob('*.nuzky')))
+    r.s.run("""const b = [...document.querySelectorAll('section[aria-label="CapCut drafts"] button[data-draft]')].find((b) => b.querySelector('[data-name]').textContent === 'Talking reel');
+        b.focus(); b.dispatchEvent(new KeyboardEvent('keydown', {key: 'ContextMenu', bubbles: true, cancelable: true}));""")
+    r.check('a draft\'s menu offers to open it again as a new project', wait(lambda: r.s.run(MENU_ITEM, 'Open as a new project'), 5))
+    r.check('which makes another project of it', wait(lambda: view(r)['name'] == 'Talking reel' and len(list(projects_dir(r).glob('*.nuzky'))) == count + 1, 20), view(r))
     wait(lambda: r.s.run(DIALOG_STATE), 10)
     r.s.run(CLICK, 'Done', DIALOG)
 
