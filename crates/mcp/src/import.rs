@@ -99,10 +99,8 @@ pub fn project(read: Read, editor: &str, from: &Path, fonts: &[String]) -> Resul
     project.assets = assets.list;
     for (i, track) in project.tracks.iter_mut().enumerate() {
         for (j, clip) in track.clips.iter_mut().enumerate() {
-            if i > 0 || j == 0 {
-                if clip.transition_in.take().is_some() {
-                    left.add(if i > 0 { "Transitions on overlay tracks" } else { "A transition into the first clip" });
-                }
+            if (i > 0 || j == 0) && clip.transition_in.take().is_some() {
+                left.add(if i > 0 { "Transitions on overlay tracks" } else { "A transition into the first clip" });
             }
         }
     }
