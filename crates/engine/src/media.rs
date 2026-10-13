@@ -291,7 +291,9 @@ fn to_rgba(scaler: &mut Option<Scaler>, f: &frame::Video, t_us: i64, w: u32, h: 
     if scaler.as_ref().map(|s| s.key) != Some(key) {
         let mut ctx =
             scaling::Context::get(f.format(), f.width(), f.height(), Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
-        set_sws_colorspace(&mut ctx, sws_colorspace(matrix(f)), is_full_range(f), ff::ffi::SWS_CS_DEFAULT, true);
+        // swscale scales an RGB source in YUV, converting it in with the output's matrix and out with the source's.
+        let space = sws_colorspace(matrix(f));
+        set_sws_colorspace(&mut ctx, space, is_full_range(f), space, true);
         *scaler = Some(Scaler { key, ctx });
     }
     let mut out = frame::Video::new(Pixel::RGBA, w, h);
