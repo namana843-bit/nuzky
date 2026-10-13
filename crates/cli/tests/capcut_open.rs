@@ -304,7 +304,12 @@ fn a_capcut_draft_opens_as_a_project_that_plays_as_cut() {
     assert!(!missing.status.success() && String::from_utf8_lossy(&missing.stderr).contains("gone.mov"));
     let white_width = |frame: (u32, u32, Vec<u8>)| {
         let start = (frame.1 / 2 * frame.0 * 3) as usize;
-        frame.2[start..start + frame.0 as usize * 3].chunks_exact(3).filter(|p| p.iter().all(|v| *v > 235)).count()
+        frame.2[start..start + frame.0 as usize * 3]
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter(|p| p.iter().all(|v| *v > 235))
+            .count()
     };
     let small = white_width(frame(&dir, 0.1));
     let large = white_width(frame(&dir, 1.9));

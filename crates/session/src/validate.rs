@@ -70,7 +70,7 @@ fn imported(project: &Project) -> Result<()> {
     let Some(imported) = &project.imported else { return Ok(()) };
     let line = |text: &str, max: usize| text.chars().count() <= max && !text.chars().any(char::is_control);
     ensure!(
-        line(&imported.editor, 40) && line(&imported.path, 4096),
+        line(&imported.editor, 40) && line(&imported.path, 4096) && imported.modified_ms >= 0,
         "INVALID_PROJECT: the editor and the path an imported timeline came from are single lines"
     );
     ensure!(

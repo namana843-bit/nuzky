@@ -3,7 +3,7 @@ import { open as pickFolder } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { newProjectFromDraft, openProject, refreshLibrary, useLibrary } from "./library";
 import { blobUrl, useEditor } from "./store";
-import type { CapCutDraft } from "./types";
+import type { CapCutDraft, LibraryProject } from "./types";
 
 /** Folders of drafts added by hand, besides the one CapCut keeps them in. */
 const FOLDERS_KEY = "nuzky.capcutFolders";
@@ -72,11 +72,11 @@ export async function openDraftFolder(picked: string) {
 }
 
 /** The project opened from the draft before, if it is still in the library. */
-export const projectOf = (draft: CapCutDraft) => useLibrary.getState().projects?.find((p) => p.importedFrom === draft.path && p.state !== "broken");
+export const projectOf = (projects: LibraryProject[] | null, draft: CapCutDraft) => projects?.find((p) => p.importedFrom === draft.path && p.state !== "broken");
 
 /** Opens the project made of the draft before, or makes one; what did not come over shows once it is open. */
 export function openDraft(draft: CapCutDraft, again = false) {
-  const made = projectOf(draft);
+  const made = projectOf(useLibrary.getState().projects, draft);
   if (made && !again) return openProject(made);
   newProjectFromDraft(
     draft.name,

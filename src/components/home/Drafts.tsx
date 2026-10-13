@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { CopyPlus, Film, FolderOpen, FolderPlus, Loader2 } from "lucide-react";
-import { addDraftFolder, findDrafts, loadCover, openDraft, useCapCut } from "../../lib/capcut";
+import { addDraftFolder, findDrafts, loadCover, openDraft, projectOf, useCapCut } from "../../lib/capcut";
 import { openProject, useLibrary, whenLabel } from "../../lib/library";
 import { formatLength } from "../../lib/time";
 import type { CapCutDraft, LibraryProject } from "../../lib/types";
@@ -12,7 +12,6 @@ const CARD_MIN = 148;
 const GAP = 16;
 const chip = "flex items-center gap-1 rounded-[5px] bg-black/60 px-1.5 py-[3px] text-[11px] font-medium leading-none text-fg";
 
-/** How many cards fit in one row of the grid. */
 function useColumns() {
   const grid = useRef<HTMLDivElement>(null);
   const [columns, setColumns] = useState(4);
@@ -27,8 +26,6 @@ function useColumns() {
   }, []);
   return [grid, columns] as const;
 }
-
-const madeOf = (projects: LibraryProject[] | null, draft: CapCutDraft) => projects?.find((p) => p.importedFrom === draft.path && p.state !== "broken");
 
 /** CapCut's drafts on this computer as cards, newest first: one row of them, or all. */
 export function DraftsSection({ title, className = "" }: { title: string; className?: string }) {
@@ -52,7 +49,7 @@ export function DraftsSection({ title, className = "" }: { title: string; classN
 
   /** Opening the project made of a draft, or the draft again as a new project once it changed in CapCut. */
   const showMenu = (draft: CapCutDraft, at: { x: number; y: number }, keyboard: boolean, back: HTMLElement) => {
-    const made = madeOf(projects, draft);
+    const made = projectOf(projects, draft);
     const items: MenuEntry[] = [
       ...(made ? [{ label: `Open “${made.name}”`, icon: <FolderOpen size={15} />, run: () => openProject(made) }] : []),
       { label: "Open as a new project", icon: <CopyPlus size={15} />, run: () => openDraft(draft, true) },
@@ -98,7 +95,7 @@ export function DraftsSection({ title, className = "" }: { title: string; classN
           <DraftCard
             key={d.path}
             draft={d}
-            made={madeOf(projects, d)}
+            made={projectOf(projects, d)}
             focusable={d.path === tabStop}
             onFocus={() => setFocused(d.path)}
             onMenu={(at, back) => showMenu(d, at, false, back)}
@@ -142,8 +139,8 @@ function DraftCard({
   useEffect(() => loadCover(draft), [draft]);
 
   const when = whenLabel(draft.modifiedMs);
-  // Saved in CapCut after the project was last changed: opening it again as a new project brings that over.
-  const changed = !!made && draft.modifiedMs > made.modifiedMs;
+  // Saved in CapCut after it was opened: opening it again as a new project brings that over.
+  const changed = !!made && draft.modifiedMs > (made.draftModifiedMs ?? 0);
   const meta = made ? `${changed ? "Changed since" : "In Nuzky"} · ${when}` : when;
   const frame = ratio < CARD_BOX ? { height: "100%", aspectRatio: `${ratio}` } : { width: "100%", aspectRatio: `${ratio}` };
   return (

@@ -694,6 +694,10 @@ export type Imported = {
    */
   path: string,
   /**
+   * When the timeline was last saved before it was opened, in milliseconds since 1970; 0 when it does not say.
+   */
+  modifiedMs: number,
+  /**
    * One line for each kind of thing in it that did not come over, in plain words.
    */
   leftOut: Array<string>,
@@ -788,6 +792,10 @@ export type LibraryProject = {
    * The folder of the CapCut draft it was opened from.
    */
   importedFrom: string | null,
+  /**
+   * When that draft was last saved before it was opened, in milliseconds since 1970.
+   */
+  draftModifiedMs: number | null,
 };
 
 /**

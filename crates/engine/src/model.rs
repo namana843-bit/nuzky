@@ -46,6 +46,8 @@ pub struct Imported {
     pub editor: String,
     /// The timeline's folder or file, as it was opened. Opening never changes it.
     pub path: String,
+    /// When the timeline was last saved before it was opened, in milliseconds since 1970; 0 when it does not say.
+    pub modified_ms: i64,
     /// One line for each kind of thing in it that did not come over, in plain words.
     pub left_out: Vec<String>,
 }

@@ -33,12 +33,13 @@ pub fn capcut_draft(draft: &Path, fonts: &[String]) -> Result<Project> {
             error
         }
     })?;
-    project(read, "CapCut", folder, fonts)
+    let modified_ms = timeline::capcut::drafts(folder).first().map_or(0, |d| d.modified_ms.max(0));
+    project(read, "CapCut", folder, modified_ms, fonts)
 }
 
 /// The project the timeline `read` from `from` makes, not saved yet. `fonts` are the families this
 /// computer draws text in; a text in another one is drawn in Nuzky's own until it is installed.
-pub fn project(read: Read, editor: &str, from: &Path, fonts: &[String]) -> Result<Project> {
+pub fn project(read: Read, editor: &str, from: &Path, modified_ms: i64, fonts: &[String]) -> Result<Project> {
     let Read { timeline, unread } = read;
     let mut left = Left::default();
     let name = match timeline.name.trim() {
@@ -108,7 +109,8 @@ pub fn project(read: Read, editor: &str, from: &Path, fonts: &[String]) -> Resul
     left_out.extend(unread);
     left_out.extend(left.lines());
     left_out.truncate(MAX_LEFT_OUT);
-    project.imported = Some(Imported { editor: editor.into(), path: from.display().to_string(), left_out });
+    project.imported =
+        Some(Imported { editor: editor.into(), path: from.display().to_string(), modified_ms, left_out });
     // The engine's own rules for fades and transitions that run longer than their clips, and no empty tracks.
     project.apply(EditCmd::RenameProject { name })?;
     nuzky_session::validate(&project).context("The timeline makes a project Nuzky cannot open")?;
@@ -262,6 +264,9 @@ fn media(clip: &MediaClip, track: TrackKind, assets: &Assets, project: &Project,
         }
     }
     let half = clip.duration_us / 2;
+    if clip.fade_in_us > half || clip.fade_out_us > half {
+        left.add("Sound fades longer than half their clip, shortened to half");
+    }
     let transition_in = clip.transition_in.as_ref().and_then(|t| {
         let kind = match t.kind {
             timeline::TransitionKind::Dissolve => TransitionKind::Dissolve,

@@ -357,6 +357,9 @@ pub fn read(bytes: &[u8], folder: &Path) -> Result<Read> {
                     ("text" | "subtitle", "texts") => {
                         if let Some(text) = text_clip(segment, material, text_scale, canvas_width, &mut unread)? {
                             settings(segment, &materials, &mut unread);
+                            if !segment.common_keyframes.is_empty() {
+                                unread.add("Keyframes on texts");
+                            }
                             read.texts.push(text);
                         }
                     }
@@ -429,7 +432,6 @@ impl<'a> Materials<'a> {
         })
     }
 
-    /// The materials of a list a clip refers to besides its own.
     fn refs<'r>(&'r self, refs: &'r [String], category: &'r str) -> impl Iterator<Item = &'a Value> + 'r {
         refs.iter().filter_map(|id| self.get(id)).filter(move |(c, _)| *c == category).map(|(_, m)| m)
     }

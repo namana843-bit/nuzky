@@ -48,6 +48,8 @@ def media(folder):
         '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', str(folder / 'talk.mp4'))
     run('ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', f'color=c=0x{PHOTO}:s=540x960', '-frames:v', '1', str(folder / 'photo.png'))
     run('ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=10', str(folder / 'song.mp3'))
+    # A file that is there but is no video, as a render CapCut never finished.
+    (folder / 'broken.mp4').write_bytes(b'not a video')
 
 
 def segment(material, start, duration, source=None, speed=1.0, **extra):
@@ -93,6 +95,7 @@ def draft(folder, name, files, modified_s):
         'tracks': [
             {'type': 'video', 'attribute': 0, 'segments': main},
             {'type': 'video', 'attribute': 0, 'segments': [overlay]},
+            {'type': 'video', 'attribute': 0, 'segments': [segment('broken', 2_000_000, 1_000_000, 0)]},
             {'type': 'video', 'attribute': 2, 'segments': [segment('talk', 0, 7_000_000, 0)]},
             {'type': 'text', 'attribute': 0, 'segments': captions},
             {'type': 'text', 'attribute': 0, 'segments': [title]},
@@ -102,6 +105,7 @@ def draft(folder, name, files, modified_s):
         'materials': {
             'videos': [{'id': 'talk', 'type': 'video', 'path': str(talk), 'material_name': 'talk.mp4', 'width': 540, 'height': 960},
                        {'id': 'gone', 'type': 'video', 'path': str(files / 'gone/gone.mov'), 'material_name': 'gone.mov', 'width': 540, 'height': 960},
+                       {'id': 'broken', 'type': 'video', 'path': str(files / 'broken.mp4'), 'material_name': 'broken.mp4', 'width': 540, 'height': 960},
                        {'id': 'photo', 'type': 'photo', 'path': str(photo), 'material_name': 'photo.png', 'width': 540, 'height': 960}],
             'audios': [{'id': 'song', 'type': 'music', 'path': str(song), 'name': 'song.mp3'}],
             'transitions': [{'id': 'woosh', 'type': 'transition', 'name': 'Woosh', 'duration': 466_666, 'is_overlap': True},
@@ -200,11 +204,11 @@ def capcut_open(r):
     v = view(r)
     r.check('as a new project in the editor, named as in CapCut', v['view'] == 'editor' and v['name'] == 'Talking reel' and v['canvas'] == [540, 960], v)
     r.check('a dialog says it opened from CapCut and what came over',
-            dialog and dialog['title'] == 'Opened “Talking reel” from CapCut' and '6 clips, 1 sound' in dialog['text'] and '3 captions' in dialog['text'] and '1 title' in dialog['text'], dialog)
+            dialog and dialog['title'] == 'Opened “Talking reel” from CapCut' and '7 clips, 1 sound' in dialog['text'] and '3 captions' in dialog['text'] and '1 title' in dialog['text'], dialog)
     lines = dialog['lines'] if dialog else []
-    wanted = ['Missing media: gone.mov', 'Transition: Woosh', 'Text shadows', 'Effects', 'Color adjustments']
+    wanted = ['Missing media: gone.mov', 'Media Nuzky cannot open: broken.mp4', 'Transition: Woosh', 'Text shadows', 'Effects', 'Color adjustments']
     r.check('and lists in one list everything that did not come over, missing media first',
-            all(any(l.startswith(w) for l in lines) for w in wanted) and lines[0].startswith('Missing media: gone.mov'), lines)
+            all(any(l.startswith(w) for l in lines) for w in wanted) and {l.split(':')[0] for l in lines[:2]} == {'Missing media', 'Media Nuzky cannot open'}, lines)
     time.sleep(0.4)
     r.shot('opened-dialog')
     r.check('Done closes it', r.s.run(CLICK, 'Done', DIALOG) and wait(lambda: r.s.run(DIALOG_STATE) is None, 5))
@@ -228,7 +232,7 @@ def capcut_open(r):
     r.check('the title is text on a track of its own', [c['content']['text'] for t in by_name.get('Text', []) for c in t['clips']] == ['My title'], by_name.get('Text'))
     overlays = by_name.get('Overlay', [])
     r.check('the photo is an image clip over the start, and the hidden track stays hidden',
-            len(overlays) == 2 and not overlays[0]['hidden'] and overlays[0]['clips'][0]['startUs'] == 500_000 and overlays[1]['hidden'], overlays)
+            len(overlays) == 3 and not overlays[0]['hidden'] and overlays[0]['clips'][0]['startUs'] == 500_000 and overlays[2]['hidden'], overlays)
     audio = by_name.get('Audio', [{}])[0]
     song = audio.get('clips', [{}])[0].get('content', {})
     r.check('the song is muted, at its volume with its fade in', audio.get('muted') and audio.get('keepInPlace') and abs(song.get('volume', 0) - 0.3) < 1e-6 and song.get('fadeInUs') == 1_000_000, audio)
@@ -240,7 +244,8 @@ def capcut_open(r):
         got, want = preview_pixel(r, at, f'preview-{at}'), reference(r, source)
         r.check(f'at {at / 1e6:g} s the preview shows the recording at {source:g} s', near(got, want), {'preview': got, 'ffmpeg': want})
     black = preview_pixel(r, 2_500_000, 'preview-missing')
-    r.check('the missing file keeps its place, showing nothing, and the hidden copy stays hidden', near(black, (0, 0, 0)), black)
+    r.check('the missing file and the one that does not open keep their place, showing nothing, and the hidden copy stays hidden',
+            near(black, (0, 0, 0)), black)
     photo = preview_pixel(r, 1_000_000, 'preview-photo', at=(0.25, 0.25))
     r.check('the photo sits over the top left quarter', near(photo, hex_rgb(PHOTO)), photo)
 
