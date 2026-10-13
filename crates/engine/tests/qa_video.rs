@@ -264,6 +264,88 @@ fn full_range_444_rgb_alpha_and_gif() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+// An RGB image has no YUV matrix. One 720 px or taller was once converted through BT.601 and back through
+// BT.709, which drew a screenshot's purple (254, 0, 253) as (255, 39, 255).
+#[test]
+fn saturated_png_colours_match_ffmpeg_in_preview_thumbnails_and_export() {
+    if !available() {
+        return;
+    }
+    const COLOURS: [[u8; 3]; 4] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [254, 0, 253]];
+    let d = dir("png-colours");
+    let middles = |frame: &[u8], w: u32, h: u32| -> Vec<[u8; 4]> {
+        let (w, y) = (w as usize, h as usize / 2);
+        (0..4).map(|i| frame[(y * w + (2 * i + 1) * w / 8) * 4..][..4].try_into().unwrap()).collect()
+    };
+    let mut failures = Vec::new();
+    let mut compare = |what: String, ours: Vec<[u8; 4]>, theirs: &[[u8; 4]], tolerance: u8| {
+        if ours.iter().flatten().zip(theirs.iter().flatten()).any(|(a, b)| a.abs_diff(*b) > tolerance) {
+            failures.push(format!("{what}: {ours:?}, FFmpeg {theirs:?}"));
+        }
+    };
+    for (w, h) in [(320, 180), (1280, 720)] {
+        for (pix, alpha) in [("rgb24", 255), ("rgba", 160)] {
+            let p = d.join(format!("{w}x{h}-{pix}.png"));
+            let band = |c: usize| {
+                let terms = COLOURS.iter().enumerate();
+                let terms = terms.map(|(i, v)| format!("{}*between(X,{},{})", v[c], i * w / 4, (i + 1) * w / 4 - 1));
+                terms.collect::<Vec<_>>().join("+")
+            };
+            let source =
+                format!("nullsrc=s={w}x{h},format=rgba,geq=r='{}':g='{}':b='{}':a={alpha}", band(0), band(1), band(2));
+            ff(&["-f", "lavfi", "-i", &source, "-frames:v", "1", "-pix_fmt", pix], &p);
+            let (w, h) = (w as u32, h as u32);
+            let reference = middles(&raw(&p, &[]), w, h);
+
+            // Thumbnails and the preview decode at the size they show, often smaller than the file.
+            let mut decoder = VideoDecoder::open(&p).unwrap();
+            let (t, f) = decoder.next_frame().unwrap().unwrap();
+            for (cw, ch) in [(w, h), (w / 2, h / 2), (w * 120 / h, 120)] {
+                let rgba = decoder.convert(&f, t, cw, ch).unwrap();
+                compare(format!("{w}x{h} {pix} decoded at {cw}x{ch}"), middles(&rgba.data, cw, ch), &reference, 1);
+            }
+
+            // On a canvas half its size the preview, `nuzky frame` and the export scale it, as in most projects.
+            let mut timeline = project(&p, 200_000);
+            (timeline.canvas.width, timeline.canvas.height) = (w / 2, h / 2);
+            timeline.canvas.background = "#000000".into();
+            let over_black = format!("color=black:s={w}x{h},format=rgba[bg];[bg][0:v]overlay=format=rgb:shortest=1");
+            let theirs = middles(&raw(&p, &["-filter_complex", &over_black, "-frames:v", "1"]), w, h);
+            let frame = Renderer::new().unwrap().render(&timeline, 0, w / 2, h / 2, Wait::Exact, false).unwrap();
+            compare(format!("{w}x{h} {pix} drawn"), middles(&frame, w / 2, h / 2), &theirs, 1);
+
+            // The export is BT.709 4:2:0 in limited range.
+            let out = d.join(format!("{w}x{h}-{pix}.mp4"));
+            let options = nuzky_engine::export::ExportOptions {
+                preset: "ultrafast".into(),
+                replace_existing: true,
+                ..Default::default()
+            };
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            nuzky_engine::export::export(&timeline, &d.join("cache"), &out, &options, &cancel, |_| {}).unwrap();
+            let through_yuv = format!(
+                "{over_black},scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,scale=in_color_matrix=bt709:in_range=tv"
+            );
+            let theirs = middles(&raw(&p, &["-filter_complex", &through_yuv, "-frames:v", "1"]), w, h);
+            let exported = middles(&raw(&out, &["-frames:v", "1"]), w / 2, h / 2);
+            compare(format!("{w}x{h} {pix} exported"), exported, &theirs, 3);
+        }
+    }
+    // Shown tiny, swscale scales in two steps and sets the matrix only on the first. FFmpeg 6 scales the same way,
+    // so the reference is the frame at full size, which the two steps round a few values off.
+    let video =
+        ["-vf", "scale=out_color_matrix=bt709", "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-c:v", "libx264"];
+    for (name, args) in [("tiny.png", &["-pix_fmt", "rgb24"][..]), ("tiny.mp4", &video[..])] {
+        let p = d.join(name);
+        ff(&[&["-f", "lavfi", "-i", "color=0xFE00FD:s=3840x2160", "-frames:v", "1"], args].concat(), &p);
+        let mut decoder = VideoDecoder::open(&p).unwrap();
+        let (t, f) = decoder.next_frame().unwrap().unwrap();
+        let rgba = decoder.convert(&f, t, 28, 16).unwrap();
+        let theirs = middles(&raw(&p, &[]), 3840, 2160);
+        compare(format!("3840x2160 {name} decoded at 28x16"), middles(&rgba.data, 28, 16), &theirs, 5);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
 #[test]
 fn png_alpha_composites_over_video() {
     if !available() {
