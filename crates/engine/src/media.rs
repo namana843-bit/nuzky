@@ -161,7 +161,17 @@ fn join_tiles(
                 sent_all = true;
             }
         }
-        while decoder.receive_frame(&mut tile).is_ok() {
+        loop {
+            match decoder.receive_frame(&mut tile) {
+                Ok(()) => {}
+                Err(ff::Error::Other { errno }) if errno == ff::error::EAGAIN => break,
+                Err(ff::Error::Eof) => break,
+                // As ffmpeg itself does: the next tiles may still decode.
+                Err(e) => {
+                    log::warn!("Skipping a corrupt tile: {e}");
+                    continue;
+                }
+            }
             let canvas = match &mut canvas {
                 Some(canvas) => canvas,
                 None => canvas.insert(blank(&tile, grid.canvas)?),
