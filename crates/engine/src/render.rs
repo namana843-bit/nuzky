@@ -71,9 +71,11 @@ pub struct Renderer {
 /// What a renderer draws for a clip with a background whose person matte is not made yet.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pending {
-    /// Fails with `MATTE_MISSING`, as export, a saved frame and anything an agent inspects must.
+    /// Fails with `MATTE_MISSING`, as export, a saved frame and anything an agent inspects must; a media file
+    /// that is not there fails too.
     Fail,
-    /// The clip as recorded, as the preview shows it until the matte is made.
+    /// The clip as recorded, as the preview shows it until the matte is made; a media file that is not there
+    /// draws nothing, as in playback, so the rest of the frame still shows.
     Original,
 }
 
@@ -550,6 +552,9 @@ impl Renderer {
         let (image, (rotation, mirror), adjust, transfer) = match &clip.content {
             ClipContent::Media { asset_id, adjust, background, .. } => {
                 let Some(asset) = project.asset(asset_id) else { return Ok(None) };
+                if matches!(self.mattes, Some((_, Pending::Original))) && !Path::new(&asset.path).exists() {
+                    return Ok(None);
+                }
                 // A stable conversion size avoids flushing the decoder queue on every animation frame.
                 let size = decode_resolution(project, clip, asset, k, self.gpu.max_texture_dimension());
                 let source_t = if asset.kind == AssetKind::Image {
