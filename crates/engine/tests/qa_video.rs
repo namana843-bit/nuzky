@@ -331,7 +331,8 @@ fn saturated_png_colours_match_ffmpeg_in_preview_thumbnails_and_export() {
             compare(format!("{w}x{h} {pix} exported"), exported, &theirs, 3);
         }
     }
-    // Shown tiny, swscale scales in two steps and sets the matrix only on the first.
+    // Shown tiny, swscale scales in two steps and sets the matrix only on the first. FFmpeg 6 scales the same way,
+    // so the reference is the frame at full size, which the two steps round a few values off.
     let video =
         ["-vf", "scale=out_color_matrix=bt709", "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-c:v", "libx264"];
     for (name, args) in [("tiny.png", &["-pix_fmt", "rgb24"][..]), ("tiny.mp4", &video[..])] {
@@ -340,8 +341,8 @@ fn saturated_png_colours_match_ffmpeg_in_preview_thumbnails_and_export() {
         let mut decoder = VideoDecoder::open(&p).unwrap();
         let (t, f) = decoder.next_frame().unwrap().unwrap();
         let rgba = decoder.convert(&f, t, 28, 16).unwrap();
-        let theirs = middles(&raw(&p, &["-vf", "scale=28:16"]), 28, 16);
-        compare(format!("3840x2160 {name} decoded at 28x16"), middles(&rgba.data, 28, 16), &theirs, 1);
+        let theirs = middles(&raw(&p, &[]), 3840, 2160);
+        compare(format!("3840x2160 {name} decoded at 28x16"), middles(&rgba.data, 28, 16), &theirs, 5);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
