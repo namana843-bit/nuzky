@@ -102,15 +102,16 @@ def comparison(image, reference):
     return aspect, correlation, difference
 
 
-def check_picture(r, name, image, reference, hlg):
+def check_picture(r, name, image, reference, hlg, allowed=4):
     aspect, correlation, difference = comparison(image, reference)
     r.check(f'{name}: the whole upright picture has the right proportions', aspect < 0.02,
             f'aspect error {aspect:.2%}; detected picture {picture(image).size}; reference {reference.size}')
     r.check(f'{name}: the picture matches FFmpeg', correlation >= 0.95,
             f'greyscale Pearson {correlation:.4f}, required 0.95')
     if not hlg:
-        # The fixture's RGB error is below 1; 12 also allows thumbnail scaling and a small 720p H.264 export.
-        r.check(f'{name}: SDR colours match FFmpeg', difference < 12, f'mean RGB error {difference:.2f}/255, allowed 12')
+        # The preview and export are within 2/255; the BT.709 matrix FFmpeg does not use for this file was 8.
+        r.check(f'{name}: SDR colours match FFmpeg', difference < allowed,
+                f'mean RGB error {difference:.2f}/255, allowed {allowed}')
 
 
 THUMB = """[...document.querySelectorAll('[title]')].find(e => e.title.split('\\n')[0] === arguments[0])?.querySelector('img')"""
@@ -178,7 +179,9 @@ def heic_flow(r):
                   reader.onerror = () => reject(reader.error); reader.readAsDataURL(b); }})); }})()""", path.name)
             r.check(f'{path.name}: the displayed thumbnail can be decoded', thumb['ok'], thumb.get('error'))
             if thumb['ok']:
-                check_picture(r, f'{path.name} thumbnail', Image.open(io.BytesIO(base64.b64decode(thumb['value'].split(',', 1)[1]))), reference, hlg)
+                # A 120 px thumbnail scaled down again differs by about 6/255.
+                thumbnail = Image.open(io.BytesIO(base64.b64decode(thumb['value'].split(',', 1)[1])))
+                check_picture(r, f'{path.name} thumbnail', thumbnail, reference, hlg, allowed=8)
     video = export(r, 'heic.mp4')
     if video.exists():
         for path, reference, hlg in fixtures:
