@@ -286,14 +286,20 @@ pub(crate) fn is_full_range(f: &frame::Video) -> bool {
         || matches!(f.format(), Pixel::YUVJ420P | Pixel::YUVJ422P | Pixel::YUVJ444P | Pixel::YUVJ440P)
 }
 
+fn is_rgb(format: Pixel) -> bool {
+    use ff::ffi::*;
+    let desc = unsafe { av_pix_fmt_desc_get(format.into()) };
+    !desc.is_null() && unsafe { (*desc).flags } & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_PAL) as u64 != 0
+}
+
 fn to_rgba(scaler: &mut Option<Scaler>, f: &frame::Video, t_us: i64, w: u32, h: u32) -> Result<RgbaFrame> {
     let key = (f.format(), f.width(), f.height(), w, h);
     if scaler.as_ref().map(|s| s.key) != Some(key) {
         let mut ctx =
             scaling::Context::get(f.format(), f.width(), f.height(), Pixel::RGBA, w, h, scaling::Flags::BILINEAR)?;
-        // swscale scales an RGB source in YUV, converting it in with the output's matrix and out with the source's.
-        let space = sws_colorspace(matrix(f));
-        set_sws_colorspace(&mut ctx, space, is_full_range(f), space, true);
+        // swscale scales an RGB source in YUV and must convert it back with the matrix it went in with.
+        let space = if is_rgb(f.format()) { ff::ffi::SWS_CS_DEFAULT } else { sws_colorspace(matrix(f)) };
+        set_sws_colorspace(&mut ctx, space, is_full_range(f), ff::ffi::SWS_CS_DEFAULT, true);
         *scaler = Some(Scaler { key, ctx });
     }
     let mut out = frame::Video::new(Pixel::RGBA, w, h);

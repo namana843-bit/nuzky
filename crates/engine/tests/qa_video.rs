@@ -305,7 +305,7 @@ fn saturated_png_colours_match_ffmpeg_in_preview_thumbnails_and_export() {
                 compare(format!("{w}x{h} {pix} decoded at {cw}x{ch}"), middles(&rgba.data, cw, ch), &reference, 1);
             }
 
-            // The preview, `nuzky frame` and the export draw it over the black canvas, here half its size.
+            // On a canvas half its size the preview, `nuzky frame` and the export scale it, as in most projects.
             let mut timeline = project(&p, 200_000);
             (timeline.canvas.width, timeline.canvas.height) = (w / 2, h / 2);
             timeline.canvas.background = "#000000".into();
@@ -330,6 +330,18 @@ fn saturated_png_colours_match_ffmpeg_in_preview_thumbnails_and_export() {
             let exported = middles(&raw(&out, &["-frames:v", "1"]), w / 2, h / 2);
             compare(format!("{w}x{h} {pix} exported"), exported, &theirs, 3);
         }
+    }
+    // Shown tiny, swscale scales in two steps and sets the matrix only on the first.
+    let video =
+        ["-vf", "scale=out_color_matrix=bt709", "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-c:v", "libx264"];
+    for (name, args) in [("tiny.png", &["-pix_fmt", "rgb24"][..]), ("tiny.mp4", &video[..])] {
+        let p = d.join(name);
+        ff(&[&["-f", "lavfi", "-i", "color=0xFE00FD:s=3840x2160", "-frames:v", "1"], args].concat(), &p);
+        let mut decoder = VideoDecoder::open(&p).unwrap();
+        let (t, f) = decoder.next_frame().unwrap().unwrap();
+        let rgba = decoder.convert(&f, t, 28, 16).unwrap();
+        let theirs = middles(&raw(&p, &["-vf", "scale=28:16"]), 28, 16);
+        compare(format!("3840x2160 {name} decoded at 28x16"), middles(&rgba.data, 28, 16), &theirs, 1);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
