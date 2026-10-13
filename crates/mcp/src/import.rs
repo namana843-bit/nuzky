@@ -200,7 +200,9 @@ fn assets(timeline: &timeline::ImportedTimeline, project: &Project, left: &mut L
                     width,
                     height,
                     fps: if kind == AssetKind::Video { f64::from(project.canvas.fps) } else { 0.0 },
-                    has_audio: kind != AssetKind::Image,
+                    // A file put back later plays its sound; one that is there but does not open would only
+                    // fail each time Nuzky prepares its sound.
+                    has_audio: kind != AssetKind::Image && !path.is_file(),
                     rotation: 0,
                     mirror: false,
                     credit: None,
