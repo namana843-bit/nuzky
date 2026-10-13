@@ -148,7 +148,7 @@ fn join_tiles(
             packet
         })
     });
-    let (mut canvas, mut tile, mut sent_all) = (None, frame::Video::empty(), false);
+    let (mut canvas, mut tile, mut sent_all, mut failed) = (None, frame::Video::empty(), false, 0);
     while !sent_all {
         match packets.next() {
             Some(packet) => {
@@ -166,11 +166,14 @@ fn join_tiles(
                 Ok(()) => {}
                 Err(ff::Error::Other { errno }) if errno == ff::error::EAGAIN => break,
                 Err(ff::Error::Eof) => break,
-                // As ffmpeg itself does: the next tiles may still decode.
-                Err(e) => {
+                // As ffmpeg itself does: the next tiles may still decode. A tile fails at most once, so a decoder
+                // that keeps failing, as one out of memory does, ends here.
+                Err(e) if failed < grid.tiles.len() => {
+                    failed += 1;
                     log::warn!("Skipping a corrupt tile: {e}");
                     continue;
                 }
+                Err(e) => return Err(e.into()),
             }
             let canvas = match &mut canvas {
                 Some(canvas) => canvas,
