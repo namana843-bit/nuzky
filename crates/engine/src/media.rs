@@ -73,6 +73,7 @@ pub(crate) fn is_image_format(input: &ff::format::context::Input) -> bool {
 
 /// A picture stored as tiles, as iPhones keep HEIC photos. FFmpeg demuxes each tile as a stream of its own; only
 /// its command-line tool joins them.
+#[cfg_attr(not(ffmpeg_7_1), allow(dead_code))]
 struct TileGrid {
     /// The stream of each tile and where its top left corner goes on the canvas.
     tiles: Vec<(usize, i32, i32)>,
@@ -82,10 +83,18 @@ struct TileGrid {
     orientation: Orientation,
 }
 
+/// FFmpeg before 7.1 does not read tiles as a grid (see build.rs).
+#[cfg(not(ffmpeg_7_1))]
+fn tile_grid(_input: &ff::format::context::Input) -> Option<TileGrid> {
+    None
+}
+
+#[cfg(ffmpeg_7_1)]
 unsafe fn slice<'a, T>(data: *const T, len: usize) -> &'a [T] {
     if len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(data, len) } }
 }
 
+#[cfg(ffmpeg_7_1)]
 fn tile_grid(input: &ff::format::context::Input) -> Option<TileGrid> {
     use ff::ffi::*;
     let input = unsafe { &*input.as_ptr() };

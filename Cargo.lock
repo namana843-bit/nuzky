@@ -3694,6 +3694,7 @@ dependencies = [
  "bytemuck",
  "cosmic-text",
  "ffmpeg-next",
+ "ffmpeg-sys-next",
  "log",
  "memmap2",
  "nnnoiseless",
