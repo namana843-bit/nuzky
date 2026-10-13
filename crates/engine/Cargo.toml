@@ -10,6 +10,8 @@ serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 ffmpeg-next = { version = "9.0.0", default-features = false, features = ["codec", "format", "software-resampling", "software-scaling"] }
+# The one ffmpeg-next uses, named here so build.rs learns which FFmpeg the headers are from.
+ffmpeg-sys-next = { version = "9.0.0", default-features = false }
 wgpu = "30.0.1"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
