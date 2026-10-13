@@ -5,16 +5,16 @@ import { cancelSignIn, signIn, signOut, useChatGpt } from "../lib/chatgpt";
 import { ChatGptLogo } from "./ChatGptLogo";
 import { Button, IconButton, trapTab } from "./ui";
 
-const USAGE_PAGE = "https://chatgpt.com/settings/usage";
+export const USAGE_PAGE = "https://chatgpt.com/settings/usage";
 const CARD = "rounded-xl bg-white/[.055] shadow-[inset_0_0_0_1px_rgb(255_255_255/.06)]";
 
 /** OpenAI's approved Continue with ChatGPT button, in its white format. */
-function ContinueButton({ anotherAccount = false }: { anotherAccount?: boolean }) {
+export function ContinueButton({ anotherAccount = false, onClick }: { anotherAccount?: boolean; onClick?: () => void }) {
   return (
     <button
       type="button"
       data-autofocus
-      onClick={() => void signIn(anotherAccount)}
+      onClick={onClick ?? (() => void signIn(anotherAccount))}
       className="inline-flex h-[45px] w-[242px] max-w-full shrink-0 items-center justify-center gap-3 rounded-[12px] bg-white px-5 text-[15px] font-medium leading-[18px] text-black active:brightness-90"
     >
       <ChatGptLogo />
@@ -90,7 +90,9 @@ function SignedIn({ email, plan }: { email: string | null; plan: boolean }) {
           )}
         </div>
       </div>
-      {plan ? (
+      {plan && action === "signingIn" ? (
+        <Waiting />
+      ) : plan ? (
         <div className="flex gap-2">
           <Button pill onClick={() => void openUrl(USAGE_PAGE)}>
             Manage usage <ExternalLink size={12} />

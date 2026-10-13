@@ -157,6 +157,7 @@ fn generate() -> String {
     types.visit::<nuzky_mcp::style::TimelinePlan>();
     types.visit::<crate::style::CapCutDraft>();
     types.visit::<nuzky_chatgpt::Status>();
+    types.visit::<nuzky_chatgpt::Model>();
     let mut out = HEADER.to_string();
     for declaration in types.by_name.values() {
         out.push('\n');

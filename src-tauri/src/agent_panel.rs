@@ -1,10 +1,13 @@
 //! The AI panel: runs the user's own agent for one message at a time, with Nuzky's MCP bridge
-//! as its only tools, and streams what it does to the UI as `agent` events.
+//! as its only tools, or ChatGPT on the user's plan with Nuzky's tools run in the app, and streams
+//! what it does to the UI as `agent` events.
 
-use crate::{AppState, CmdResult, connect, err};
-use nuzky_agent::{AgentEvent, AgentId, AgentInfo, McpServer, Turn, TurnRequest};
+use crate::{AppState, CmdResult, chatgpt, connect, err};
+use nuzky_agent::{AgentEvent, AgentId, AgentInfo, ChatGptRequest, McpServer, Tools, Turn, TurnRequest};
+use nuzky_mcp::{Access, Backend, Client};
 use nuzky_session::host::Host;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,6 +20,28 @@ struct Chat {
     session: String,
     /// Whether a turn got far enough for the agent to keep the conversation.
     resumable: bool,
+    /// ChatGPT's conversation, which Nuzky keeps, and the model it was last with.
+    history: Arc<Mutex<Vec<Value>>>,
+    model: Option<String>,
+}
+
+enum Start {
+    Cli(TurnRequest),
+    ChatGpt(ChatGptRequest),
+}
+
+/// Nuzky's tools for the panel's ChatGPT: a client of the project's session like a client of the MCP
+/// bridge, with the same rules, runs and jobs, without the socket.
+struct InApp(Backend);
+
+impl Tools for InApp {
+    fn call(&self, name: &str, arguments: Value) -> Value {
+        serde_json::to_value(self.0.answer(name, arguments)).unwrap_or_default()
+    }
+
+    fn end(&self) -> anyhow::Result<()> {
+        self.0.disconnect()
+    }
 }
 
 #[derive(Default)]
@@ -169,7 +194,9 @@ pub async fn agent_list() -> CmdResult<Vec<AgentInfo>> {
 /// Sends a message in the chat the UI named, under the id it gave the message; the answer arrives
 /// as `agent` events for the chat. The UI names both before sending, so even an agent that fails
 /// at once reaches it, and Stop works while the message is still starting.
+/// `model`: the ChatGPT model's slug, for ChatGPT.
 #[tauri::command]
+#[allow(clippy::too_many_arguments, reason = "one argument per field the panel sends")]
 pub async fn agent_send(
     app: AppHandle,
     agent: AgentId,
@@ -177,8 +204,11 @@ pub async fn agent_send(
     turn: String,
     text: String,
     context: PromptContext,
+    model: Option<String>,
 ) -> CmdResult<()> {
-    tauri::async_runtime::spawn_blocking(move || send(&app, agent, chat, turn, &text, &context)).await.map_err(err)?
+    tauri::async_runtime::spawn_blocking(move || send(&app, agent, chat, turn, &text, &context, model))
+        .await
+        .map_err(err)?
 }
 
 fn send(
@@ -188,6 +218,7 @@ fn send(
     turn: String,
     text: &str,
     context: &PromptContext,
+    model: Option<String>,
 ) -> CmdResult<()> {
     let panel = app.state::<AgentPanel>();
     // Another project opening, or Stop, while this starts must stop it once it runs.
@@ -209,38 +240,65 @@ fn send(
         }
         (session.project, current.path.clone(), current.host.clone())
     };
-    let info = nuzky_agent::find(agent);
-    let exe = info.path.ok_or_else(|| format!("NOT_INSTALLED: {} is not installed.", agent.name()))?;
-    // The bridge attaches to this window's project by its path: `--current` names whatever project
-    // the window opened last made current, which may be another Nuzky window's.
-    let bridge = connect::Command::this_app().map_err(err)?;
-    let args = vec!["mcp".into(), "--project".into(), path.to_string_lossy().into_owned(), "--allow-write".into()];
-    let mut env =
-        std::env::var("XDG_RUNTIME_DIR").map(|dir| vec![("XDG_RUNTIME_DIR".to_owned(), dir)]).unwrap_or_default();
-    env.push((nuzky_mcp::bridge::CONVERSATION_VAR.to_owned(), panel.job_owner(&host)));
-
-    let mut chats = panel.chats.lock().unwrap();
-    if chats.get(&chat).is_some_and(|c| c.agent != agent) {
-        chats.remove(&chat);
-    }
-    let id = chat;
-    let chat = chats.entry(id.clone()).or_insert_with(|| Chat { agent, session: new_id(), resumable: false });
-    let request = TurnRequest {
-        agent,
-        exe,
-        session: chat.session.clone(),
-        resume: chat.resumable,
-        prompt: prompt(text, context, &project),
-        cwd: work_dir(),
-        mcp: McpServer { command: bridge.program.into(), args, env },
+    let owner = panel.job_owner(&host);
+    let (session, resumable, history) = {
+        let mut chats = panel.chats.lock().unwrap();
+        if chats.get(&chat).is_some_and(|c| c.agent != agent) {
+            chats.remove(&chat);
+        }
+        let chat = chats.entry(chat.clone()).or_insert_with(|| Chat {
+            agent,
+            session: new_id(),
+            resumable: false,
+            history: Arc::default(),
+            model: None,
+        });
+        if chat.model != model {
+            // ChatGPT's reasoning goes back only to the model that wrote it.
+            chat.history.lock().unwrap().retain(|item| item["type"] != "reasoning");
+            chat.model = model.clone();
+        }
+        (chat.session.clone(), chat.resumable, chat.history.clone())
     };
-    drop(chats);
+    let id = chat;
+    let request = if agent == AgentId::ChatGpt {
+        let client = Client { id: owner, access: Access::Write };
+        Start::ChatGpt(ChatGptRequest {
+            api: chatgpt::chatgpt().api().to_owned(),
+            model: model.ok_or("Choose a ChatGPT model first.")?,
+            guide: nuzky_mcp::guide(),
+            tools: nuzky_mcp::tool_list().map_err(err)?,
+            prompt: prompt(text, context, &project),
+            history,
+            token: Arc::new(|renew| chatgpt::chatgpt().access_token(renew)),
+            run: Arc::new(InApp(Backend::shared(host, &path, client).map_err(err)?)),
+        })
+    } else {
+        let info = nuzky_agent::find(agent);
+        let exe = info.path.ok_or_else(|| format!("NOT_INSTALLED: {} is not installed.", agent.name()))?;
+        // The bridge attaches to this window's project by its path: `--current` names whatever project
+        // the window opened last made current, which may be another Nuzky window's.
+        let bridge = connect::Command::this_app().map_err(err)?;
+        let args = vec!["mcp".into(), "--project".into(), path.to_string_lossy().into_owned(), "--allow-write".into()];
+        let mut env =
+            std::env::var("XDG_RUNTIME_DIR").map(|dir| vec![("XDG_RUNTIME_DIR".to_owned(), dir)]).unwrap_or_default();
+        env.push((nuzky_mcp::bridge::CONVERSATION_VAR.to_owned(), owner));
+        Start::Cli(TurnRequest {
+            agent,
+            exe,
+            session,
+            resume: resumable,
+            prompt: prompt(text, context, &project),
+            cwd: work_dir(),
+            mcp: McpServer { command: bridge.program.into(), args, env },
+        })
+    };
     if panel.cancelled.lock().unwrap().as_deref() == Some(turn.as_str()) {
         app.emit("agent", PanelEvent { chat: &id, event: &AgentEvent::Done { stopped: true } }).ok();
         return Ok(());
     }
     let (handle, chat_id) = (app.clone(), id.clone());
-    let started = Turn::start(request, move |event| {
+    let emit = move |event| {
         let panel = handle.state::<AgentPanel>();
         if let AgentEvent::Session { id } = event {
             if let Some(chat) = panel.chats.lock().unwrap().get_mut(&chat_id) {
@@ -257,7 +315,11 @@ fn send(
             // A turn that never got going leaves no conversation to resume, so the next one starts it afresh.
             chat.session = new_id();
         }
-    })
+    };
+    let started = match request {
+        Start::Cli(request) => Turn::start(request, emit),
+        Start::ChatGpt(request) => Turn::chatgpt(request, emit),
+    }
     .map_err(err)?;
     let mut active = panel.active.lock().unwrap();
     if panel.stops.load(Ordering::Acquire) != stops || panel.cancelled.lock().unwrap().as_deref() == Some(turn.as_str())

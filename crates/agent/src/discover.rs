@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 pub enum AgentId {
     Claude,
     Codex,
+    /// Runs in Nuzky on the user's ChatGPT sign-in, so there is nothing to install or find.
+    #[serde(rename = "chatgpt")]
+    ChatGpt,
 }
 
 impl AgentId {
@@ -15,21 +18,16 @@ impl AgentId {
         match self {
             AgentId::Claude => "Claude Code",
             AgentId::Codex => "Codex",
+            AgentId::ChatGpt => "ChatGPT",
         }
     }
 
-    fn program(self) -> &'static str {
+    /// The executable, and the variable that points the panel at another one, such as the fake agent of the E2E tests.
+    fn program(self) -> Option<(&'static str, &'static str)> {
         match self {
-            AgentId::Claude => "claude",
-            AgentId::Codex => "codex",
-        }
-    }
-
-    /// Points the panel at another executable, such as the fake agent of the E2E tests.
-    fn override_var(self) -> &'static str {
-        match self {
-            AgentId::Claude => "NUZKY_AGENT_CLAUDE",
-            AgentId::Codex => "NUZKY_AGENT_CODEX",
+            AgentId::Claude => Some(("claude", "NUZKY_AGENT_CLAUDE")),
+            AgentId::Codex => Some(("codex", "NUZKY_AGENT_CODEX")),
+            AgentId::ChatGpt => None,
         }
     }
 }
@@ -70,10 +68,11 @@ fn executable(path: &Path) -> bool {
 }
 
 fn locate(id: AgentId) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os(id.override_var()) {
+    let (program, override_var) = id.program()?;
+    if let Some(path) = std::env::var_os(override_var) {
         return Some(PathBuf::from(path)).filter(|p| executable(p));
     }
-    let name = if cfg!(windows) { format!("{}.exe", id.program()) } else { id.program().to_owned() };
+    let name = if cfg!(windows) { format!("{program}.exe") } else { program.to_owned() };
     let path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
     let home = std::env::var_os("HOME").map(PathBuf::from);
     path.into_iter().chain(known_dirs(home.as_deref())).map(|dir| dir.join(&name)).find(|p| executable(p))

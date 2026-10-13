@@ -333,10 +333,7 @@ fn serve_requests(
         let id = request.id;
         if let Err(error) = workers.start(move || {
             let (backend, writer) = (request_backend, request_writer);
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.call(&request.tool, request.args)))
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("TOOL_FAILED: worker panicked")))
-                    .unwrap_or_else(|e| tool_error(&backend, format!("{e:#}")));
+            let result = backend.answer(&request.tool, request.args);
             if send(&mut writer.lock().unwrap(), &Response { id, result }).is_err() {
                 let _ = writer.lock().unwrap().shutdown(Shutdown::Both);
             }

@@ -76,11 +76,12 @@ impl Parser {
 /// How long a stopped agent gets to finish before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(2);
 
-/// One message to the agent, running as its own process group.
+/// One message to the agent: an installed CLI running as its own process group, or ChatGPT running in Nuzky.
 pub struct Turn {
-    pid: u32,
-    stopping: Arc<AtomicBool>,
-    finished: Arc<AtomicBool>,
+    /// The CLI's process group; None for ChatGPT, whose turn ends itself once it sees `stopping`.
+    pub(crate) pid: Option<u32>,
+    pub(crate) stopping: Arc<AtomicBool>,
+    pub(crate) finished: Arc<AtomicBool>,
 }
 
 /// Variables of a parent Claude Code session (Nuzky started from one, as in development),
@@ -108,6 +109,7 @@ impl Turn {
         let mut cmd = match req.agent {
             AgentId::Claude => claude::command(&req),
             AgentId::Codex => codex::command(&req),
+            AgentId::ChatGpt => bail!("ChatGPT runs in Nuzky, not as a process"),
         };
         cmd.current_dir(&req.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         for (name, _) in std::env::vars_os() {
@@ -145,6 +147,7 @@ impl Turn {
         let mut parser = match req.agent {
             AgentId::Claude => Parser::Claude(claude::Parser::default(), req.session),
             AgentId::Codex => Parser::Codex(codex::Parser::new(pid)),
+            AgentId::ChatGpt => unreachable!("refused above"),
         };
         std::thread::spawn(move || {
             let mut failed: Option<(ErrorCode, String)> = None;
@@ -192,7 +195,7 @@ impl Turn {
             }
             emit(end);
         });
-        Ok(Turn { pid, stopping, finished })
+        Ok(Turn { pid: Some(pid), stopping, finished })
     }
 
     /// Asks the agent to stop, and kills it and its MCP bridge if it has not after a short grace.
@@ -200,8 +203,9 @@ impl Turn {
         if self.finished.load(Ordering::Acquire) || self.stopping.swap(true, Ordering::AcqRel) {
             return;
         }
-        signal(self.pid, false);
-        let (pid, finished) = (self.pid, self.finished.clone());
+        let Some(pid) = self.pid else { return };
+        signal(pid, false);
+        let finished = self.finished.clone();
         std::thread::spawn(move || {
             std::thread::sleep(STOP_GRACE);
             if !finished.load(Ordering::Acquire) {

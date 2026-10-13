@@ -1,7 +1,8 @@
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { AlertCircle, AlertTriangle, Check, Film, GalleryVerticalEnd, Loader2, Plug, Sparkles } from "lucide-react";
 import { api } from "../../lib/api";
-import { loadAgents, useAgent } from "../../lib/agent";
+import { anyAgent, loadAgents, useAgent } from "../../lib/agent";
+import { openChatGpt, useChatGpt } from "../../lib/chatgpt";
 import { useDock } from "../../lib/dock";
 import { useLibrary } from "../../lib/library";
 import { useTranscriptView } from "../../lib/speech";
@@ -184,6 +185,9 @@ function NoReels() {
   const finding = useReels((s) => s.finding);
   const searched = useReels((s) => s.searched);
   const agents = useAgent((s) => s.agents);
+  // Read again whenever the ChatGPT sign-in or its models change.
+  useChatGpt((s) => s.status);
+  useChatGpt((s) => s.models);
   const failed = useAgent((s) => s.items[s.items.length - 1]?.kind === "error");
   const blocked = useAgent(() => findBlocked());
   useEffect(() => {
@@ -196,13 +200,16 @@ function NoReels() {
         Your AI is reading the transcript. Reels show up here as soon as it proposes them.
       </Empty>
     );
-  if (agents && !agents.some((a) => a.path))
+  if (agents && !anyAgent())
     return (
       <Empty
         icon={<Sparkles size={20} />}
-        title="No AI agent found"
+        title="Sign in to find reels"
         actions={
           <>
+            <Button variant="primary" pill className="h-7 px-3 text-[12px]" onClick={openChatGpt}>
+              ChatGPT account…
+            </Button>
             <Button pill className="h-7 px-3 text-[12px]" onClick={() => void loadAgents()}>
               Check again
             </Button>
@@ -212,7 +219,7 @@ function NoReels() {
           </>
         }
       >
-        Finding reels needs Claude Code or Codex. Install one and sign in, or connect the agent you use in a terminal and ask it to find reels.
+        Finding reels needs an AI. Sign in with ChatGPT, or install Claude Code or Codex and sign in. You can also connect the agent you use in a terminal and ask it to find reels.
       </Empty>
     );
   const find = (

@@ -3,12 +3,14 @@ name = "nuzky-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Runs the user's own Claude Code or Codex for one turn of Nuzky's AI panel"
+description = "Runs the user's own Claude Code or Codex, or ChatGPT on the user's plan, for one turn of Nuzky's AI panel"
 
 [dependencies]
 anyhow.workspace = true
+log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ureq = "3.4.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.190"
