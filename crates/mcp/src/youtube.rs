@@ -242,13 +242,8 @@ fn install_to(path: &Path, cancel: &AtomicBool, progress: impl FnMut(f32)) -> Re
             error
         } else if text.starts_with("MODEL_INVALID") {
             anyhow!("YTDLP_CORRUPT: yt-dlp did not download correctly. Try again.")
-        } else if ["Requesting model", "Reading model download", "DOWNLOAD_STALLED", "Model download"]
-            .iter()
-            .any(|network| text.starts_with(network))
-        {
-            anyhow!("OFFLINE: The download of yt-dlp from GitHub stopped. Check your internet connection, then try again. ({text})")
         } else {
-            anyhow!("YTDLP_NOT_SAVED: Nuzky couldn't save yt-dlp beside its sound library. Check that the disk has free space, then try again. ({text})")
+            anyhow!("YTDLP_DOWNLOAD_FAILED: yt-dlp didn't download. Check your internet connection and free disk space, then try again. ({text})")
         }
     })?;
     #[cfg(unix)]
@@ -263,9 +258,9 @@ pub fn install(cancel: &AtomicBool, progress: impl FnMut(f32)) -> Result<()> {
     Ok(())
 }
 
-/// Once a week Nuzky's own yt-dlp is brought up to date in the background, so nothing waits for it and
-/// the copy in use keeps working meanwhile. A failed try, such as offline or with yt-dlp.exe running on
-/// Windows, is repeated after a few minutes; a finished download is then only moved into place.
+/// Once a week, after yt-dlp has run, Nuzky's own copy is brought up to date in the background, so
+/// nothing waits for it and Windows lets it replace the file. A failed try, such as offline, is repeated
+/// after ten minutes of use; a finished download is then only moved into place.
 fn refresh() {
     static TRIED: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
     let stale = std::fs::metadata(checked_stamp())
@@ -287,7 +282,6 @@ fn refresh() {
 }
 
 fn command(args: &[&str]) -> Result<Command> {
-    refresh();
     let program = find().ok_or_else(missing)?;
     // yt-dlp runs deno and ffmpeg from its PATH, which an app started from the Dock lacks.
     let path = std::env::join_paths(program.parent().map(Path::to_path_buf).into_iter().chain(search_dirs()))?;
@@ -422,6 +416,7 @@ pub fn video(id: &str, max_bytes: u64) -> Result<Video> {
         std::thread::sleep(Duration::from_millis(50));
     };
     let stderr = stderr.join().unwrap_or_default();
+    refresh();
     ensure!(status.success(), failure(&stderr));
     let bytes = reader.join().map_err(|_| anyhow!("yt-dlp output was lost"))??;
     let video: Video = serde_json::from_slice(&bytes)
@@ -499,6 +494,7 @@ pub fn download(
             }
         };
         let stderr = stderr.join().unwrap_or_default();
+        refresh();
         ensure!(status.success(), failure(&stderr));
         // Over --max-filesize yt-dlp skips the download and still succeeds.
         let size = part.metadata().map(|m| m.len()).unwrap_or(0);
