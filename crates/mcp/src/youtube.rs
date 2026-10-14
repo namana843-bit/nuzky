@@ -70,15 +70,13 @@ pub fn watch_url(id: &str) -> String {
 /// Dock, Finder or a desktop launcher.
 fn known_dirs() -> Vec<PathBuf> {
     let home = dirs::home_dir();
+    // pipx puts it in ~/.local/bin on every system.
+    let pipx = home.as_ref().map(|h| h.join(".local").join("bin"));
     if cfg!(windows) {
-        let local = dirs::data_local_dir();
-        [local.map(|d| d.join("Microsoft").join("WinGet").join("Links")), home.map(|h| h.join("scoop").join("shims"))]
-            .into_iter()
-            .flatten()
-            .collect()
+        let winget = dirs::data_local_dir().map(|d| d.join("Microsoft").join("WinGet").join("Links"));
+        [pipx, winget, home.map(|h| h.join("scoop").join("shims"))].into_iter().flatten().collect()
     } else {
-        home.map(|h| h.join(".local/bin"))
-            .into_iter()
+        pipx.into_iter()
             .chain(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"].map(PathBuf::from))
             .collect()
     }
@@ -451,8 +449,6 @@ mod tests {
             "yt-dlp {} at {found:?}, without the shell PATH at {short:?}",
             String::from_utf8_lossy(&version.stdout).trim()
         );
-        if !cfg!(windows) {
-            assert!(short.is_some(), "not found without the shell PATH");
-        }
+        assert!(short.is_some(), "not found without the shell PATH");
     }
 }

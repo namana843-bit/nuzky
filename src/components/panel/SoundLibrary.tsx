@@ -411,7 +411,11 @@ function LinkResult() {
   return (
     <div role="alert" className="mx-1.5 mb-1 flex items-start gap-2 text-[12px] text-muted">
       {offline ? <WifiOff size={14} className="mt-px shrink-0" /> : <AlertCircle size={14} className="mt-px shrink-0 text-warn" />}
-      <span className="min-w-0 flex-1 select-text">{plainError(link.error)}</span>
+      <span className="min-w-0 flex-1 select-text">
+        {plainError(link.error)
+          .split(/(yt-dlp)/)
+          .map((part, i) => (part === "yt-dlp" ? <Nowrap key={i}>yt-dlp</Nowrap> : part))}
+      </span>
       {!link.error.startsWith("INVALID_LINK") && !link.error.startsWith("PLAYLIST") && (
         <Button className="h-7 shrink-0 text-[12px]" onClick={() => openLink(link.url)}>
           Try again
@@ -420,6 +424,9 @@ function LinkResult() {
     </div>
   );
 }
+
+/** Keeps "yt-dlp" whole, as a name split at its hyphen reads as two words. */
+const Nowrap = ({ children }: { children: string }) => <span className="whitespace-nowrap">{children}</span>;
 
 /** Asked once, before the first link is looked up: the music's rights are the user's to check. */
 function RightsDialog() {
@@ -458,7 +465,9 @@ function RightsDialog() {
             Music from YouTube is yours to clear
           </h2>
           <div id="youtube-rights-text" className="mt-2 flex flex-col gap-2 text-[13px] text-fg/85">
-            <p>Nuzky downloads only the sound of the video you link, with yt-dlp on this computer.</p>
+            <p>
+              Nuzky downloads only the sound of the video you link, with <Nowrap>yt-dlp</Nowrap> on this computer.
+            </p>
             <p>
               You're responsible for having the rights to use the music in your video and for following YouTube's Terms of Service. Most songs on YouTube are copyrighted, and a video that
               uses one can be muted, blocked or demonetized.

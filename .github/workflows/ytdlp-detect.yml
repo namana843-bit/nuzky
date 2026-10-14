@@ -44,8 +44,10 @@ jobs:
       - name: Install yt-dlp with Homebrew
         if: runner.os == 'macOS'
         run: brew install yt-dlp
+      # Where pipx puts it for a user; the runners' own PIPX_BIN_DIR is not a place users have.
       - name: Install yt-dlp with pipx
         if: runner.os != 'macOS'
-        run: pipx install yt-dlp
+        shell: bash
+        run: PIPX_BIN_DIR="${USERPROFILE:-$HOME}/.local/bin" pipx install yt-dlp
       - name: Nuzky finds the installed yt-dlp and runs it
         run: cargo test -p nuzky-mcp --lib --locked finds_the_installed_yt_dlp -- --ignored --nocapture
