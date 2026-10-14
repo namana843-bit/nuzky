@@ -461,7 +461,7 @@ function GetYtdlp() {
         </Button>
       ) : (
         <Button variant="primary" className="h-7 shrink-0 text-[12px]" onClick={installYtdlp}>
-          Download <Nowrap>yt-dlp</Nowrap>
+          Download yt-dlp
         </Button>
       )}
     </div>
