@@ -264,7 +264,8 @@ pub fn download(
     let part = dir.join(format!(".nuzky-part-{}", new_id()));
     let max = format!("{max_bytes}");
     let result = (|| {
-        let output = part.to_str().context("The cache folder's name is not valid text")?;
+        // yt-dlp reads -o as a template, where % starts a field.
+        let output = part.to_str().context("The cache folder's name is not valid text")?.replace('%', "%%");
         let mut child = command(&[
             "--quiet",
             "--progress",
@@ -276,7 +277,7 @@ pub fn download(
             "--max-filesize",
             &max,
             "-o",
-            output,
+            &output,
             "--",
             &watch_url(id),
         ])?
