@@ -140,6 +140,7 @@ const UNSUPPORTED: &str = "YTDLP_UNSUPPORTED: Nuzky gets music from YouTube with
 const TEST_SERVER: &str = "http://127.0.0.1:";
 /// YouTube changes often enough to break an old yt-dlp.
 const REFRESH: Duration = Duration::from_secs(7 * 24 * 3600);
+const RETRY: Duration = Duration::from_secs(10 * 60);
 
 /// The file of yt-dlp's release that runs on this computer, as yt-dlp names it.
 fn release_file() -> Option<&'static str> {
@@ -196,7 +197,9 @@ fn newest(file: &str) -> Result<(String, u64, String)> {
         error => anyhow!("OFFLINE: Can't reach GitHub to download yt-dlp. Check your internet connection. ({error})"),
     })?;
     let mut text = String::new();
-    response.body_mut().with_config().limit(4 << 20).reader().read_to_string(&mut text)?;
+    response.body_mut().with_config().limit(4 << 20).reader().read_to_string(&mut text).map_err(|e| {
+        anyhow!("OFFLINE: Can't reach GitHub to download yt-dlp. Check your internet connection. ({e})")
+    })?;
     let release: Release = serde_json::from_str(&text).context("SOURCE_FAILED: GitHub sent something unexpected")?;
     let found = release
         .assets
@@ -239,8 +242,13 @@ fn install_to(path: &Path, cancel: &AtomicBool, progress: impl FnMut(f32)) -> Re
             error
         } else if text.starts_with("MODEL_INVALID") {
             anyhow!("YTDLP_CORRUPT: yt-dlp did not download correctly. Try again.")
-        } else {
+        } else if ["Requesting model", "Reading model download", "DOWNLOAD_STALLED", "Model download"]
+            .iter()
+            .any(|network| text.starts_with(network))
+        {
             anyhow!("OFFLINE: The download of yt-dlp from GitHub stopped. Check your internet connection, then try again. ({text})")
+        } else {
+            anyhow!("YTDLP_NOT_SAVED: Nuzky couldn't save yt-dlp beside its sound library. Check that the disk has free space, then try again. ({text})")
         }
     })?;
     #[cfg(unix)]
@@ -255,20 +263,27 @@ pub fn install(cancel: &AtomicBool, progress: impl FnMut(f32)) -> Result<()> {
     Ok(())
 }
 
-/// Once a week Nuzky's own yt-dlp is brought up to date in the background, at most once per run, so
-/// nothing waits for it and the copy in use keeps working meanwhile.
+/// Once a week Nuzky's own yt-dlp is brought up to date in the background, so nothing waits for it and
+/// the copy in use keeps working meanwhile. A failed try, such as offline or with yt-dlp.exe running on
+/// Windows, is repeated after a few minutes; a finished download is then only moved into place.
 fn refresh() {
-    static STARTED: AtomicBool = AtomicBool::new(false);
+    static TRIED: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
     let stale = std::fs::metadata(checked_stamp())
         .and_then(|m| m.modified())
         .map_or(true, |at| at.elapsed().unwrap_or_default() > REFRESH);
-    if executable(&own_copy()) && stale && !STARTED.swap(true, Ordering::Relaxed) {
-        std::thread::spawn(|| {
-            if let Err(error) = install(&AtomicBool::new(false), |_| {}) {
-                log::warn!("Updating yt-dlp failed: {error:#}");
-            }
-        });
+    if !executable(&own_copy()) || !stale {
+        return;
     }
+    let mut tried = TRIED.lock().unwrap();
+    if tried.is_some_and(|at| at.elapsed() < RETRY) {
+        return;
+    }
+    *tried = Some(Instant::now());
+    std::thread::spawn(|| {
+        if let Err(error) = install(&AtomicBool::new(false), |_| {}) {
+            log::warn!("Updating yt-dlp failed: {error:#}");
+        }
+    });
 }
 
 fn command(args: &[&str]) -> Result<Command> {

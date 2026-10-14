@@ -264,6 +264,7 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   YTDLP_MISSING: "Music from YouTube needs yt-dlp. Download it under the link field in the Music tab.",
   YTDLP_UNSUPPORTED: (detail) => detail,
   YTDLP_CORRUPT: (detail) => detail,
+  YTDLP_NOT_SAVED: (detail) => detail.replace(/ \(.*\)$/, ""),
   YTDLP_FAILED: "yt-dlp is installed but didn't start. Reinstall it, then try again.",
   NOT_LEARNED: "What was learned is gone. Learn from the projects again.",
   SIGN_IN_DENIED: "Signing in was cancelled in the browser. Continue with ChatGPT to try again.",
