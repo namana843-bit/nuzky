@@ -1,6 +1,7 @@
 """YouTube music stays behind the rights notice, previews and adds without credit, and ducks in the export.
 All yt-dlp lookups and downloads are served by the executable fake, without contacting YouTube."""
-import json, statistics, subprocess, time
+import hashlib, json, platform, statistics, subprocess, threading, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from e2e.ducking import CHECKBOX, SOURCE, TONE, WINDOW, RATE, decode, speech_levels, tone_levels
@@ -27,7 +28,35 @@ def prepare(r):
 
 
 def missing(r):
+    prepare(r)
     r.env['NUZKY_YTDLP'] = str(r.work / 'not-installed')
+    r.release = 'yt-dlp_macos' if platform.system() == 'Darwin' else 'yt-dlp_linux'
+    r.tool = Path(__file__).with_name('fake_ytdlp').read_bytes()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            r.releases.requests.append(self.path)
+            if self.path == '/SHA2-256SUMS':
+                sha = hashlib.sha256(r.tool).hexdigest() if r.releases.correct else '0' * 64
+                body = f'{sha}  {r.release}\n'.encode()
+            elif self.path == '/' + r.release:
+                body = r.tool
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    r.releases = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    r.releases.requests, r.releases.correct = [], False
+    r.release_worker = threading.Thread(target=r.releases.serve_forever, daemon=True)
+    r.release_worker.start()
+    r.env['NUZKY_YTDLP_RELEASES'] = f'http://127.0.0.1:{r.releases.server_port}/'
 
 
 def music(r):
@@ -192,16 +221,75 @@ input.dispatchEvent(new Event('input', {bubbles: true}));""", FIELD, f'https://y
     r.check('no error toasts', not r.errors(), r.errors())
 
 
-@flow('youtube-missing', 'A missing yt-dlp shows how to install it and adds nothing', before=missing)
+@flow('youtube-missing', 'A missing yt-dlp downloads in Music, rejects corrupt bytes and retries the link', before=missing)
 def youtube_missing(r):
-    music(r)
-    paste(r, f'https://youtu.be/{SONG}')
-    r.check('the notice still precedes lookup when yt-dlp is missing', wait(lambda: dialog(r), 5))
-    answer(r, 'I understand')
-    error = wait(lambda: alert(r), 10) or ''
-    r.check('missing yt-dlp shows a plain not-installed message and install hint',
-            'not installed' in error and 'install' in error and 'yt-dlp' in error
-            and any(hint in error for hint in ('brew install yt-dlp', 'winget install yt-dlp', 'pipx install yt-dlp'))
-            and 'YTDLP_MISSING:' not in error, error)
-    r.check('a missing yt-dlp adds no asset or clip', r.state()['assets'] == [] and all(not t['clips'] for t in r.state()['tracks']))
-    r.shot('missing-ytdlp')
+    try:
+        music(r)
+        paste(r, f'https://youtu.be/{SONG}')
+        r.check('the notice still precedes lookup when yt-dlp is missing', wait(lambda: dialog(r), 5))
+        answer(r, 'I understand')
+        offer = wait(lambda: alert(r), 10) or ''
+        button = '[role=alert] button'
+        label = 'return document.querySelector(arguments[0])?.textContent ?? ""'
+        r.check('missing yt-dlp offers Download yt-dlp without a terminal command or error code',
+                'Music from YouTube comes through yt-dlp, a free tool. Nuzky can download it for you.' in offer
+                and r.s.run(label, button) == 'Download yt-dlp'
+                and not any(text in offer for text in ('brew', 'winget', 'pipx', 'YTDLP_MISSING:')), offer)
+        tools = r.work / 'data/nuzky/tools'
+        own = tools / 'yt-dlp'
+        project = r.s.run(PROJECT)
+        r.check('the offer downloads nothing and adds no asset or clip',
+                list(tools.glob('*')) == [] and r.releases.requests == [] and invocations(r) == []
+                and project['assets'] == [] and all(not t['clips'] for t in project['tracks']))
+        r.shot('download-ytdlp-offer')
+
+        r.s.run(CLICK, button)
+        error = wait(lambda: (text := alert(r)) and 'did not download correctly' in text and text, 10) or ''
+        r.check('a wrong checksum shows a plain error with Try again',
+                'yt-dlp did not download correctly. Try again.' in error and 'YTDLP_CORRUPT:' not in error
+                and r.s.run(label, button) == 'Try again', error)
+        r.check('a wrong checksum leaves no tool, stamp or partial download and changes no project',
+                not own.exists() and not (tools / 'yt-dlp.checked').exists()
+                and list(tools.glob('.nuzky-part-*')) == [] and r.s.run(PROJECT) == project and invocations(r) == [])
+        r.check('the corrupt download requested the checksum and platform release only',
+                r.releases.requests == ['/SHA2-256SUMS', '/' + r.release], r.releases.requests.copy())
+        r.shot('corrupt-ytdlp-error')
+
+        r.releases.correct = True
+        r.s.run(CLICK, button)
+        r.check('Try again brings back Download yt-dlp without another rights notice',
+                wait(lambda: r.s.run(label, button) == 'Download yt-dlp', 10) and not dialog(r))
+        r.s.run(CLICK, button)
+        row = wait(lambda: r.s.run('return document.querySelector(arguments[0])?.innerText ?? ""', ROW), 10) or ''
+        r.check('after downloading the pasted song appears by itself with title, artist and duration',
+                all(text in row for text in ('Steady Song', 'Test Artist · YouTube', '20.0 s')), row)
+        r.check('retry fetched both files again from the local release server',
+                r.releases.requests == ['/SHA2-256SUMS', '/' + r.release] * 2, r.releases.requests.copy())
+        r.check('the installed tool is executable, matches the release bytes and has a checked stamp',
+                own.exists() and own.read_bytes() == r.tool and own.stat().st_mode & 0o777 == 0o755
+                and (tools / 'yt-dlp.checked').is_file())
+        r.check('automatic lookup runs the downloaded tool despite the missing override and adds nothing',
+                len(invocations(r)) == 1 and '--skip-download' in invocations(r)[0] and r.s.run(PROJECT) == project,
+                invocations(r))
+        r.shot('downloaded-song-row')
+
+        r.import_media(SOURCE)
+        r.add_clip(SOURCE.name)
+        r.seek(1_000_000)
+        wait(lambda: r.s.run('return window.__nuzky.store.getState().timeUs') == 1_000_000, 5)
+        r.s.run(CLICK, ROW + ' button[aria-label^=Add]')
+        wait(lambda: len(r.state()['assets']) == 2, 15)
+        project = r.s.run(PROJECT)
+        asset = next((a for a in project['assets'] if a['name'] == 'Steady Song'), None)
+        placed = [(t, c) for t in project['tracks'] for c in t['clips']
+                  if asset and c['content'].get('assetId') == asset['id']]
+        r.check('+ adds the downloaded song on an audio track at the playhead',
+                asset and asset['kind'] == 'audio' and len(placed) == 1 and placed[0][0]['kind'] == 'audio'
+                and placed[0][1]['startUs'] == 1_000_000, placed)
+        r.check('the added song uses the fake audio and never contacts YouTube',
+                asset and Path(asset['path']).read_bytes() == (r.work / 'tone.m4a').read_bytes()
+                and len(invocations(r)) == 2 and '-o' in invocations(r)[1], invocations(r))
+    finally:
+        r.releases.shutdown()
+        r.releases.server_close()
+        r.release_worker.join(timeout=5)
