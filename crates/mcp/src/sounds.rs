@@ -640,7 +640,8 @@ pub fn library_dir() -> PathBuf {
 
 /// A safe file name for the sound, keeping the extension of what was downloaded.
 fn file_name(sound: &Sound) -> String {
-    let stem: String = sound.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+    let stem: String =
+        sound.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
     let ext = sound
         .file
         .split(['?', '#'])
@@ -787,9 +788,16 @@ pub fn asset(id: &str, cache_dir: &Path, cancelled: impl Fn() -> bool, progress:
 /// The asset of a project that already holds this sound, so adding it again places another clip.
 pub fn existing<'a>(assets: &'a [Asset], id: &str) -> Option<&'a Asset> {
     let (source, id) = id.split_once(':')?;
-    // Music from YouTube has no credit; its file in the library is named after the video.
+    // Music from YouTube has no credit: it is the sound in the library named after the video.
     let youtube = format!("youtube-{id}");
-    let linked = |a: &Asset| source == "youtube" && Path::new(&a.path).file_stem().is_some_and(|s| *s == *youtube);
+    let linked = |a: &Asset| {
+        let path = Path::new(&a.path);
+        // Asset paths are canonical, as probe stores them.
+        source == "youtube"
+            && a.kind == AssetKind::Audio
+            && path.file_stem().is_some_and(|s| *s == *youtube)
+            && path.parent().map(Path::to_path_buf) == library_dir().canonicalize().ok()
+    };
     assets.iter().find(|a| {
         (a.credit.as_ref().is_some_and(|c| c.source == source && c.id == id) || linked(a))
             && Path::new(&a.path).is_file()

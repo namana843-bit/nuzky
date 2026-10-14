@@ -99,12 +99,14 @@ let rightsRead = false;
 
 /** Looks up the video of a YouTube link; the first time, the user reads whose the music's rights are. */
 export async function openLink(url: string) {
-  // The row with its Stop goes away, so its download stops with it.
-  const { link, adding, preview } = useSounds.getState();
-  if (link.sound && adding.includes(link.sound.id)) api.soundCancel(link.sound.id);
-  if (link.sound && preview?.id === link.sound.id) stopPreview();
-  const seq = ++links;
   const text = url.trim();
+  // Another link takes the row and its Stop away, so its download stops with it.
+  const { link, adding, preview } = useSounds.getState();
+  if (link.sound && text !== link.url) {
+    if (adding.includes(link.sound.id)) api.soundCancel(link.sound.id);
+    if (preview?.id === link.sound.id) stopPreview();
+  }
+  const seq = ++links;
   if (!text) return useSounds.setState({ link: NO_LINK, rightsFor: null });
   useSounds.setState({ link: { ...NO_LINK, url: text, loading: true } });
   try {

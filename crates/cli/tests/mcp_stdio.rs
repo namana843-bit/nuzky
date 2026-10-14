@@ -294,10 +294,10 @@ fn youtube_links_download_with_mocked_ytdlp_and_require_rights() {
         ("XDG_RUNTIME_DIR", &runtime),
     ];
     let mut c = Client::spawn_at_env(dir, &project, true, Some(None), &env);
-    for query in ["https://music.youtube.com/watch?v=ytSong00001&list=RDtest", "https://youtu.be/ytSong00001?si=test"] {
+    for query in ["https://music.youtube.com/watch?v=yt_Song0001&list=RDtest", "https://youtu.be/yt_Song0001?si=test"] {
         let found = c.call("search_sounds", json!({"query": query, "kind": "music"}));
         assert_eq!(found["sounds"].as_array().unwrap().len(), 1, "{found}");
-        assert_eq!(found["sounds"][0]["id"], "youtube:ytSong00001");
+        assert_eq!(found["sounds"][0]["id"], "youtube:yt_Song0001");
         assert_eq!(found["sounds"][0]["title"], "Steady Song");
         assert_eq!(found["sounds"][0]["author"], "Test Artist");
         assert_eq!(found["sounds"][0]["durationUs"], 20_000_000);
@@ -313,18 +313,21 @@ fn youtube_links_download_with_mocked_ytdlp_and_require_rights() {
     let run = c.call("begin_run", json!({"label": "Add YouTube music"}))["run_id"].clone();
     let unchanged = c.call("get_state", json!({}));
     assert!(
-        c.error("add_sound", json!({"run_id": run, "id": "youtube:ytSong00001", "at_us": 1_500_000}))
+        c.error("add_sound", json!({"run_id": run, "id": "youtube:yt_Song0001", "at_us": 1_500_000}))
             .contains("RIGHTS_UNCONFIRMED")
     );
     assert_eq!(c.call("get_state", json!({})), unchanged);
     assert_eq!(std::fs::read(&log).unwrap(), before);
     let added = c.call(
         "add_sound",
-        json!({"run_id": run, "id": "youtube:ytSong00001", "at_us": 1_500_000, "rights_confirmed": true}),
+        json!({"run_id": run, "id": "youtube:yt_Song0001", "at_us": 1_500_000, "rights_confirmed": true}),
     );
     assert_eq!(added["start_us"], 1_500_000, "{added}");
     assert_eq!(added["needs_credit"], false);
     assert_eq!(added["credit"], Value::Null);
+    // An id with an underscore names its file in the library, so the song is found again.
+    let again = c.call("add_sound", json!({"run_id": run, "id": "youtube:yt_Song0001", "at_us": 4_000_000}));
+    assert_eq!(again["asset_id"], added["asset_id"], "{again}");
     let state = c.call("get_state", json!({}));
     assert!(
         c.error("add_sound", json!({"run_id": run, "id": "youtube:ytPrivate01", "at_us": 0}))
@@ -335,7 +338,7 @@ fn youtube_links_download_with_mocked_ytdlp_and_require_rights() {
     let disk: Value = serde_json::from_slice(&std::fs::read(&project).unwrap()).unwrap();
     assert_eq!(disk["assets"].as_array().unwrap().len(), 1);
     assert!(disk["assets"][0]["credit"].is_null());
-    let file = c.dir.canonicalize().unwrap().join("data/nuzky/sounds/youtube-ytSong00001.m4a");
+    let file = c.dir.canonicalize().unwrap().join("data/nuzky/sounds/youtube-yt_Song0001.m4a");
     assert_eq!(PathBuf::from(disk["assets"][0]["path"].as_str().unwrap()), file);
     assert_eq!(std::fs::read(&file).unwrap(), std::fs::read(&audio).unwrap());
     let track = disk["tracks"].as_array().unwrap().iter().find(|t| t["id"] == added["track_id"]).unwrap();
@@ -346,7 +349,7 @@ fn youtube_links_download_with_mocked_ytdlp_and_require_rights() {
         serde_json::from_slice(&std::fs::read(c.dir.join("data/nuzky/sound-library.json")).unwrap()).unwrap();
     assert_eq!(settings["youtubeRights"], true);
     assert_eq!(
-        c.call("search_sounds", json!({"query": "https://youtu.be/ytSong00001", "kind": "music"}))["rights_confirmed"],
+        c.call("search_sounds", json!({"query": "https://youtu.be/yt_Song0001", "kind": "music"}))["rights_confirmed"],
         true
     );
     for line in std::fs::read_to_string(&log).unwrap().lines() {
@@ -354,7 +357,7 @@ fn youtube_links_download_with_mocked_ytdlp_and_require_rights() {
         let url = args.iter().position(|arg| arg == "--").unwrap() + 1;
         assert_eq!(args.len(), url + 1);
         assert!(
-            args[url] == "https://www.youtube.com/watch?v=ytSong00001"
+            args[url] == "https://www.youtube.com/watch?v=yt_Song0001"
                 || args[url] == "https://www.youtube.com/watch?v=ytPrivate01"
         );
     }
@@ -365,7 +368,7 @@ fn youtube_links_download_with_mocked_ytdlp_and_require_rights() {
     env[0] = ("NUZKY_YTDLP", &missing);
     let mut c = Client::spawn_at_env(dir, &project, false, None, &env);
     assert!(
-        c.error("search_sounds", json!({"query": "https://youtu.be/ytSong00001", "kind": "music"}))
+        c.error("search_sounds", json!({"query": "https://youtu.be/yt_Song0001", "kind": "music"}))
             .contains("YTDLP_MISSING")
     );
     c.finish();

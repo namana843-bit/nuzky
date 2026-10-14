@@ -70,16 +70,23 @@ pub fn watch_url(id: &str) -> String {
 /// Dock, Finder or a desktop launcher.
 fn known_dirs() -> Vec<PathBuf> {
     let home = dirs::home_dir();
-    // pipx puts it in ~/.local/bin on every system.
-    let pipx = home.as_ref().map(|h| h.join(".local").join("bin"));
+    // pipx puts yt-dlp in ~/.local/bin on every system; deno's own installer, in ~/.deno/bin.
+    let user = [".local", ".deno"].map(|dir| home.as_ref().map(|h| h.join(dir).join("bin")));
     if cfg!(windows) {
         let winget = dirs::data_local_dir().map(|d| d.join("Microsoft").join("WinGet").join("Links"));
-        [pipx, winget, home.map(|h| h.join("scoop").join("shims"))].into_iter().flatten().collect()
+        user.into_iter().chain([winget, home.map(|h| h.join("scoop").join("shims"))]).flatten().collect()
     } else {
-        pipx.into_iter()
+        user.into_iter()
+            .flatten()
             .chain(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin"].map(PathBuf::from))
             .collect()
     }
+}
+
+/// The app's PATH, then the folders installers use.
+fn search_dirs() -> Vec<PathBuf> {
+    let path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
+    path.into_iter().chain(known_dirs()).collect()
 }
 
 fn executable(path: &Path) -> bool {
@@ -105,8 +112,7 @@ pub fn find() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("NUZKY_YTDLP") {
         return Some(PathBuf::from(path)).filter(|path| executable(path));
     }
-    let path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
-    locate(path.into_iter().chain(known_dirs()))
+    locate(search_dirs())
 }
 
 fn missing() -> anyhow::Error {
@@ -125,9 +131,7 @@ fn missing() -> anyhow::Error {
 fn command(args: &[&str]) -> Result<Command> {
     let program = find().ok_or_else(missing)?;
     // yt-dlp runs deno and ffmpeg from its PATH, which an app started from the Dock lacks.
-    let path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
-    let path =
-        std::env::join_paths(program.parent().map(Path::to_path_buf).into_iter().chain(path).chain(known_dirs()))?;
+    let path = std::env::join_paths(program.parent().map(Path::to_path_buf).into_iter().chain(search_dirs()))?;
     let mut command = Command::new(program);
     command
         .args(["--ignore-config", "--no-playlist", "--encoding", "utf-8", "--socket-timeout", "20", "-f", FORMAT])
@@ -194,7 +198,7 @@ fn failure(stderr: &str) -> anyhow::Error {
         .any(|text| has(text))
     {
         anyhow!("SOUND_UNAVAILABLE: This video is unavailable. It may be removed or blocked in your country.")
-    } else if has("429") || has("too many requests") {
+    } else if has("http error 429") || has("too many requests") {
         anyhow!("RATE_LIMITED: YouTube gets too many requests from this network. Try again in a few minutes.")
     } else if [
         "unable to download webpage",
@@ -235,7 +239,7 @@ pub struct Video {
     live_status: Option<String>,
 }
 
-/// Looks up one video without downloading it: a few seconds, and at most a minute.
+/// Looks up one video without downloading it: a few seconds, and at most half a minute.
 pub fn video(id: &str, max_bytes: u64) -> Result<Video> {
     ensure!(valid_id(id), "INVALID_LINK: {id:?} is not a YouTube video id");
     let mut child = command(&["--skip-download", "--dump-single-json", "--no-warnings", "--", &watch_url(id)])?

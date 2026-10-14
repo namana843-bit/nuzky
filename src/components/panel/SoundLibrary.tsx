@@ -237,7 +237,7 @@ function useInProject() {
   return new Set(
     (assets ?? []).flatMap((a) => {
       if (a.credit) return [`${a.credit.source}:${a.credit.id}`];
-      const video = YOUTUBE_FILE.exec(a.path.split(/[\\/]/).pop() ?? "")?.[1];
+      const video = a.kind === "audio" ? YOUTUBE_FILE.exec(a.path.split(/[\\/]/).pop() ?? "")?.[1] : undefined;
       return video ? [`youtube:${video}`] : [];
     }),
   );

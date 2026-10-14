@@ -7,7 +7,7 @@ from e2e.ducking import CHECKBOX, SOURCE, TONE, WINDOW, RATE, decode, speech_lev
 from e2e.harness import flow, export, press, wait
 from e2e.layout import resize
 
-SONG = 'ytSong00001'
+SONG = 'yt_Song0001'
 ROW = f'[data-sound="youtube:{SONG}"]'
 FIELD = 'input[aria-label="Paste a YouTube link"]'
 DIALOG = 'dialog[aria-labelledby="youtube-rights-title"][open]'
