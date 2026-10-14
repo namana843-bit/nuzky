@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Offline yt-dlp for the tests: yt_Song0001 downloads at once, ytSlow00001 slowly, ytPrivate01 is private."""
+import json, os, re, shutil, subprocess, sys
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+
+def fail(message):
+    print(f'ERROR: {message}', file=sys.stderr, flush=True)
+    sys.exit(1)
+
+
+def main():
+    args = sys.argv[1:]
+    if log := os.environ.get('NUZKY_FAKE_YTDLP_LOG'):
+        with open(log, 'a') as out:
+            out.write(json.dumps(args) + '\n')
+    try:
+        separator = args.index('--')
+        url, = args[separator + 1:]
+        options = args[:separator]
+        parsed = urlparse(url)
+        video, = parse_qs(parsed.query)['v']
+    except (ValueError, KeyError):
+        fail('expected one watch URL after --')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{11}', video):
+        fail('invalid video id')
+    if url != f'https://www.youtube.com/watch?v={video}':
+        fail('expected a canonical watch URL')
+    base = ['--ignore-config', '--no-playlist', '--encoding', 'utf-8',
+            '--socket-timeout', '20', '-f', 'bestaudio[ext=m4a]/bestaudio']
+    if options[:len(base)] != base:
+        fail('unexpected base arguments')
+    more = options[len(base):]
+    lookup = '--skip-download' in more
+    if lookup:
+        if more != ['--skip-download', '--dump-single-json', '--no-warnings']:
+            fail('unexpected lookup arguments')
+    else:
+        expected = ['--quiet', '--progress', '--newline', '--progress-template',
+                    'download:nuzky %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s',
+                    '--no-part', '--no-mtime', '--abort-on-unavailable-fragments', '--max-filesize']
+        if more[:len(expected)] != expected or len(more) != len(expected) + 3 or more[-2] != '-o':
+            fail('unexpected download arguments')
+        try:
+            limit = int(more[-3])
+        except ValueError:
+            fail('expected a byte limit')
+        output = Path(more[-1])
+        if not output.is_absolute():
+            fail('expected an absolute output path')
+
+    if video == 'ytPrivate01':
+        print('WARNING: synthetic yt-dlp warning', file=sys.stderr)
+        fail(f"[youtube] {video}: Private video. Sign in if you've been granted access to this video")
+    if video not in ('yt_Song0001', 'ytSlow00001'):
+        fail(f'[youtube] {video}: This video is unavailable')
+    audio = Path(os.environ['NUZKY_FAKE_YTDLP_AUDIO'])
+    total = audio.stat().st_size
+    if lookup:
+        print(json.dumps({'id': video, 'title': 'Steady Song' if video == 'yt_Song0001' else 'Slow Song',
+                          'artist': 'Test Artist', 'channel': 'Test Channel', 'uploader': 'Test Uploader',
+                          'duration': 20, 'ext': 'm4a', 'filesize': total,
+                          'filesize_approx': total, 'live_status': 'not_live'}), flush=True)
+        return
+    if total > limit:
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if video == 'ytSlow00001':
+        # Leave a partial file as real yt-dlp does, so cancellation must remove it.
+        with audio.open('rb') as source, output.open('wb') as target:
+            target.write(source.read(max(1, total // 4)))
+        print(f'nuzky {total // 4} {total} NA', flush=True)
+        # A child of its own, as yt-dlp's standalone builds have, so Stop must end it too.
+        subprocess.run([sys.executable, '-c', 'import time; time.sleep(20)', 'nuzky-fake-ytdlp-child'])
+        print(f'nuzky {total // 2} NA {total}', flush=True)
+    else:
+        print(f'nuzky {total // 4} {total} NA', flush=True)
+        print(f'nuzky {total // 2} NA {total}', flush=True)
+    shutil.copyfile(audio, output)
+    print(f'nuzky {total} {total} NA', flush=True)
+
+
+if __name__ == '__main__':
+    main()

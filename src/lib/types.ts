@@ -1073,7 +1073,7 @@ export type Snapshot = {
  */
 export type Sound = {
   /**
-   * `nuzky:whoosh` for a built-in sound, `openverse:<uuid>` or `freesound:<number>`.
+   * `nuzky:whoosh` for a built-in sound, `openverse:<uuid>`, `freesound:<number>` or `youtube:<video id>`.
    */
   id: string,
   kind: SoundKind,
@@ -1083,7 +1083,10 @@ export type Sound = {
    * 0 when the source does not say.
    */
   durationUs: number,
-  license: License,
+  /**
+   * None for music from a YouTube link: its rights are the user's to check.
+   */
+  license: License | null,
   licenseVersion: string,
   licenseUrl: string,
   /**
@@ -1117,6 +1120,7 @@ export type SoundPage = {
 export type SoundSettings = {
   freesound: boolean,
   hasKey: boolean,
+  youtubeRights: boolean,
 };
 
 export type SpeechModel = {

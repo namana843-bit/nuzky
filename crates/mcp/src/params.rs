@@ -116,6 +116,8 @@ pub struct AddSound {
     pub at_us: i64,
     /// Reuse this id with the same sound to retry a failed save without adding it twice.
     pub request_id: Option<String>,
+    /// true only after the user agreed that the rights to music from YouTube links are theirs to check.
+    pub rights_confirmed: Option<bool>,
 }
 /// Choices offered to the user; the Nuzky AI panel shows them as buttons.
 #[derive(Deserialize, JsonSchema)]

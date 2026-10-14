@@ -514,6 +514,9 @@ impl Backend {
     fn add_sound(&self, args: AddSound, state: &SessionState) -> Result<Value> {
         owns_run(state, &args.run_id)?;
         ensure!(args.at_us >= 0, "INVALID_ARGUMENTS: at_us must not be negative");
+        if args.rights_confirmed == Some(true) && args.id.starts_with("youtube:") {
+            crate::sounds::confirm_youtube_rights()?;
+        }
         let request_id = args.request_id.clone().unwrap_or_else(new_id);
         let key = (args.run_id.clone(), request_id.clone());
         let prepared = {
@@ -1448,6 +1451,13 @@ fn texts(thumbnail: &Thumbnail, hidden: &[f32]) -> Value {
 /// Built-in sound effects first, then a page from online; offline the built-in ones still come back.
 fn search_sounds(args: SearchSounds) -> Result<Value> {
     use crate::sounds::{Kind, built_in, search};
+    if crate::youtube::is_link(&args.query) {
+        let sound = crate::sounds::link(&args.query)?;
+        let rights_confirmed = crate::sounds::settings().youtube_rights;
+        return Ok(
+            json!({"sounds": [sound], "more": false, "online": "YouTube", "rights_confirmed": rights_confirmed}),
+        );
+    }
     let page = args.page.unwrap_or(1);
     let mut sounds =
         if args.kind == Kind::Effect && page == 1 && args.license != Some(nuzky_engine::model::License::CcBy) {

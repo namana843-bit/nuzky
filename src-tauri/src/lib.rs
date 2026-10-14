@@ -1136,6 +1136,8 @@ pub fn run() {
             set_ui_context,
             sounds::sound_library,
             sounds::sound_search,
+            sounds::sound_link,
+            sounds::confirm_youtube_rights,
             sounds::sound_preview,
             sounds::sound_stop,
             sounds::sound_cancel,
