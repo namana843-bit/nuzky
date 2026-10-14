@@ -15,7 +15,7 @@ use serde::Deserialize;
 /// yt-dlp picks this; AAC in MP4 when YouTube has it, as it nearly always does.
 const FORMAT: &str = "bestaudio[ext=m4a]/bestaudio";
 const MAX_JSON_BYTES: u64 = 16 << 20;
-const RESOLVE_TIMEOUT: Duration = Duration::from_secs(60);
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(30);
 const PROGRESS: &str =
     "download:nuzky %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s";
 
@@ -123,19 +123,48 @@ fn missing() -> anyhow::Error {
 }
 
 fn command(args: &[&str]) -> Result<Command> {
-    let mut command = Command::new(find().ok_or_else(missing)?);
+    let program = find().ok_or_else(missing)?;
+    // yt-dlp runs deno and ffmpeg from its PATH, which an app started from the Dock lacks.
+    let path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
+    let path =
+        std::env::join_paths(program.parent().map(Path::to_path_buf).into_iter().chain(path).chain(known_dirs()))?;
+    let mut command = Command::new(program);
     command
         .args(["--ignore-config", "--no-playlist", "--encoding", "utf-8", "--socket-timeout", "20", "-f", FORMAT])
         .args(args)
+        .env("PATH", path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     #[cfg(windows)]
     {
         // A console program started from the app would otherwise flash a terminal window.
-        std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000);
+        std::os::windows::process::CommandExt::creation_flags(&mut command, CREATE_NO_WINDOW);
     }
     Ok(command)
+}
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Stops yt-dlp with what it started: its standalone builds run Python as a child, and fixing a file runs ffmpeg.
+fn stop(child: &mut Child) {
+    #[cfg(unix)]
+    // SAFETY: the child leads its own process group, so this reaches only yt-dlp and its children.
+    unsafe {
+        libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    {
+        let mut taskkill = Command::new("taskkill");
+        taskkill.args(["/T", "/F", "/PID", &child.id().to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+        std::os::windows::process::CommandExt::creation_flags(&mut taskkill, CREATE_NO_WINDOW);
+        taskkill.status().ok();
+    }
+    child.kill().ok();
+    child.wait().ok();
 }
 
 /// Reads stderr on its own thread, so a chatty yt-dlp never blocks on a full pipe.
@@ -165,6 +194,8 @@ fn failure(stderr: &str) -> anyhow::Error {
         .any(|text| has(text))
     {
         anyhow!("SOUND_UNAVAILABLE: This video is unavailable. It may be removed or blocked in your country.")
+    } else if has("429") || has("too many requests") {
+        anyhow!("RATE_LIMITED: YouTube gets too many requests from this network. Try again in a few minutes.")
     } else if [
         "unable to download webpage",
         "resolve",
@@ -222,9 +253,8 @@ pub fn video(id: &str, max_bytes: u64) -> Result<Video> {
             break status;
         }
         if Instant::now() > deadline {
-            child.kill().ok();
-            child.wait().ok();
-            bail!("OFFLINE: YouTube did not answer within a minute. Check your internet connection.");
+            stop(&mut child);
+            bail!("OFFLINE: YouTube did not answer within half a minute. Check your internet connection.");
         }
         std::thread::sleep(Duration::from_millis(50));
     };
@@ -272,6 +302,7 @@ pub fn download(
             PROGRESS,
             "--no-part",
             "--no-mtime",
+            "--abort-on-unavailable-fragments",
             "--max-filesize",
             &max,
             "-o",
@@ -297,8 +328,7 @@ pub fn download(
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {}
             }
             if cancel.load(Ordering::Relaxed) {
-                child.kill().ok();
-                child.wait().ok();
+                stop(&mut child);
                 bail!("CANCELLED: the download stopped");
             }
             if let Some(status) = child.try_wait()? {
@@ -402,6 +432,10 @@ mod tests {
                 "ERROR: [youtube] abc: Unable to download webpage: <urlopen error [Errno 8] nodename nor servname provided>"
             ),
             "OFFLINE"
+        );
+        assert_eq!(
+            code("ERROR: [youtube] abc: Unable to download webpage: HTTP Error 429: Too Many Requests"),
+            "RATE_LIMITED"
         );
         assert_eq!(code("ERROR: something new"), "SOURCE_FAILED");
         assert_eq!(code(""), "SOURCE_FAILED");

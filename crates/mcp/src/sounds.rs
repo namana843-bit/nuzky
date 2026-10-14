@@ -750,12 +750,11 @@ fn fetch_here(id: &str, cache_dir: &Path, cancel: &AtomicBool, progress: impl Fn
     if path.is_file() {
         return Ok((path, sound));
     }
-    if sound.provider == YOUTUBE {
+    if let Some(video) = sound.id.strip_prefix("youtube:") {
         ensure!(
             settings().youtube_rights,
             "RIGHTS_UNCONFIRMED: before the first song from a YouTube link, the user must agree that they are responsible for the rights to the music and for following YouTube's terms"
         );
-        let (_, video) = sound.id.split_once(':').context("YouTube sound without a video")?;
         crate::youtube::download(video, &path, MAX_FILE_BYTES, cancel, progress)?;
     } else {
         download(&sound, &path, cancel, progress)?;
@@ -788,9 +787,13 @@ pub fn asset(id: &str, cache_dir: &Path, cancelled: impl Fn() -> bool, progress:
 /// The asset of a project that already holds this sound, so adding it again places another clip.
 pub fn existing<'a>(assets: &'a [Asset], id: &str) -> Option<&'a Asset> {
     let (source, id) = id.split_once(':')?;
-    assets
-        .iter()
-        .find(|a| a.credit.as_ref().is_some_and(|c| c.source == source && c.id == id) && Path::new(&a.path).is_file())
+    // Music from YouTube has no credit; its file in the library is named after the video.
+    let youtube = format!("youtube-{id}");
+    let linked = |a: &Asset| source == "youtube" && Path::new(&a.path).file_stem().is_some_and(|s| *s == *youtube);
+    assets.iter().find(|a| {
+        (a.credit.as_ref().is_some_and(|c| c.source == source && c.id == id) || linked(a))
+            && Path::new(&a.path).is_file()
+    })
 }
 
 #[cfg(test)]

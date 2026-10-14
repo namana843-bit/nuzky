@@ -155,6 +155,8 @@ def youtube(r):
     paste(r, f'https://youtu.be/{SONG}')
     r.check('another paste shows the row without asking about rights again',
             wait(lambda: r.s.run('return !!document.querySelector(arguments[0])', ROW), 10) and not dialog(r))
+    r.check('the row of a song the project has shows the check',
+            r.s.run('return !!document.querySelector(arguments[0])', ROW + ' [title="In this project"]'))
     r.s.run(CLICK, 'button[aria-label="Clear link"]')
     r.s.run("""const input = document.querySelector(arguments[0]); input.focus();
 Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arguments[1]);
@@ -177,8 +179,10 @@ input.dispatchEvent(new Event('input', {bubbles: true}));""", FIELD, f'https://y
     took = time.time() - started
     time.sleep(0.5)
     left = [p.name for p in r.work.rglob('*') if p.name.startswith('.nuzky-part-') or 'ytSlow' in p.name]
-    r.check('Stop ends a YouTube download within seconds, adds nothing and leaves no part of it behind',
-            stopped and took < 3 and len(r.state()['assets']) == assets and left == [], (round(took, 1), left))
+    running = subprocess.run(['pgrep', '-f', 'nuzky-fake-ytdlp-child'], capture_output=True, text=True).stdout.split()
+    r.check('Stop ends a YouTube download and what yt-dlp started within seconds, adds nothing and leaves no part behind',
+            stopped and took < 3 and len(r.state()['assets']) == assets and left == [] and running == [],
+            (round(took, 1), left, running))
     r.check('every invocation gets only a canonical watch URL',
             bool(invocations(r)) and all(args[args.index('--') + 1:] in ([f'https://www.youtube.com/watch?v={v}'] for v in (SONG, 'ytPrivate01', 'ytSlow00001'))
                                          for args in invocations(r)), invocations(r))

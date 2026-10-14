@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline yt-dlp for the tests: ytSong00001 downloads at once, ytSlow00001 slowly, ytPrivate01 is private."""
-import json, os, re, shutil, sys, time
+import json, os, re, shutil, subprocess, sys
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -39,7 +39,7 @@ def main():
     else:
         expected = ['--quiet', '--progress', '--newline', '--progress-template',
                     'download:nuzky %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s',
-                    '--no-part', '--no-mtime', '--max-filesize']
+                    '--no-part', '--no-mtime', '--abort-on-unavailable-fragments', '--max-filesize']
         if more[:len(expected)] != expected or len(more) != len(expected) + 3 or more[-2] != '-o':
             fail('unexpected download arguments')
         try:
@@ -71,9 +71,9 @@ def main():
         with audio.open('rb') as source, output.open('wb') as target:
             target.write(source.read(max(1, total // 4)))
         print(f'nuzky {total // 4} {total} NA', flush=True)
-        time.sleep(10)
+        # A child of its own, as yt-dlp's standalone builds have, so Stop must end it too.
+        subprocess.run([sys.executable, '-c', 'import time; time.sleep(20)', 'nuzky-fake-ytdlp-child'])
         print(f'nuzky {total // 2} NA {total}', flush=True)
-        time.sleep(10)
     else:
         print(f'nuzky {total // 4} {total} NA', flush=True)
         print(f'nuzky {total // 2} NA {total}', flush=True)

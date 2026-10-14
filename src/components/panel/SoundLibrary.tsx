@@ -228,10 +228,19 @@ function SearchField({ kind }: { kind: SoundKind }) {
   );
 }
 
+/** Music from YouTube has no credit; its file in the library is named after the video. */
+const YOUTUBE_FILE = /^youtube-([\w-]{11})\.\w+$/;
+
 /** Ids of the library sounds the project already has. */
 function useInProject() {
   const assets = useEditor((s) => s.snap?.project.assets);
-  return new Set((assets ?? []).flatMap((a) => (a.credit ? [`${a.credit.source}:${a.credit.id}`] : [])));
+  return new Set(
+    (assets ?? []).flatMap((a) => {
+      if (a.credit) return [`${a.credit.source}:${a.credit.id}`];
+      const video = YOUTUBE_FILE.exec(a.path.split(/[\\/]/).pop() ?? "")?.[1];
+      return video ? [`youtube:${video}`] : [];
+    }),
+  );
 }
 
 function OnlineResults({ kind }: { kind: SoundKind }) {
