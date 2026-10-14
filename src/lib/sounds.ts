@@ -38,6 +38,8 @@ type State = {
   link: Link;
   /** The link waiting for the user to read, once, that the music's rights are theirs. */
   rightsFor: string | null;
+  /** yt-dlp is downloading. */
+  installing: boolean;
 };
 
 export const useSounds = create<State>(() => ({
@@ -49,6 +51,7 @@ export const useSounds = create<State>(() => ({
   adding: [],
   link: NO_LINK,
   rightsFor: null,
+  installing: false,
 }));
 
 let listening = false;
@@ -103,6 +106,7 @@ export async function openLink(url: string) {
   const { link, adding, preview } = useSounds.getState();
   if (link.sound && text === link.url) return;
   // Another link takes the row and its Stop away, so its download stops with it.
+  if (useSounds.getState().installing) api.soundCancel("yt-dlp");
   if (link.sound) {
     if (adding.includes(link.sound.id)) api.soundCancel(link.sound.id);
     if (preview?.id === link.sound.id) stopPreview();
@@ -131,6 +135,22 @@ export async function answerRights(agree: boolean) {
     await openLink(url);
   } catch (e) {
     useSounds.setState({ link: { ...NO_LINK, url, error: errorText(e) } });
+  }
+}
+
+/** Downloads yt-dlp, then looks the link up again; stopped, the link still says yt-dlp is missing. */
+export async function installYtdlp() {
+  if (useSounds.getState().installing) return;
+  useSounds.setState({ installing: true });
+  try {
+    await api.installYtdlp();
+    useSounds.setState({ installing: false });
+    await openLink(useSounds.getState().link.url);
+  } catch (e) {
+    const text = errorText(e);
+    useSounds.setState((s) => ({ installing: false, link: text.startsWith("CANCELLED") ? s.link : { ...s.link, error: text } }));
+  } finally {
+    useSounds.setState((s) => ({ progress: { ...s.progress, "yt-dlp": 0 } }));
   }
 }
 

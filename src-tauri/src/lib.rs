@@ -1137,6 +1137,7 @@ pub fn run() {
             sounds::sound_library,
             sounds::sound_search,
             sounds::sound_link,
+            sounds::install_ytdlp,
             sounds::confirm_youtube_rights,
             sounds::sound_preview,
             sounds::sound_stop,

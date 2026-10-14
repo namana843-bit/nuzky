@@ -1,6 +1,7 @@
-//! Music from a YouTube or YouTube Music link, through the yt-dlp the user installed; Nuzky does not
-//! ship it. yt-dlp only ever gets a watch address Nuzky built from the video's id, so nothing else in
-//! a pasted link reaches it, and it ignores the user's yt-dlp configuration.
+//! Music from a YouTube or YouTube Music link, through yt-dlp: the one the user installed, or one
+//! Nuzky downloads from yt-dlp's own releases when the user asks; Nuzky does not ship it. yt-dlp only
+//! ever gets a watch address Nuzky built from the video's id, so nothing else in a pasted link
+//! reaches it, and it ignores the user's yt-dlp configuration.
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -107,8 +108,13 @@ fn locate(dirs: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
     dirs.into_iter().map(|dir| dir.join(name)).find(|path| executable(path))
 }
 
-/// The installed yt-dlp; `NUZKY_YTDLP` names another, such as the tests' fake one.
+/// Nuzky's own yt-dlp first, as Nuzky keeps it up to date, then the one the user installed.
+/// `NUZKY_YTDLP` stands in for the user's, such as the tests' fake one.
 pub fn find() -> Option<PathBuf> {
+    let own = own_copy();
+    if executable(&own) {
+        return Some(own);
+    }
     if let Some(path) = std::env::var_os("NUZKY_YTDLP") {
         return Some(PathBuf::from(path)).filter(|path| executable(path));
     }
@@ -116,16 +122,163 @@ pub fn find() -> Option<PathBuf> {
 }
 
 fn missing() -> anyhow::Error {
-    let how = if cfg!(target_os = "macos") {
-        "run brew install yt-dlp in Terminal"
-    } else if cfg!(windows) {
-        "run winget install yt-dlp in a terminal"
-    } else {
-        "install the yt-dlp package of your system, or run pipx install yt-dlp"
+    if release_file().is_some() {
+        return anyhow!(
+            "YTDLP_MISSING: Nuzky gets music from YouTube with yt-dlp, a free tool that is not on this computer yet. The user can paste the link in the Music tab of Nuzky's sound library and click Download yt-dlp under it."
+        );
+    }
+    anyhow!(UNSUPPORTED)
+}
+
+// ---------- Nuzky's own yt-dlp ----------
+
+const LATEST: &str = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
+/// Every file Nuzky downloads comes from here.
+const DOWNLOADS: &str = "https://github.com/yt-dlp/yt-dlp/releases/download/";
+const UNSUPPORTED: &str = "YTDLP_UNSUPPORTED: Nuzky gets music from YouTube with yt-dlp, which is not installed and which Nuzky can't download for this computer. Install it from github.com/yt-dlp/yt-dlp, then try again.";
+/// Tests serve the release from this host through `NUZKY_YTDLP_RELEASES`; nothing else replaces GitHub.
+const TEST_SERVER: &str = "http://127.0.0.1:";
+/// YouTube changes often enough to break an old yt-dlp.
+const REFRESH: Duration = Duration::from_secs(7 * 24 * 3600);
+const RETRY: Duration = Duration::from_secs(10 * 60);
+
+/// The file of yt-dlp's release that runs on this computer, as yt-dlp names it.
+fn release_file() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", _) => Some("yt-dlp_macos"),
+        ("linux", "x86_64") => Some("yt-dlp_linux"),
+        ("linux", "aarch64") => Some("yt-dlp_linux_aarch64"),
+        ("windows", "x86_64") => Some("yt-dlp.exe"),
+        ("windows", "aarch64") => Some("yt-dlp_arm64.exe"),
+        _ => None,
+    }
+}
+
+fn own_copy() -> PathBuf {
+    crate::sounds::data_dir().join("tools").join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" })
+}
+
+/// When Nuzky last checked its yt-dlp against the newest release.
+fn checked_stamp() -> PathBuf {
+    own_copy().with_file_name("yt-dlp.checked")
+}
+
+#[derive(Deserialize)]
+struct Release {
+    assets: Vec<ReleaseFile>,
+}
+
+#[derive(Deserialize)]
+struct ReleaseFile {
+    name: String,
+    size: u64,
+    /// "sha256:<hex>", as GitHub computed it when the file was published.
+    digest: Option<String>,
+    browser_download_url: String,
+}
+
+/// Where the newest release's `file` downloads from, with its size and SHA-256.
+fn newest(file: &str) -> Result<(String, u64, String)> {
+    let test = std::env::var("NUZKY_YTDLP_RELEASES").ok().filter(|url| url.starts_with(TEST_SERVER));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .https_only(test.is_none())
+        .max_redirects(5)
+        .user_agent(crate::sounds::AGENT)
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build()
+        .into();
+    let mut response = agent.get(test.as_deref().unwrap_or(LATEST)).call().map_err(|error| match error {
+        ureq::Error::StatusCode(403 | 429) => {
+            anyhow!("RATE_LIMITED: GitHub gets too many requests from this network. Try again in an hour.")
+        }
+        ureq::Error::StatusCode(code) => {
+            anyhow!("SOURCE_FAILED: GitHub answered with an error ({code}). Try again later.")
+        }
+        error => anyhow!("OFFLINE: Can't reach GitHub to download yt-dlp. Check your internet connection. ({error})"),
+    })?;
+    let mut text = String::new();
+    response.body_mut().with_config().limit(4 << 20).reader().read_to_string(&mut text).map_err(|e| {
+        anyhow!("OFFLINE: Can't reach GitHub to download yt-dlp. Check your internet connection. ({e})")
+    })?;
+    let release: Release = serde_json::from_str(&text).context("SOURCE_FAILED: GitHub sent something unexpected")?;
+    let found = release
+        .assets
+        .into_iter()
+        .find(|a| a.name == file)
+        .context("SOURCE_FAILED: yt-dlp's newest release has no file for this computer yet. Try again later.")?;
+    let sha256 = found
+        .digest
+        .as_deref()
+        .and_then(|d| d.strip_prefix("sha256:"))
+        .filter(|sum| sum.len() == 64 && sum.bytes().all(|b| b.is_ascii_hexdigit()))
+        .context("SOURCE_FAILED: GitHub gave no checksum for yt-dlp")?
+        .to_ascii_lowercase();
+    let url = found.browser_download_url;
+    ensure!(
+        url.starts_with(DOWNLOADS) || (test.is_some() && url.starts_with(TEST_SERVER)),
+        "SOURCE_FAILED: GitHub pointed yt-dlp somewhere else"
+    );
+    Ok((url, found.size, sha256))
+}
+
+/// Downloads the newest yt-dlp for this computer from yt-dlp's GitHub releases to `path`, checked
+/// against the size and SHA-256 GitHub gives for it, unless `path` already is that file.
+fn install_to(path: &Path, cancel: &AtomicBool, progress: impl FnMut(f32)) -> Result<()> {
+    let file = release_file().context(UNSUPPORTED)?;
+    // The lookup runs on its own thread, so Stop is felt at once even while GitHub keeps silent.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || tx.send(newest(file)).ok());
+    let (url, size, sha256) = loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(found) => break found?,
+            Err(RecvTimeoutError::Timeout) => nuzky_session::jobs::check_cancel(cancel)?,
+            Err(RecvTimeoutError::Disconnected) => bail!("SOURCE_FAILED: looking for yt-dlp stopped unexpectedly"),
+        }
     };
-    anyhow!(
-        "YTDLP_MISSING: Nuzky adds music from YouTube links with yt-dlp, which is not installed. To install it, {how}, then try again."
-    )
+    let integrity = crate::model_download::Integrity { size, sha256: &sha256 };
+    crate::model_download::download(&url, path, integrity, cancel, progress).map_err(|error| {
+        let text = format!("{error:#}");
+        if text.starts_with("CANCELLED") {
+            error
+        } else if text.starts_with("MODEL_INVALID") {
+            anyhow!("YTDLP_CORRUPT: yt-dlp did not download correctly. Try again.")
+        } else {
+            anyhow!("YTDLP_DOWNLOAD_FAILED: yt-dlp didn't download. Check your internet connection and free disk space, then try again. ({text})")
+        }
+    })?;
+    #[cfg(unix)]
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
+    Ok(())
+}
+
+/// Downloads yt-dlp for Nuzky's own use; `cancel` stops it within 100 ms.
+pub fn install(cancel: &AtomicBool, progress: impl FnMut(f32)) -> Result<()> {
+    install_to(&own_copy(), cancel, progress)?;
+    std::fs::write(checked_stamp(), b"")?;
+    Ok(())
+}
+
+/// Once a week, after yt-dlp has run, Nuzky's own copy is brought up to date in the background, so
+/// nothing waits for it and Windows lets it replace the file. A failed try, such as offline, is repeated
+/// after ten minutes of use; a finished download is then only moved into place.
+fn refresh() {
+    static TRIED: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    let stale = std::fs::metadata(checked_stamp())
+        .and_then(|m| m.modified())
+        .map_or(true, |at| at.elapsed().unwrap_or_default() > REFRESH);
+    if !executable(&own_copy()) || !stale {
+        return;
+    }
+    let mut tried = TRIED.lock().unwrap();
+    if tried.is_some_and(|at| at.elapsed() < RETRY) {
+        return;
+    }
+    *tried = Some(Instant::now());
+    std::thread::spawn(|| {
+        if let Err(error) = install(&AtomicBool::new(false), |_| {}) {
+            log::warn!("Updating yt-dlp failed: {error:#}");
+        }
+    });
 }
 
 fn command(args: &[&str]) -> Result<Command> {
@@ -263,6 +416,7 @@ pub fn video(id: &str, max_bytes: u64) -> Result<Video> {
         std::thread::sleep(Duration::from_millis(50));
     };
     let stderr = stderr.join().unwrap_or_default();
+    refresh();
     ensure!(status.success(), failure(&stderr));
     let bytes = reader.join().map_err(|_| anyhow!("yt-dlp output was lost"))??;
     let video: Video = serde_json::from_slice(&bytes)
@@ -340,6 +494,7 @@ pub fn download(
             }
         };
         let stderr = stderr.join().unwrap_or_default();
+        refresh();
         ensure!(status.success(), failure(&stderr));
         // Over --max-filesize yt-dlp skips the download and still succeeds.
         let size = part.metadata().map(|m| m.len()).unwrap_or(0);
@@ -472,6 +627,22 @@ mod tests {
         }
         assert_eq!(locate([empty, installed.clone()]), Some(installed.join(name)));
         std::fs::remove_dir_all(root).ok();
+    }
+
+    /// Downloads the real yt-dlp from GitHub as Download yt-dlp does, into a folder of its own, and runs it.
+    #[test]
+    #[ignore]
+    fn downloads_yt_dlp_from_its_releases() {
+        let dir = std::env::temp_dir().join(format!("nuzky-ytdlp-{}", new_id()));
+        let path = dir.join(if cfg!(windows) { "yt-dlp.exe" } else { "yt-dlp" });
+        let mut steps = Vec::new();
+        install_to(&path, &AtomicBool::new(false), |p| steps.push(p)).unwrap();
+        let version = Command::new(&path).arg("--version").output().unwrap();
+        eprintln!("yt-dlp {} at {path:?}", String::from_utf8_lossy(&version.stdout).trim());
+        assert!(version.status.success() && steps.last() == Some(&1.0), "{version:?} {:?}", steps.last());
+        assert!(executable(&path));
+        install_to(&path, &AtomicBool::new(false), |_| panic!("an up-to-date copy is downloaded again")).unwrap();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// Run with yt-dlp installed: it is found, also with the short PATH of an app started from the
