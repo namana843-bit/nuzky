@@ -36,10 +36,15 @@ def missing(r):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             r.releases.requests.append(self.path)
-            if self.path == '/SHA2-256SUMS':
+            if self.path == '/latest':
                 sha = hashlib.sha256(r.tool).hexdigest() if r.releases.correct else '0' * 64
-                body = f'{sha}  {r.release}\n'.encode()
+                body = json.dumps({'tag_name': '2099.01.01', 'assets': [
+                    {'name': r.release, 'size': len(r.tool), 'digest': f'sha256:{sha}',
+                     'browser_download_url': f'http://127.0.0.1:{r.releases.server_port}/{r.release}'}]}).encode()
             elif self.path == '/' + r.release:
+                if r.releases.silent:
+                    time.sleep(20)
+                    return
                 body = r.tool
             else:
                 self.send_error(404)
@@ -53,10 +58,10 @@ def missing(r):
             pass
 
     r.releases = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    r.releases.requests, r.releases.correct = [], False
+    r.releases.requests, r.releases.correct, r.releases.silent = [], False, False
     r.release_worker = threading.Thread(target=r.releases.serve_forever, daemon=True)
     r.release_worker.start()
-    r.env['NUZKY_YTDLP_RELEASES'] = f'http://127.0.0.1:{r.releases.server_port}/'
+    r.env['NUZKY_YTDLP_RELEASES'] = f'http://127.0.0.1:{r.releases.server_port}/latest'
 
 
 def music(r):
@@ -250,21 +255,30 @@ def youtube_missing(r):
                 and r.s.run(label, button) == 'Try again', error)
         r.check('a wrong checksum leaves no tool, stamp or partial download and changes no project',
                 not own.exists() and not (tools / 'yt-dlp.checked').exists()
-                and list(tools.glob('.nuzky-part-*')) == [] and r.s.run(PROJECT) == project and invocations(r) == [])
+                and list(tools.glob('*.part')) == [] and r.s.run(PROJECT) == project and invocations(r) == [])
         r.check('the corrupt download requested the checksum and platform release only',
-                r.releases.requests == ['/SHA2-256SUMS', '/' + r.release], r.releases.requests.copy())
+                r.releases.requests == ['/latest', '/' + r.release], r.releases.requests.copy())
         r.shot('corrupt-ytdlp-error')
 
-        r.releases.correct = True
+        r.releases.correct, r.releases.silent = True, True
         r.s.run(CLICK, button)
         r.check('Try again brings back Download yt-dlp without another rights notice',
                 wait(lambda: r.s.run(label, button) == 'Download yt-dlp', 10) and not dialog(r))
         r.s.run(CLICK, button)
+        wait(lambda: r.s.run(label, button) == 'Stop', 5)
+        stopped_at = time.time()
+        r.s.run(CLICK, button)
+        back = wait(lambda: r.s.run(label, button) == 'Download yt-dlp', 5)
+        r.check('Stop ends a download from a silent server within seconds and installs nothing',
+                back and time.time() - stopped_at < 3 and not own.exists(), round(time.time() - stopped_at, 1))
+        r.releases.silent = False
+        r.releases.requests.clear()
+        r.s.run(CLICK, button)
         row = wait(lambda: r.s.run('return document.querySelector(arguments[0])?.innerText ?? ""', ROW), 10) or ''
         r.check('after downloading the pasted song appears by itself with title, artist and duration',
                 all(text in row for text in ('Steady Song', 'Test Artist · YouTube', '20.0 s')), row)
-        r.check('retry fetched both files again from the local release server',
-                r.releases.requests == ['/SHA2-256SUMS', '/' + r.release] * 2, r.releases.requests.copy())
+        r.check('the download fetched the release and its file from the local release server',
+                r.releases.requests == ['/latest', '/' + r.release], r.releases.requests.copy())
         r.check('the installed tool is executable, matches the release bytes and has a checked stamp',
                 own.exists() and own.read_bytes() == r.tool and own.stat().st_mode & 0o777 == 0o755
                 and (tools / 'yt-dlp.checked').is_file())

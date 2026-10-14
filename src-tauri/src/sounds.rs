@@ -68,8 +68,12 @@ pub async fn install_ytdlp(app: AppHandle) -> CmdResult<()> {
     const ID: &str = "yt-dlp";
     let state = app.state::<AppState>();
     let cancel = Arc::new(AtomicBool::new(false));
-    if state.sounds.downloads.lock().unwrap().insert(ID.into(), cancel.clone()).is_some() {
-        return Err("BUSY: yt-dlp is already downloading".into());
+    {
+        let mut downloads = state.sounds.downloads.lock().unwrap();
+        if downloads.contains_key(ID) {
+            return Err("BUSY: yt-dlp is already downloading".into());
+        }
+        downloads.insert(ID.into(), cancel.clone());
     }
     let app2 = app.clone();
     let result = blocking(move || nuzky_mcp::youtube::install(&cancel, progress(&app2, ID))).await;

@@ -106,6 +106,7 @@ export async function openLink(url: string) {
   const { link, adding, preview } = useSounds.getState();
   if (link.sound && text === link.url) return;
   // Another link takes the row and its Stop away, so its download stops with it.
+  if (useSounds.getState().installing) api.soundCancel("yt-dlp");
   if (link.sound) {
     if (adding.includes(link.sound.id)) api.soundCancel(link.sound.id);
     if (preview?.id === link.sound.id) stopPreview();

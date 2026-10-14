@@ -33,16 +33,16 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy)]
-pub struct Integrity {
+pub struct Integrity<'a> {
     pub size: u64,
-    pub sha256: &'static str,
+    pub sha256: &'a str,
 }
 
 fn checksum(hash: Sha256) -> String {
     hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn installed(path: &Path, expected: Integrity, cancel: &AtomicBool) -> Result<bool> {
+fn installed(path: &Path, expected: Integrity<'_>, cancel: &AtomicBool) -> Result<bool> {
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -67,7 +67,7 @@ fn installed(path: &Path, expected: Integrity, cancel: &AtomicBool) -> Result<bo
 pub fn download(
     url: &str,
     path: &Path,
-    expected: Integrity,
+    expected: Integrity<'_>,
     cancel: &AtomicBool,
     mut progress: impl FnMut(f32),
 ) -> Result<PathBuf> {
@@ -135,7 +135,7 @@ fn remove_old_parts(path: &Path) {
 fn transfer(
     url: &str,
     part: &Path,
-    expected: Integrity,
+    expected: Integrity<'_>,
     cancel: &AtomicBool,
     progress: &mut impl FnMut(f32),
 ) -> Result<()> {
