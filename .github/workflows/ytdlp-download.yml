@@ -1,0 +1,45 @@
+name: yt-dlp download (temporary)
+
+# Proves on each system that Nuzky downloads yt-dlp, finds its own copy and runs it. Removed before the branch merges.
+on:
+  push:
+    branches: [feat/youtube-ytdlp-download]
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        shell: bash
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-ffmpeg-v1-${{ hashFiles('Cargo.toml') }}
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/setup-ubuntu-deps.sh
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg pkg-config cmake
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg)/lib/pkgconfig" >> "$GITHUB_ENV"
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup-windows-deps.ps1
+      - name: Link parsing, error messages and lookup in folders
+        run: cargo test -p nuzky-mcp --lib --locked youtube
+      - name: Nuzky downloads yt-dlp, finds its own copy and runs it
+        run: cargo test -p nuzky-mcp --lib --locked downloads_yt_dlp_from_its_releases -- --ignored --nocapture
