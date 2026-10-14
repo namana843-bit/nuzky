@@ -54,8 +54,18 @@ impl Client {
     }
     /// An agent on another project of the same folder, sharing the cache and data directory.
     fn spawn_at(dir: PathBuf, project: &std::path::Path, write: bool, style: Option<Option<&str>>) -> Self {
+        Self::spawn_at_env(dir, project, write, style, &[])
+    }
+    fn spawn_at_env(
+        dir: PathBuf,
+        project: &std::path::Path,
+        write: bool,
+        style: Option<Option<&str>>,
+        env: &[(&str, &std::path::Path)],
+    ) -> Self {
         let binary = env!("CARGO_BIN_EXE_nuzky");
         let mut command = Command::new(binary);
+        command.envs(env.iter().copied());
         command.arg("mcp").arg("--project").arg(project).arg("--cache").arg(dir.join("cache"));
         if write {
             command.arg("--allow-write");
@@ -251,6 +261,114 @@ fn built_in_sounds_are_listed_and_added_with_their_credit() {
     let clips: Vec<_> =
         disk["tracks"].as_array().unwrap().iter().flat_map(|t| t["clips"].as_array().unwrap()).collect();
     assert_eq!(clips.iter().map(|c| c["startUs"].as_i64().unwrap()).collect::<Vec<_>>(), [1_500_000, 4_000_000]);
+}
+
+#[cfg(unix)]
+#[test]
+fn youtube_links_download_with_mocked_ytdlp_and_require_rights() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+    let dir = root.join("tmp-test").join(format!("youtube-mcp-{}", new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let project = dir.join("project.nuzky");
+    std::fs::write(&project, serde_json::to_vec(&Project::new("YouTube test")).unwrap()).unwrap();
+    let audio = dir.join("tone.m4a");
+    let out = Command::new("ffmpeg")
+        .args(["-v", "error", "-f", "lavfi", "-i", "sine=frequency=5000:duration=20", "-c:a", "aac"])
+        .arg(&audio)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let fake = root.join("tests/e2e/fake_ytdlp");
+    let log = dir.join("ytdlp.jsonl");
+    let cache = dir.join("cache");
+    let runtime = dir.join("runtime");
+    let home = dir.join("home");
+    let data = dir.join("data");
+    let mut env: [(&str, &std::path::Path); 7] = [
+        ("NUZKY_YTDLP", &fake),
+        ("NUZKY_FAKE_YTDLP_AUDIO", &audio),
+        ("NUZKY_FAKE_YTDLP_LOG", &log),
+        ("HOME", &home),
+        ("XDG_DATA_HOME", &data),
+        ("XDG_CACHE_HOME", &cache),
+        ("XDG_RUNTIME_DIR", &runtime),
+    ];
+    let mut c = Client::spawn_at_env(dir, &project, true, Some(None), &env);
+    for query in ["https://music.youtube.com/watch?v=ytSong00001&list=RDtest", "https://youtu.be/ytSong00001?si=test"] {
+        let found = c.call("search_sounds", json!({"query": query, "kind": "music"}));
+        assert_eq!(found["sounds"].as_array().unwrap().len(), 1, "{found}");
+        assert_eq!(found["sounds"][0]["id"], "youtube:ytSong00001");
+        assert_eq!(found["sounds"][0]["title"], "Steady Song");
+        assert_eq!(found["sounds"][0]["author"], "Test Artist");
+        assert_eq!(found["sounds"][0]["durationUs"], 20_000_000);
+        assert_eq!(found["more"], false);
+        assert_eq!(found["online"], "YouTube");
+        assert_eq!(found["rights_confirmed"], false);
+    }
+    let before = std::fs::read(&log).unwrap();
+    assert!(
+        c.error("search_sounds", json!({"query": "https://youtube.com/playlist?list=PLtest", "kind": "music"}))
+            .contains("PLAYLIST")
+    );
+    let run = c.call("begin_run", json!({"label": "Add YouTube music"}))["run_id"].clone();
+    let unchanged = c.call("get_state", json!({}));
+    assert!(
+        c.error("add_sound", json!({"run_id": run, "id": "youtube:ytSong00001", "at_us": 1_500_000}))
+            .contains("RIGHTS_UNCONFIRMED")
+    );
+    assert_eq!(c.call("get_state", json!({})), unchanged);
+    assert_eq!(std::fs::read(&log).unwrap(), before);
+    let added = c.call(
+        "add_sound",
+        json!({"run_id": run, "id": "youtube:ytSong00001", "at_us": 1_500_000, "rights_confirmed": true}),
+    );
+    assert_eq!(added["start_us"], 1_500_000, "{added}");
+    assert_eq!(added["needs_credit"], false);
+    assert_eq!(added["credit"], Value::Null);
+    let state = c.call("get_state", json!({}));
+    assert!(
+        c.error("add_sound", json!({"run_id": run, "id": "youtube:ytPrivate01", "at_us": 0}))
+            .contains("SOUND_UNAVAILABLE")
+    );
+    assert_eq!(c.call("get_state", json!({})), state);
+    c.call("end_run", json!({"run_id": run, "action": "keep"}));
+    let disk: Value = serde_json::from_slice(&std::fs::read(&project).unwrap()).unwrap();
+    assert_eq!(disk["assets"].as_array().unwrap().len(), 1);
+    assert!(disk["assets"][0]["credit"].is_null());
+    let file = c.dir.canonicalize().unwrap().join("data/nuzky/sounds/youtube-ytSong00001.m4a");
+    assert_eq!(PathBuf::from(disk["assets"][0]["path"].as_str().unwrap()), file);
+    assert_eq!(std::fs::read(&file).unwrap(), std::fs::read(&audio).unwrap());
+    let track = disk["tracks"].as_array().unwrap().iter().find(|t| t["id"] == added["track_id"]).unwrap();
+    assert_eq!(track["kind"], "audio");
+    assert_eq!(track["clips"][0]["startUs"], 1_500_000);
+    assert_eq!(track["clips"][0]["content"]["assetId"], added["asset_id"]);
+    let settings: Value =
+        serde_json::from_slice(&std::fs::read(c.dir.join("data/nuzky/sound-library.json")).unwrap()).unwrap();
+    assert_eq!(settings["youtubeRights"], true);
+    assert_eq!(
+        c.call("search_sounds", json!({"query": "https://youtu.be/ytSong00001", "kind": "music"}))["rights_confirmed"],
+        true
+    );
+    for line in std::fs::read_to_string(&log).unwrap().lines() {
+        let args: Vec<String> = serde_json::from_str(line).unwrap();
+        let url = args.iter().position(|arg| arg == "--").unwrap() + 1;
+        assert_eq!(args.len(), url + 1);
+        assert!(
+            args[url] == "https://www.youtube.com/watch?v=ytSong00001"
+                || args[url] == "https://www.youtube.com/watch?v=ytPrivate01"
+        );
+    }
+    c.finish();
+    let dir = std::mem::take(&mut c.dir);
+    drop(c);
+    let missing = dir.join("not-installed");
+    env[0] = ("NUZKY_YTDLP", &missing);
+    let mut c = Client::spawn_at_env(dir, &project, false, None, &env);
+    assert!(
+        c.error("search_sounds", json!({"query": "https://youtu.be/ytSong00001", "kind": "music"}))
+            .contains("YTDLP_MISSING")
+    );
+    c.finish();
 }
 
 #[test]
