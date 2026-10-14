@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 const OPENVERSE: &str = "https://api.openverse.org/v1/";
 const FREESOUND: &str = "https://freesound.org/apiv2/";
 /// Wikimedia asks for contact details in the User-Agent.
-const AGENT: &str = concat!("Nuzky/", env!("CARGO_PKG_VERSION"), " (https://nuzky.app)");
+pub(crate) const AGENT: &str = concat!("Nuzky/", env!("CARGO_PKG_VERSION"), " (https://nuzky.app)");
 /// Tests serve both APIs and their files from this host through `NUZKY_OPENVERSE_URL` and
 /// `NUZKY_FREESOUND_URL`; nothing else replaces the real services.
 const TEST_SERVER: &str = "http://127.0.0.1:";
@@ -216,7 +216,7 @@ pub struct Settings {
     pub youtube_rights: bool,
 }
 
-fn data_dir() -> PathBuf {
+pub(crate) fn data_dir() -> PathBuf {
     dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("nuzky")
 }
 
@@ -283,7 +283,7 @@ fn agent(body_timeout: Duration) -> ureq::Agent {
 }
 
 /// The coded, plain error the library shows for a failed request to `service`.
-fn request_error(service: &str, error: ureq::Error) -> anyhow::Error {
+pub(crate) fn request_error(service: &str, error: ureq::Error) -> anyhow::Error {
     match error {
         ureq::Error::StatusCode(429) => {
             anyhow!("RATE_LIMITED: {service} gets too many searches from this network. Try again in a minute.")

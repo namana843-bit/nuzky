@@ -1,7 +1,7 @@
 import { AlertCircle, AudioLines, Check, Copy, ExternalLink, Link2, Loader2, Pause, Play, Plus, Search, SlidersHorizontal, WifiOff, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, errorText, plainError } from "../../lib/api";
-import { addSound, answerRights, copyCredits, loadBuiltIn, openLink, searchSounds, stopPreview, togglePreview, useSounds } from "../../lib/sounds";
+import { addSound, answerRights, copyCredits, installYtdlp, loadBuiltIn, openLink, searchSounds, stopPreview, togglePreview, useSounds } from "../../lib/sounds";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Sound, SoundKind, SoundSettings } from "../../lib/types";
@@ -416,6 +416,7 @@ function LinkResult() {
     );
   if (link.sound) return <SoundRow sound={link.sound} inProject={inProject.has(link.sound.id)} />;
   if (!link.error) return null;
+  if (link.error.startsWith("YTDLP_MISSING")) return <GetYtdlp />;
   const offline = link.error.startsWith("OFFLINE");
   return (
     <div role="alert" className="mx-1.5 mb-1 flex items-start gap-2 text-[12px] text-muted">
@@ -436,6 +437,36 @@ function LinkResult() {
 
 /** Keeps "yt-dlp" whole, as a name split at its hyphen reads as two words. */
 const Nowrap = ({ children }: { children: string }) => <span className="whitespace-nowrap">{children}</span>;
+
+/** Nuzky downloads yt-dlp itself, so music from YouTube needs no terminal. */
+function GetYtdlp() {
+  const installing = useSounds((s) => s.installing);
+  const progress = useSounds((s) => s.progress["yt-dlp"] ?? 0);
+  return (
+    <div role="alert" className="mx-1.5 mb-1 flex items-center gap-2 text-[12px] text-muted">
+      <span className="min-w-0 flex-1">
+        {installing ? (
+          <>
+            Downloading <Nowrap>yt-dlp</Nowrap>… <span className="tabular">{Math.round(progress * 100)}%</span>
+          </>
+        ) : (
+          <>
+            Music from YouTube comes through <Nowrap>yt-dlp</Nowrap>, a free tool. Nuzky can download it for you.
+          </>
+        )}
+      </span>
+      {installing ? (
+        <Button className="h-7 shrink-0 text-[12px]" onClick={() => api.soundCancel("yt-dlp")}>
+          Stop
+        </Button>
+      ) : (
+        <Button variant="primary" className="h-7 shrink-0 text-[12px]" onClick={installYtdlp}>
+          Download <Nowrap>yt-dlp</Nowrap>
+        </Button>
+      )}
+    </div>
+  );
+}
 
 /** Asked once, before the first link is looked up: the music's rights are the user's to check. */
 function RightsDialog() {

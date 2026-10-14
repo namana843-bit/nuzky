@@ -61,6 +61,22 @@ pub async fn sound_link(url: String) -> CmdResult<Sound> {
     blocking(move || sounds::link(&url)).await
 }
 
+/// Downloads yt-dlp for music from YouTube links, with `sound-progress` under the id "yt-dlp";
+/// `sound_cancel("yt-dlp")` stops it.
+#[tauri::command]
+pub async fn install_ytdlp(app: AppHandle) -> CmdResult<()> {
+    const ID: &str = "yt-dlp";
+    let state = app.state::<AppState>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    if state.sounds.downloads.lock().unwrap().insert(ID.into(), cancel.clone()).is_some() {
+        return Err("BUSY: yt-dlp is already downloading".into());
+    }
+    let app2 = app.clone();
+    let result = blocking(move || nuzky_mcp::youtube::install(&cancel, progress(&app2, ID))).await;
+    state.sounds.downloads.lock().unwrap().remove(ID);
+    result
+}
+
 /// The user read the notice that the rights to music from YouTube links are theirs to check.
 #[tauri::command]
 pub fn confirm_youtube_rights() -> CmdResult<SoundSettings> {
