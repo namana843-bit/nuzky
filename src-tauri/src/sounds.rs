@@ -55,6 +55,19 @@ pub async fn sound_search(query: String, kind: Kind, page: u32) -> CmdResult<Pag
     blocking(move || sounds::search(&query, kind, None, page)).await
 }
 
+/// The video of a YouTube or YouTube Music link, looked up through yt-dlp, as a sound to preview and add.
+#[tauri::command]
+pub async fn sound_link(url: String) -> CmdResult<Sound> {
+    blocking(move || sounds::link(&url)).await
+}
+
+/// The user read the notice that the rights to music from YouTube links are theirs to check.
+#[tauri::command]
+pub fn confirm_youtube_rights() -> CmdResult<SoundSettings> {
+    sounds::confirm_youtube_rights().map_err(err)?;
+    Ok(sound_settings())
+}
+
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -168,12 +181,17 @@ pub fn sound_credits(state: State<'_, AppState>, expected_epoch: Option<String>)
 pub struct SoundSettings {
     freesound: bool,
     has_key: bool,
+    youtube_rights: bool,
 }
 
 #[tauri::command]
 pub fn sound_settings() -> SoundSettings {
     let settings = sounds::settings();
-    SoundSettings { freesound: settings.freesound, has_key: !settings.freesound_key.is_empty() }
+    SoundSettings {
+        freesound: settings.freesound,
+        has_key: !settings.freesound_key.is_empty(),
+        youtube_rights: settings.youtube_rights,
+    }
 }
 
 /// `key` replaces the stored Freesound key; None keeps it, empty removes it. The key never comes back.

@@ -1,7 +1,7 @@
-import { AudioLines, Check, Copy, ExternalLink, Loader2, Pause, Play, Plus, Search, SlidersHorizontal, WifiOff, X } from "lucide-react";
+import { AlertCircle, AudioLines, Check, Copy, ExternalLink, Link2, Loader2, Pause, Play, Plus, Search, SlidersHorizontal, WifiOff, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, errorText, plainError } from "../../lib/api";
-import { addSound, copyCredits, loadBuiltIn, searchSounds, stopPreview, togglePreview, useSounds } from "../../lib/sounds";
+import { addSound, answerRights, copyCredits, loadBuiltIn, openLink, searchSounds, stopPreview, togglePreview, useSounds } from "../../lib/sounds";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Sound, SoundKind, SoundSettings } from "../../lib/types";
@@ -20,6 +20,7 @@ function SoundRow({ sound, inProject, showKind = true }: { sound: Sound; inProje
   const lock = useLockReason();
   const online = sound.provider !== "Built in";
   const license = sound.license === "by" ? "CC BY" : "CC0";
+  const licensed = online && sound.license !== null;
   return (
     <div
       data-sound={sound.id}
@@ -50,7 +51,7 @@ function SoundRow({ sound, inProject, showKind = true }: { sound: Sound; inProje
         <span className="truncate text-[13px] text-fg">{sound.title}</span>
         {(online || showKind) && <span className="truncate text-[12px] text-muted">{online ? `${sound.author} · ${sound.provider}` : sound.category}</span>}
       </div>
-      {online && (
+      {licensed && (
         <button
           type="button"
           onClick={() => api.openSoundPage(sound.url).catch((e) => useEditor.getState().toast({ kind: "error", text: errorText(e) }))}
@@ -339,10 +340,149 @@ function Effects() {
   );
 }
 
+/** Where a YouTube or YouTube Music link is pasted; pasting looks the video up at once. */
+function LinkField() {
+  const url = useSounds((s) => s.link.url);
+  const [text, setText] = useState(url);
+  useEffect(() => setText(url), [url]);
+  const clear = () => {
+    setText("");
+    openLink("");
+  };
+  return (
+    <form
+      className="relative flex h-8 min-w-0 flex-1 items-center"
+      onSubmit={(e) => {
+        e.preventDefault();
+        openLink(text);
+      }}
+    >
+      <Link2 size={14} className="pointer-events-none absolute left-2.5 text-muted" />
+      <input
+        type="text"
+        inputMode="url"
+        value={text}
+        placeholder="Paste a YouTube link"
+        aria-label="Paste a YouTube link"
+        spellCheck={false}
+        autoComplete="off"
+        onChange={(e) => setText(e.target.value)}
+        onPaste={(e) => {
+          const pasted = e.clipboardData.getData("text").trim();
+          if (!pasted || (e.target as HTMLInputElement).value) return;
+          e.preventDefault();
+          setText(pasted);
+          openLink(pasted);
+        }}
+        onKeyDown={(e) => {
+          // Typing must not reach the editor's shortcuts; Escape on an empty field still does.
+          if (e.key === "Escape" && !text) return;
+          e.stopPropagation();
+          if (e.key === "Escape") clear();
+        }}
+        className={`h-8 w-full text-ellipsis rounded-lg border border-white/[.08] bg-white/[.055] pl-8 text-[13px] text-fg outline-none placeholder:text-muted focus:border-accent ${text ? "pr-7" : "pr-2"}`}
+      />
+      {text && (
+        <button type="button" aria-label="Clear link" onClick={clear} className="absolute right-1.5 flex h-5 w-5 items-center justify-center rounded-full text-muted hover:text-fg">
+          <X size={13} />
+        </button>
+      )}
+    </form>
+  );
+}
+
+/** The video of the pasted link as a row to play and add, or why it can't be. */
+function LinkResult() {
+  const link = useSounds((s) => s.link);
+  const inProject = useInProject();
+  if (link.loading)
+    return (
+      <div role="status" aria-label="Looking up the link" className="flex items-center gap-2.5 p-1.5">
+        <div className="skeleton h-10 w-10 shrink-0 rounded-md" />
+        <div className="flex flex-1 flex-col gap-1.5">
+          <div className="skeleton h-3 w-2/3 rounded" />
+          <div className="skeleton h-2.5 w-1/3 rounded" />
+        </div>
+      </div>
+    );
+  if (link.sound) return <SoundRow sound={link.sound} inProject={inProject.has(link.sound.id)} />;
+  if (!link.error) return null;
+  const offline = link.error.startsWith("OFFLINE");
+  return (
+    <div role="alert" className="mx-1.5 mb-1 flex items-start gap-2 text-[12px] text-muted">
+      {offline ? <WifiOff size={14} className="mt-px shrink-0" /> : <AlertCircle size={14} className="mt-px shrink-0 text-warn" />}
+      <span className="min-w-0 flex-1 select-text">{plainError(link.error)}</span>
+      {!link.error.startsWith("INVALID_LINK") && !link.error.startsWith("PLAYLIST") && (
+        <Button className="h-7 shrink-0 text-[12px]" onClick={() => openLink(link.url)}>
+          Try again
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** Asked once, before the first link is looked up: the music's rights are the user's to check. */
+function RightsDialog() {
+  const open = useSounds((s) => s.rightsFor !== null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = dialog.current;
+    if (!d) return;
+    if (!open) return void (d.open && d.close());
+    if (!d.open) {
+      d.showModal();
+      d.focus();
+    }
+  }, [open]);
+  return (
+    <dialog
+      ref={dialog}
+      tabIndex={-1}
+      aria-labelledby="youtube-rights-title"
+      aria-describedby="youtube-rights-text"
+      onCancel={(e) => {
+        e.preventDefault();
+        answerRights(false);
+      }}
+      onKeyDown={(e) => {
+        // The editor's keys (Space plays, Delete removes) wait until it is answered.
+        e.stopPropagation();
+        if (e.key === "Enter" && e.target === e.currentTarget) answerRights(true);
+        trapTab(e);
+      }}
+      className="dialog-in overlay fixed inset-0 m-auto w-[440px] rounded-[20px] p-6 text-fg outline-none backdrop:bg-black/45"
+    >
+      {open && (
+        <>
+          <h2 id="youtube-rights-title" className="text-[17px] font-semibold leading-[22px] tracking-[-0.025em]">
+            Music from YouTube is yours to clear
+          </h2>
+          <div id="youtube-rights-text" className="mt-2 flex flex-col gap-2 text-[13px] text-fg/85">
+            <p>Nuzky downloads only the sound of the video you link, with yt-dlp on this computer.</p>
+            <p>
+              You're responsible for having the rights to use the music in your video and for following YouTube's Terms of Service. Most songs on YouTube are copyrighted, and a video that
+              uses one can be muted, blocked or demonetized.
+            </p>
+          </div>
+          <div className="mt-6 flex justify-end gap-2">
+            <Button pill onClick={() => answerRights(false)}>
+              Cancel
+            </Button>
+            <Button pill variant="primary" onClick={() => answerRights(true)}>
+              I understand
+            </Button>
+          </div>
+        </>
+      )}
+    </dialog>
+  );
+}
+
 function Music() {
   const query = useSounds((s) => s.search.music.query);
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3.5">
+      <LinkResult />
       {query.trim() ? (
         <OnlineResults kind="music" />
       ) : (
@@ -378,6 +518,12 @@ export function SoundLibrary({ kind }: { kind: SoundKind }) {
           </IconButton>
         </div>
       </div>
+      {kind === "music" && (
+        <div className="flex shrink-0 px-3.5 pb-2">
+          <LinkField />
+        </div>
+      )}
+      <RightsDialog />
       {sources && (
         <Sources
           onClose={(keyboard) => {

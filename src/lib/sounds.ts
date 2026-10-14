@@ -20,6 +20,11 @@ export type Search = {
 
 const EMPTY: Search = { query: "", sounds: [], page: 0, more: false, service: null, loading: false, error: null };
 
+/** A pasted YouTube link and the video it points at, once looked up. */
+export type Link = { url: string; sound: Sound | null; loading: boolean; error: string | null };
+
+const NO_LINK: Link = { url: "", sound: null, loading: false, error: null };
+
 type State = {
   tab: AudioTab;
   builtIn: Sound[];
@@ -30,6 +35,9 @@ type State = {
   progress: Record<string, number>;
   /** Sounds being added to the timeline. */
   adding: string[];
+  link: Link;
+  /** The link waiting for the user to read, once, that the music's rights are theirs. */
+  rightsFor: string | null;
 };
 
 export const useSounds = create<State>(() => ({
@@ -39,6 +47,8 @@ export const useSounds = create<State>(() => ({
   preview: null,
   progress: {},
   adding: [],
+  link: NO_LINK,
+  rightsFor: null,
 }));
 
 let listening = false;
@@ -81,6 +91,39 @@ export async function searchSounds(kind: SoundKind, query: string, page = 1) {
     setSearch(kind, { sounds: [...before, ...found.sounds], page, more: found.more, service: found.service, loading: false });
   } catch (e) {
     if (seq === searches[kind]) setSearch(kind, { loading: false, error: errorText(e) });
+  }
+}
+
+let links = 0;
+let rightsRead = false;
+
+/** Looks up the video of a YouTube link; the first time, the user reads whose the music's rights are. */
+export async function openLink(url: string) {
+  const seq = ++links;
+  const text = url.trim();
+  if (!text) return useSounds.setState({ link: NO_LINK, rightsFor: null });
+  useSounds.setState({ link: { ...NO_LINK, url: text, loading: true } });
+  try {
+    rightsRead ||= (await api.soundSettings()).youtubeRights;
+    if (seq !== links) return;
+    if (!rightsRead) return useSounds.setState({ link: { ...NO_LINK, url: text }, rightsFor: text });
+    const sound = await api.soundLink(text);
+    if (seq === links) useSounds.setState({ link: { ...NO_LINK, url: text, sound } });
+  } catch (e) {
+    if (seq === links) useSounds.setState({ link: { ...NO_LINK, url: text, error: errorText(e) } });
+  }
+}
+
+/** Answers the notice about rights: agreeing looks the link up, Cancel leaves it unlooked. */
+export async function answerRights(agree: boolean) {
+  const url = useSounds.getState().rightsFor;
+  useSounds.setState({ rightsFor: null });
+  if (!agree || !url) return;
+  try {
+    rightsRead = (await api.confirmYoutubeRights()).youtubeRights;
+    await openLink(url);
+  } catch (e) {
+    useSounds.setState({ link: { ...NO_LINK, url, error: errorText(e) } });
   }
 }
 

@@ -1,7 +1,8 @@
 //! The sound library: sound effects built into Nuzky, and music and sounds found online through
 //! Openverse, or Freesound with the user's own key. Only CC0 and CC BY ever show, the licences that
 //! allow monetized videos. Searching sends the search text; previewing or adding a sound downloads
-//! that one file. Nothing from the project leaves the computer.
+//! that one file. Nothing from the project leaves the computer. Music from a YouTube link comes through
+//! the user's own yt-dlp (`crate::youtube`), and the user answers for its rights.
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -46,14 +47,15 @@ pub enum Kind {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Sound {
-    /// `nuzky:whoosh` for a built-in sound, `openverse:<uuid>` or `freesound:<number>`.
+    /// `nuzky:whoosh` for a built-in sound, `openverse:<uuid>`, `freesound:<number>` or `youtube:<video id>`.
     pub id: String,
     pub kind: Kind,
     pub title: String,
     pub author: String,
     /// 0 when the source does not say.
     pub duration_us: i64,
-    pub license: License,
+    /// None for music from a YouTube link: its rights are the user's to check.
+    pub license: Option<License>,
     pub license_version: String,
     pub license_url: String,
     /// The sound's page at its source, where its licence can be checked; empty for built-in sounds.
@@ -72,18 +74,19 @@ pub struct Sound {
 }
 
 impl Sound {
-    pub fn credit(&self) -> Credit {
+    /// What export credits; nothing for music without a licence Nuzky knows.
+    pub fn credit(&self) -> Option<Credit> {
         let (source, id) = self.id.split_once(':').unwrap_or(("", &self.id));
-        Credit {
+        Some(Credit {
             source: source.into(),
             id: id.into(),
             title: self.title.clone(),
             author: self.author.clone(),
-            license: self.license,
+            license: self.license?,
             license_version: self.license_version.clone(),
             license_url: self.license_url.clone(),
             url: self.url.clone(),
-        }
+        })
     }
 }
 
@@ -189,7 +192,7 @@ pub fn built_in(query: &str) -> Vec<Sound> {
             title: p.title.clone(),
             author: p.author.clone(),
             duration_us: p.duration_us,
-            license: License::Cc0,
+            license: Some(License::Cc0),
             license_version: "1.0".into(),
             license_url: "https://creativecommons.org/publicdomain/zero/1.0/".into(),
             url: p.source.clone(),
@@ -209,6 +212,8 @@ pub fn built_in(query: &str) -> Vec<Sound> {
 pub struct Settings {
     pub freesound: bool,
     pub freesound_key: String,
+    /// The user read once that the rights to music from YouTube links are theirs to check.
+    pub youtube_rights: bool,
 }
 
 fn data_dir() -> PathBuf {
@@ -237,7 +242,7 @@ pub fn save_settings(settings: &Settings) -> Result<()> {
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let mut file = options.open(&tmp).context("Saving sound library settings")?;
-    let saved = Settings { freesound: settings.freesound, freesound_key: key.into() };
+    let saved = Settings { freesound_key: key.into(), ..*settings };
     std::io::Write::write_all(&mut file, serde_json::to_string(&saved)?.as_bytes())?;
     drop(file);
     std::fs::rename(&tmp, &path).context("Saving sound library settings")
@@ -427,7 +432,7 @@ fn from_openverse(audio: OpenverseAudio, kind: Kind) -> Option<Sound> {
         title: Some(line(audio.title.as_deref(), 300)).filter(|t| !t.is_empty()).unwrap_or_else(|| "Untitled".into()),
         author: if author.is_empty() { "Unknown".into() } else { author },
         duration_us: audio.duration.unwrap_or(0).max(0) * 1000,
-        license,
+        license: Some(license),
         license_version: version,
         license_url,
         url: line(Some(&url), 2048),
@@ -516,7 +521,7 @@ fn from_freesound(sound: FreesoundSound) -> Option<Sound> {
         title: Some(line(sound.name.as_deref(), 300)).filter(|t| !t.is_empty()).unwrap_or_else(|| "Untitled".into()),
         author,
         duration_us: (sound.duration.unwrap_or(0.0).max(0.0) * 1e6) as i64,
-        license,
+        license: Some(license),
         license_version,
         license_url,
         url: line(Some(&url), 2048),
@@ -554,6 +559,42 @@ fn freesound_sound(id: &str) -> Result<Sound> {
         .context("UNLICENSED: the sound library does not offer this sound; it offers only CC0 and CC BY")
 }
 
+// ---------- YouTube ----------
+
+const YOUTUBE: &str = "YouTube";
+
+/// The video a YouTube or YouTube Music link points at, as a sound to preview and add.
+pub fn link(url: &str) -> Result<Sound> {
+    youtube_sound(&crate::youtube::video_id(url)?)
+}
+
+fn youtube_sound(id: &str) -> Result<Sound> {
+    let video = crate::youtube::video(id, MAX_FILE_BYTES)?;
+    let author = [&video.artist, &video.channel, &video.uploader].into_iter().find_map(|a| a.as_deref());
+    let sound = Sound {
+        id: format!("youtube:{id}"),
+        kind: Kind::Music,
+        title: Some(line(video.title.as_deref(), 300)).filter(|t| !t.is_empty()).unwrap_or_else(|| "Untitled".into()),
+        author: Some(line(author, 300)).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown".into()),
+        duration_us: (video.duration.unwrap_or(0.0).max(0.0) * 1e6) as i64,
+        license: None,
+        license_version: String::new(),
+        license_url: String::new(),
+        url: crate::youtube::watch_url(id),
+        provider: YOUTUBE.into(),
+        category: None,
+        file: crate::youtube::watch_url(id),
+        filetype: video.ext,
+    };
+    remember(std::slice::from_ref(&sound));
+    Ok(sound)
+}
+
+/// Remembers that the user read the notice about the rights to music from YouTube links.
+pub fn confirm_youtube_rights() -> Result<()> {
+    save_settings(&Settings { youtube_rights: true, ..settings() })
+}
+
 // ---------- Search and download ----------
 
 /// One page of online results. Sound effects come from Freesound when the user turned it on with a key,
@@ -586,6 +627,7 @@ pub fn sound(id: &str) -> Result<Sound> {
         {
             freesound_sound(number)
         }
+        ("youtube", video) => youtube_sound(video),
         _ => Err(unknown()),
     }
 }
@@ -605,7 +647,7 @@ fn file_name(sound: &Sound) -> String {
         .next()
         .and_then(|path| path.rsplit_once('.'))
         .map(|(_, ext)| ext.to_ascii_lowercase());
-    let known = |ext: &String| matches!(ext.as_str(), "mp3" | "ogg" | "opus" | "wav" | "flac" | "m4a" | "aac");
+    let known = |ext: &String| matches!(ext.as_str(), "mp3" | "ogg" | "opus" | "wav" | "flac" | "m4a" | "aac" | "webm");
     // Openverse calls Jamendo's MP3s "mp32".
     let named = sound.filetype.as_ref().map(|t| t.to_ascii_lowercase().replace("mp32", "mp3"));
     let ext = ext.filter(known).or(named.filter(known)).unwrap_or("audio".into());
@@ -705,7 +747,17 @@ fn fetch_here(id: &str, cache_dir: &Path, cancel: &AtomicBool, progress: impl Fn
         return Ok((library, sound));
     }
     let path = cache_dir.join("sounds").join(file_name(&sound));
-    if !path.is_file() {
+    if path.is_file() {
+        return Ok((path, sound));
+    }
+    if sound.provider == YOUTUBE {
+        ensure!(
+            settings().youtube_rights,
+            "RIGHTS_UNCONFIRMED: before the first song from a YouTube link, the user must agree that they are responsible for the rights to the music and for following YouTube's terms"
+        );
+        let (_, video) = sound.id.split_once(':').context("YouTube sound without a video")?;
+        crate::youtube::download(video, &path, MAX_FILE_BYTES, cancel, progress)?;
+    } else {
         download(&sound, &path, cancel, progress)?;
     }
     Ok((path, sound))
@@ -729,7 +781,7 @@ pub fn asset(id: &str, cache_dir: &Path, cancelled: impl Fn() -> bool, progress:
         .map_err(|e| anyhow!("SOUND_UNAVAILABLE: {} is not a sound file Nuzky can play ({e:#})", sound.title))?;
     ensure!(asset.kind == AssetKind::Audio, "SOUND_UNAVAILABLE: {} is not a sound file", sound.title);
     asset.name = sound.title.clone();
-    asset.credit = Some(sound.credit());
+    asset.credit = sound.credit();
     Ok(asset)
 }
 
@@ -780,7 +832,10 @@ mod tests {
     fn only_cc0_and_cc_by_pass() {
         let ok =
             from_openverse(audio("by", "3.0", "https://creativecommons.org/licenses/by/3.0/"), Kind::Music).unwrap();
-        assert_eq!((ok.license, ok.license_version.as_str(), ok.duration_us), (License::CcBy, "3.0", 160_000_000));
+        assert_eq!(
+            (ok.license, ok.license_version.as_str(), ok.duration_us),
+            (Some(License::CcBy), "3.0", 160_000_000)
+        );
         assert_eq!(ok.provider, "Wikimedia Commons");
         let mut jamendo = audio("by", "3.0", "https://creativecommons.org/licenses/by/3.0/");
         jamendo.source = Some("jamendo".into());

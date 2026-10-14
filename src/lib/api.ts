@@ -82,6 +82,10 @@ export const api = {
   soundLibrary: () => invoke<Sound[]>("sound_library"),
   /** One page of online results; only the query leaves the computer. */
   soundSearch: (query: string, kind: SoundKind, page: number) => invoke<SoundPage>("sound_search", { query, kind, page }),
+  /** The video of a YouTube or YouTube Music link as a sound, looked up through the user's yt-dlp. */
+  soundLink: (url: string) => invoke<Sound>("sound_link", { url }),
+  /** The user read that the rights to music from YouTube links are theirs; asked only once. */
+  confirmYoutubeRights: () => invoke<SoundSettings>("confirm_youtube_rights"),
   /** Plays a sound, downloading it first when needed; `sound-preview-ended` names it when it is over. */
   soundPreview: (id: string) => invoke<PreviewStarted>("sound_preview", { id }),
   soundStop: () => invoke<void>("sound_stop"),
@@ -253,6 +257,10 @@ const PLAIN: Record<string, string | ((detail: string) => string)> = {
   KEY_REJECTED: (detail) => `${detail} Check it under Where to search, the sliders button beside the search field.`,
   KEY_MISSING: "Add your Freesound API key under Where to search, the sliders button beside the search field.",
   INVALID_KEY: "A Freesound API key has only letters and digits. Copy it again from Freesound.",
+  INVALID_LINK: "That isn't a link to a YouTube or YouTube Music video. Copy the link from the video's Share button.",
+  PLAYLIST: "That's a link to a playlist. Open one song and copy its link instead.",
+  YTDLP_MISSING: (detail) => detail,
+  YTDLP_FAILED: "yt-dlp is installed but didn't start. Reinstall it, then try again.",
   NOT_LEARNED: "What was learned is gone. Learn from the projects again.",
   SIGN_IN_DENIED: "Signing in was cancelled in the browser. Continue with ChatGPT to try again.",
   SIGN_IN_TIMEOUT: "Nuzky stopped waiting for the browser after 5 minutes. Continue with ChatGPT to try again.",
