@@ -100,9 +100,10 @@ let rightsRead = false;
 /** Looks up the video of a YouTube link; the first time, the user reads whose the music's rights are. */
 export async function openLink(url: string) {
   const text = url.trim();
-  // Another link takes the row and its Stop away, so its download stops with it.
   const { link, adding, preview } = useSounds.getState();
-  if (link.sound && text !== link.url) {
+  if (link.sound && text === link.url) return;
+  // Another link takes the row and its Stop away, so its download stops with it.
+  if (link.sound) {
     if (adding.includes(link.sound.id)) api.soundCancel(link.sound.id);
     if (preview?.id === link.sound.id) stopPreview();
   }
