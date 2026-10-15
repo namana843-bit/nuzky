@@ -10,6 +10,7 @@ permissions:
 jobs:
   build:
     uses: ./.github/workflows/ci.yml
+    secrets: inherit
   release:
     needs: build
     runs-on: ubuntu-24.04
@@ -33,9 +34,17 @@ jobs:
           # Installed copies read the version from this file on the latest published release.
           node -e 'const { version } = require("./src-tauri/tauri.conf.json"); require("fs").writeFileSync("latest.json", JSON.stringify({ version, pub_date: new Date().toISOString() }) + "\n")'
           sha256sum ./*.AppImage ./*.deb ./*.dmg ./*-setup.exe ./*_source.tar.gz > SHA256SUMS
+          # A notarized dmg opens without Open Anyway.
+          if grep -Fxq 'macOS signature: Developer ID, notarized and stapled' build-info-darwin.txt; then
+            sed '/^- \*\*macOS\*\*:/d' scripts/release-notes.md > release-notes.md
+          else
+            cp scripts/release-notes.md release-notes.md
+          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+            # A rerun can replace a notarized dmg with one that is not, or the other way round.
+            gh release edit "$RELEASE_TAG" --notes-file release-notes.md
           else
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Nuzky $RELEASE_TAG" --notes-file scripts/release-notes.md
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Nuzky $RELEASE_TAG" --notes-file release-notes.md
           fi
           gh release upload "$RELEASE_TAG" ./*.AppImage ./*.deb ./*.dmg ./*-setup.exe ./*_source.tar.gz ./build-info-*.txt SHA256SUMS latest.json --clobber

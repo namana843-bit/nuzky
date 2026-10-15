@@ -27,10 +27,8 @@ The first alpha of Nuzky, a free, open-source video editor for your computer. It
 
 ## Opening an unsigned build
 
-Nuzky has no Apple or Microsoft signing certificate yet, so your system warns you the first time.
-
-- **macOS**: when macOS won't open Nuzky, close the message, open System Settings → Privacy & Security, click Open Anyway next to Nuzky and confirm.
-- **Windows**: when SmartScreen says "Windows protected your PC", click More info, then Run anyway.
+- **macOS**: Apple hasn't checked this build, so macOS won't open it the first time. Close the message, open System Settings → Privacy & Security, click Open Anyway next to Nuzky and confirm.
+- **Windows**: Nuzky has no Microsoft signing certificate yet, so SmartScreen says "Windows protected your PC" the first time. Click More info, then Run anyway.
 
 ## Update check
 
