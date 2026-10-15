@@ -1,6 +1,6 @@
 # Building and distributing Nuzky
 
-Use current stable Rust (minimum 1.94, which `candle-core` needs for its NEON code on Apple Silicon), Node.js 22.12+ and the committed Cargo/npm lockfiles. Pull requests run lint, types, the app and website builds, clippy, `cargo test --workspace --locked`, the dependency audits and the check without AVX2 on `ubuntu-24.04` (`.github/workflows/checks.yml`) for every pull request that is not a draft and every push to `main`. A release tag runs the tests and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). No signing secrets are required. This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
+Use current stable Rust (minimum 1.94, which `candle-core` needs for its NEON code on Apple Silicon), Node.js 22.12+ and the committed Cargo/npm lockfiles. Pull requests run lint, types, the app and website builds, clippy, `cargo test --workspace --locked`, the dependency audits and the check without AVX2 on `ubuntu-24.04` (`.github/workflows/checks.yml`) for every pull request that is not a draft and every push to `main`. A release tag runs the tests and a release Tauri build on `ubuntu-24.04` (x86_64), `macos-14` (arm64) and `windows-2022` (x64). It needs no secrets; with the Apple secrets set, the macOS build is also signed with a Developer ID and notarized (macOS, Signing and notarization). This build pipeline is not evidence that editing, playback or export has been tested on all three systems.
 
 ## Worktree dependency builds
 
@@ -92,7 +92,49 @@ node scripts/build-bundles.mjs
 
 The script first builds `target/release/bundle/macos/Nuzky.app`. `bundle-macos-libs.py` walks the executable's `otool -L` dependencies recursively, copies non-system dylibs to `Contents/Frameworks`, rewrites references using `install_name_tool`, and ad-hoc signs the modified libraries and app. It rejects unresolved libraries and basename collisions. It checks `codesign --verify --deep --strict` and creates `dmg/Nuzky_<version>_aarch64.dmg`. Copy the app out of the mounted image into Applications. End users do not need Homebrew for these prepared bundles. A raw `npm run tauri build` does not run this relocation step and still requires the build machine's Homebrew libraries.
 
-The deployment minimum is macOS 14. Ad-hoc signing is not Apple Developer ID signing or notarization. Gatekeeper can block downloaded preview builds; for a trusted download use System Settings → Privacy & Security → Open Anyway. Developer ID signing and notarization must be added before claiming frictionless public installation. Always sign after library relocation, never modify a signed/notarized release afterward.
+The deployment minimum is macOS 14.
+
+### Signing and notarization
+
+`build-bundles.mjs` signs ad-hoc and never notarizes; its `build-info-darwin.txt` says `macOS signature: ad-hoc, not notarized`. Gatekeeper blocks such a download until the user clicks Open Anyway in System Settings → Privacy & Security, as the release notes and the README say.
+
+```sh
+node scripts/sign-macos.mjs
+```
+
+With the Apple variables below, `sign-macos.mjs` takes the app out of the dmg that `build-bundles.mjs` made and signs it again: every library in `Contents/Frameworks` and the app, with the Developer ID, the hardened runtime and a secure timestamp. Then it makes the dmg again, signs it, sends it to Apple's notary service with `notarytool`, waits for the answer, staples the ticket to the dmg and checks the dmg with `stapler validate` and `spctl`. When Apple does not accept the dmg, the log shows Apple's reasons and the script fails. It writes the result on the `macOS signature:` line of `build-info-darwin.txt`. Without the variables, it changes nothing and says that the dmg is not notarized, as a warning in GitHub Actions. Never change a signed or notarized app afterwards.
+
+The app needs no entitlements. WebKit runs JavaScript in its own processes, Nuzky records no sound or video and sends no Apple Events, its keychain items are in the login keychain, and every library it loads carries the same signature. The hardened runtime lets the app load only libraries signed by the same team, so `NUZKY_ONNXRUNTIME` cannot point a signed app at another ONNX Runtime.
+
+The maintainer adds these repository secrets in GitHub under Settings → Secrets and variables → Actions:
+
+| Secret | Value |
+|---|---|
+| `APPLE_CERTIFICATE` | The Developer ID Application certificate with its private key as a `.p12` file, encoded with `base64 -i certificate.p12 \| pbcopy`. Only the Account Holder can create the certificate: Xcode → Settings → Accounts → Manage Certificates → + → Developer ID Application. Export it from Keychain Access, My Certificates, with Export → Personal Information Exchange (.p12). |
+| `APPLE_CERTIFICATE_PASSWORD` | The password you gave the `.p12` file. |
+| `APPLE_SIGNING_IDENTITY` | The certificate's name, `Developer ID Application: <name> (<team ID>)`, as `security find-identity -v -p codesigning` prints it. |
+| `APPLE_ID` | The email address of the Apple Account in the developer team. |
+| `APPLE_TEAM_ID` | The 10-character team ID from the Membership details at developer.apple.com/account. |
+| `APPLE_APP_PASSWORD` | An app-specific password from account.apple.com → Sign-In and Security → App-Specific Passwords. |
+
+`APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` go together, and so do `APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD`. Both groups need `APPLE_SIGNING_IDENTITY`. When a group is incomplete, the script stops and names the missing secret. Without the notarization group, the dmg is signed but not notarized, and Gatekeeper still blocks it. Locally, export the variables and run the script after `build-bundles.mjs`. Without `APPLE_CERTIFICATE`, it uses the identity from your own keychain.
+
+`ci.yml` runs `sign-macos.mjs` in the `sign-macos` job, on a fresh machine after the build job, and passes the secrets only to its signing step; `release.yml` hands them to `ci.yml`. The job downloads the macOS artifact, runs no `npm ci`, cargo or other dependency code, and replaces the artifact with the signed dmg and its build-info. The build job runs the build code of every Rust and npm dependency. Such code could read the environment of another process of the same user, or leave behind a process, a changed `PATH` or a changed script for a later step, so the secrets never reach the build's machine. Keep them out of `build-bundles.mjs` for a second reason: the Tauri CLI reads the same names and would sign and notarize the app itself before the libraries are relocated. `sign-macos.mjs` imports the certificate into a temporary keychain and deletes it when signing ends, also after a failure. With the secrets set, every macOS build is signed and notarized, including the build on each push to `main`. A wrong certificate or an expired password then fails `main` before it can fail a release.
+
+To check a notarized dmg on a Mac:
+
+```sh
+xcrun stapler validate Nuzky_<version>_aarch64.dmg
+spctl -a -vv -t open --context context:primary-signature Nuzky_<version>_aarch64.dmg
+hdiutil attach Nuzky_<version>_aarch64.dmg
+spctl -a -vv /Volumes/Nuzky/Nuzky.app
+codesign --verify --deep --strict --verbose=2 /Volumes/Nuzky/Nuzky.app
+hdiutil detach /Volumes/Nuzky
+```
+
+`stapler` prints `The validate action worked!`, and both `spctl` commands print `accepted` and `source=Notarized Developer ID`. An ad-hoc build prints `rejected` instead. `build-info-darwin.txt` names the result on its `macOS signature:` line.
+
+`release.yml` reads that line. When it says `Developer ID, notarized and stapled`, the draft's notes leave out the macOS line about Open Anyway. A rerun writes the draft's notes again and drops edits made on GitHub, so change the text in `scripts/release-notes.md`. `node --test 'scripts/*.test.mjs'` fails when `scripts/release-notes.md` no longer has exactly one such line. The README is not generated, so the version pull request of the first notarized release also rewrites the README's macOS install line.
 
 ## Windows x64
 
@@ -148,7 +190,7 @@ Covers (`crates/vision`) run their models with ONNX Runtime, which Nuzky opens a
 
 ## CI, release and remaining platform checks
 
-GitHub scans every pull request for secrets (`secrets.yml`) and runs the Linux checks, the dependency audits and the check without AVX2 in `checks.yml`. `scripts/check.sh` adds the tests with media and models and the UI flows, and passes locally on the head of the version pull request before a release. `ci.yml` builds macOS on every push to `main` and runs on request (`gh workflow run ci.yml --ref <branch>`) and from `release.yml`. It caches npm and Cargo, tests all three systems, then builds and uploads installers and build-info files for 14 days. A `v*` tag runs the same build/test matrix; all three jobs must pass before a draft release is created and receives all installers, Nuzky's source archive and SHA-256 checksums. The tag must equal `v` plus `src-tauri/tauri.conf.json`'s version, and `cargo test` fails when that version differs from `Cargo.toml`'s, `package.json`'s or `package-lock.json`'s (`every_package_has_the_same_version` in `src-tauri/src/updates.rs`). The release job uses the repository's automatic `GITHUB_TOKEN` with `contents: write`; no personal token is needed. A rerun can replace draft assets but refuses to modify a published release.
+GitHub scans every pull request for secrets (`secrets.yml`) and runs the Linux checks, the dependency audits and the check without AVX2 in `checks.yml`. `scripts/check.sh` adds the tests with media and models and the UI flows, and passes locally on the head of the version pull request before a release. `ci.yml` builds macOS on every push to `main` and runs on request (`gh workflow run ci.yml --ref <branch>`) and from `release.yml`. It caches npm and Cargo, tests all three systems, then builds and uploads installers and build-info files for 14 days; the `sign-macos` job then signs and notarizes the dmg when the Apple secrets are set. A `v*` tag runs the same build/test matrix; all three jobs must pass before a draft release is created and receives all installers, Nuzky's source archive and SHA-256 checksums. The tag must equal `v` plus `src-tauri/tauri.conf.json`'s version, and `cargo test` fails when that version differs from `Cargo.toml`'s, `package.json`'s or `package-lock.json`'s (`every_package_has_the_same_version` in `src-tauri/src/updates.rs`). The release job uses the repository's automatic `GITHUB_TOKEN` with `contents: write`; no personal token is needed. A rerun replaces the draft's assets and notes but refuses to modify a published release.
 
 Each release also carries `latest.json` with its version. Installed copies read it from `https://github.com/tomasmach/nuzky/releases/latest/download/latest.json` at most once a day and show "Update available" on the home screen. GitHub serves that address from the newest published release that is not a prerelease, so publishing the draft is what announces a version; drafts and prereleases are never announced. Anonymous requests to a private repository get 404, so the repository must be public before the first public release, or installed copies never hear of an update. After a release is published, `update-notice.yml` reads the address like an installed copy and fails, which GitHub reports by email, when it does not show the published tag. To take back a bad release, turn it back into a draft or mark it as a prerelease; the address then points at the previous one. Nuzky only notifies: people download the new installer from the release page, and nothing installs itself. The file keeps the shape of the Tauri updater's static JSON, so a later in-app installer can add its signed `platforms` to the same file without silencing older copies, which read only `version`. A package manager that updates Nuzky itself can set `NUZKY_NO_UPDATE_CHECK=1`; Nuzky then never checks.
 
@@ -162,7 +204,7 @@ Only the maintainer tags and publishes. A release, `v0.1.0-alpha` included, goes
 
 1. **Version and notes.** A pull request sets the version in `src-tauri/tauri.conf.json` and `Cargo.toml` (then `cargo update --workspace`) and runs `npm version <version> --no-git-tag-version` for `package.json` and its lockfile; `cargo test` fails when one is missed. It rewrites `scripts/release-notes.md`, which becomes the draft's text. Its required checks pass, and `scripts/check.sh` passes on its head before the merge.
 2. **Tag.** The maintainer runs `git tag v<version> <merge commit>` and `git push origin v<version>`. `release.yml` stops unless the tag is `v` plus the app version, builds and tests on all three systems and creates the draft with the files below.
-3. **Installers.** The maintainer installs the draft's installers on a clean machine of each system and tests importing a phone video, preview with sound, H.264/AAC export and captions, the macOS app with Homebrew absent and Windows with no FFmpeg on PATH. Open Anyway on macOS and More info → Run anyway on Windows start the app as the release notes say, and the foot of the home screen's sidebar shows the new version.
+3. **Installers.** The maintainer installs the draft's installers on a clean machine of each system and tests importing a phone video, preview with sound, H.264/AAC export and captions, the macOS app with Homebrew absent and Windows with no FFmpeg on PATH. On macOS, a notarized app opens after one question whether to open an app from the internet, and an app that is not notarized opens with Open Anyway. On Windows, More info → Run anyway starts it. Both match the draft's notes, and the foot of the home screen's sidebar shows the new version.
 4. **Third-party source.** The maintainer collects it and attaches it to the draft, as Redistribution below describes.
 5. **Publish** the draft as a regular release, with "Set as a pre-release" off and "Set as the latest release" on. Installed copies and `update-notice.yml` read `releases/latest`, which GitHub never points at a prerelease, so an alpha published as a prerelease would never be announced. The `-alpha` in the version already says what it is.
 6. **Announcement.** On publishing, `update-notice.yml` reads `latest.json` as an installed copy does and fails, which GitHub reports by email, unless it shows the new tag.
