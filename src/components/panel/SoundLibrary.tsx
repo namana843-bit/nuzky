@@ -1,11 +1,11 @@
-import { AlertCircle, AudioLines, Check, Copy, ExternalLink, Link2, Loader2, Pause, Play, Plus, Search, SlidersHorizontal, WifiOff, X } from "lucide-react";
+import { AlertCircle, AudioLines, Check, Copy, ExternalLink, Link2, Loader2, Pause, Play, Plus, SlidersHorizontal, WifiOff, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, errorText, plainError } from "../../lib/api";
 import { addSound, answerRights, copyCredits, installYtdlp, loadBuiltIn, openLink, searchSounds, stopPreview, togglePreview, useSounds } from "../../lib/sounds";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
 import type { Sound, SoundKind, SoundSettings } from "../../lib/types";
-import { Button, Checkbox, IconButton, lockedProps, trapTab, useLockReason } from "../ui";
+import { Button, Checkbox, IconButton, SearchField, lockedProps, trapTab, useLockReason } from "../ui";
 
 /** Round row action, as on the project's own audio. */
 const ACTION = "flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors duration-[120ms] ease-out aria-disabled:cursor-not-allowed aria-disabled:opacity-40";
@@ -190,7 +190,7 @@ function Sources({ onClose }: { onClose: (keyboard: boolean) => void }) {
   );
 }
 
-function SearchField({ kind }: { kind: SoundKind }) {
+function SoundSearch({ kind }: { kind: SoundKind }) {
   const query = useSounds((s) => s.search[kind].query);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -201,31 +201,7 @@ function SearchField({ kind }: { kind: SoundKind }) {
     if (now || !text.trim()) searchSounds(kind, text);
     else if (text.trim().length >= 2) timer.current = window.setTimeout(() => searchSounds(kind, text), 600);
   };
-  return (
-    <label className="relative flex h-8 min-w-0 flex-1 items-center">
-      <Search size={14} className="pointer-events-none absolute left-2.5 text-muted" />
-      <input
-        type="search"
-        value={query}
-        placeholder={kind === "music" ? "Search free music" : "Search sound effects"}
-        aria-label={kind === "music" ? "Search free music" : "Search sound effects"}
-        onChange={(e) => change(e.target.value)}
-        onKeyDown={(e) => {
-          // Typing must not reach the editor's shortcuts; Escape on an empty field still does.
-          if (e.key === "Escape" && !query) return;
-          e.stopPropagation();
-          if (e.key === "Enter") change(query, true);
-          else if (e.key === "Escape") change("");
-        }}
-        className={`h-8 w-full text-ellipsis rounded-lg border border-white/[.08] bg-white/[.055] pl-8 text-[13px] text-fg outline-none placeholder:text-muted focus:border-accent [&::-webkit-search-cancel-button]:hidden ${query ? "pr-7" : "pr-2"}`}
-      />
-      {query && (
-        <button type="button" aria-label="Clear search" onClick={() => change("")} className="absolute right-1.5 flex h-5 w-5 items-center justify-center rounded-full text-muted hover:text-fg">
-          <X size={13} />
-        </button>
-      )}
-    </label>
-  );
+  return <SearchField value={query} onChange={change} onEnter={() => change(query, true)} placeholder={kind === "music" ? "Search free music" : "Search sound effects"} />;
 }
 
 /** Music from YouTube has no credit; its file in the library is named after the video. */
@@ -560,7 +536,7 @@ export function SoundLibrary({ kind }: { kind: SoundKind }) {
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-1.5 px-3.5 pt-1 pb-2">
-        <SearchField kind={kind} />
+        <SoundSearch kind={kind} />
         <div ref={sourcesButton} className="contents">
           <IconButton label="Where to search" data-sources-button aria-haspopup="dialog" aria-expanded={sources} onClick={() => setSources((open) => !open)}>
             <SlidersHorizontal size={16} />
