@@ -19,7 +19,11 @@ let bundles;
 let ffmpegSource;
 // ONNX Runtime ships beside the app and is opened only when covers run (crates/vision/src/runtime.rs).
 const ort = await fetchOnnxRuntime();
-const ortNotices = Object.fromEntries(ort.notices.map((n) => [n, `licenses/onnxruntime/${path.basename(n)}`]));
+// The emoji and stickers are built into the binary (assets/stickers); their licences go with it.
+const notices = Object.fromEntries([
+  ...ort.notices.map((n) => [n, `licenses/onnxruntime/${path.basename(n)}`]),
+  ...readdirSync('assets/stickers').filter((n) => n.endsWith('.txt')).map((n) => [path.join(root, 'assets/stickers', n), `licenses/stickers/${n}`]),
+]);
 
 switch (process.platform) {
   case 'linux': {
@@ -33,7 +37,7 @@ switch (process.platform) {
     const [source, sourceVersion] = output('dpkg-query', ['-W', '-f=${source:Package} ${source:Version}', avcodec]).split(' ');
     ffmpegSource = `FFmpeg in the AppImage: Ubuntu's ${source} ${sourceVersion}, source https://launchpad.net/ubuntu/+source/${source}/${sourceVersion} (apt-get source ${source}=${sourceVersion}). The .deb uses the system's.`;
     // Resources land in usr/lib/Nuzky in both the AppImage and the deb, where the app looks.
-    config.bundle.resources = { [ort.library]: path.basename(ort.library), ...ortNotices };
+    config.bundle.resources = { [ort.library]: path.basename(ort.library), ...notices };
     // Allow the bundler's own AppImages to run on hosts without mounted FUSE.
     process.env.APPIMAGE_EXTRACT_AND_RUN = '1';
     break;
@@ -42,7 +46,7 @@ switch (process.platform) {
     if (process.arch !== 'arm64') throw new Error('Use an Apple Silicon host.');
     bundles = 'app';
     // The library itself goes to Contents/Frameworks through bundle-macos-libs.py below.
-    config.bundle.resources = ortNotices;
+    config.bundle.resources = notices;
     break;
   case 'win32': {
     bundles = 'nsis';
@@ -54,7 +58,7 @@ switch (process.platform) {
     const dlls = readdirSync(path.join(ffmpeg, 'bin')).filter(name => name.endsWith('.dll'));
     if (!dlls.some(name => name.startsWith('avcodec-'))) throw new Error('FFmpeg DLLs missing.');
     config.bundle.resources = Object.fromEntries(dlls.map(name => [path.join(ffmpeg, 'bin', name), name]));
-    Object.assign(config.bundle.resources, { [ort.library]: path.basename(ort.library) }, ortNotices);
+    Object.assign(config.bundle.resources, { [ort.library]: path.basename(ort.library) }, notices);
     for (const name of ['LICENSE.txt', 'LICENSE', 'README.txt']) {
       if (existsSync(path.join(ffmpeg, name))) config.bundle.resources[path.join(ffmpeg, name)] = `licenses/ffmpeg/${name}`;
     }
