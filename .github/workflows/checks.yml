@@ -53,6 +53,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/cargo-deny.tar.gz" -C "$HOME/.cargo/bin" --strip-components=1
           cargo deny --locked check advisories licenses
       - run: npm run lint
+      - run: node --test 'scripts/*.test.mjs'
       - run: npm run build
       - run: npm run site:build
       - run: cargo fmt --all --check

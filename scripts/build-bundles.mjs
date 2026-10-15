@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMMIT as ORT_COMMIT, VERSION as ORT_VERSION, fetchOnnxRuntime } from './fetch-onnxruntime.mjs';
+import { createDmg } from './macos-signing.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 process.chdir(root);
@@ -83,16 +84,7 @@ if (process.platform === 'darwin') {
   const libs = readFileSync(path.join(app, 'Contents/Resources/bundled-libraries.txt'), 'utf8');
   const [, formula, cellar] = libs.match(/\/Cellar\/([^/]+)\/([^/]+)\/lib\/libavcodec\./);
   ffmpegSource = `FFmpeg from Homebrew's ${formula} ${cellar}, source https://ffmpeg.org/releases/ffmpeg-${cellar.replace(/_\d+$/, '')}.tar.xz. Bundled libraries:\n${libs.trim()}`;
-  mkdirSync(path.join(bundle, 'dmg'), { recursive: true });
-  const stage = mkdtempSync(path.join(target, 'dmg-stage-'));
-  try {
-    run('ditto', [app, path.join(stage, 'Nuzky.app')]);
-    symlinkSync('/Applications', path.join(stage, 'Applications'));
-    run('hdiutil', ['create', '-ov', '-format', 'UDZO', '-volname', 'Nuzky', '-srcfolder', stage,
-      path.join(bundle, 'dmg', `Nuzky_${version}_aarch64.dmg`)]);
-  } finally {
-    rmSync(stage, { recursive: true, force: true });
-  }
+  createDmg(app, path.join(bundle, 'dmg', `Nuzky_${version}_aarch64.dmg`), target);
 }
 const info = [
   `Nuzky ${version}, commit ${output('git', ['rev-parse', 'HEAD'])}; its release carries the source as Nuzky_${version}_source.tar.gz`,
@@ -103,8 +95,12 @@ const info = [
   `ONNX Runtime ${ORT_VERSION} from ${ort.url} (SHA-256 ${ort.sha256}), source https://github.com/microsoft/onnxruntime/tree/${ORT_COMMIT} with the dependencies its cmake/deps.txt pins.`,
   'The rest of the corresponding source is collected by hand: docs/BUILDING.md, Redistribution.',
 ];
-// Formulae only: the bundled libraries come from them, and a cask from an untrusted tap makes plain `brew list` fail.
-if (process.platform === 'darwin') info.push(output('brew', ['list', '--formula', '--versions']));
+if (process.platform === 'darwin') {
+  // sign-macos.mjs rewrites this line when it signs with the Developer ID.
+  info.push('macOS signature: ad-hoc, not notarized');
+  // Formulae only: the bundled libraries come from them, and a cask from an untrusted tap makes plain `brew list` fail.
+  info.push(output('brew', ['list', '--formula', '--versions']));
+}
 if (process.platform === 'linux') {
   // linuxdeploy copied these libraries from Ubuntu's packages; docs/BUILDING.md fetches their source by this list.
   const appdir = path.join(bundle, 'appimage', 'Nuzky.AppDir');

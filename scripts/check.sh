@@ -122,6 +122,7 @@ step "Own node_modules" own_node_modules
 step "npm install from the lockfile" npm ci --no-audit --no-fund
 step "Rust format" cargo fmt --all --check
 step "Frontend lint" npm run lint
+step "Script tests" node --test 'scripts/*.test.mjs'
 step "Frontend types and build" npm run build
 step "Website build" npm run site:build
 step "Clippy" cargo clippy --workspace --all-targets --locked -- -D warnings
