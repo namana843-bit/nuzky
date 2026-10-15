@@ -13,6 +13,7 @@ mod recap;
 mod reels;
 mod sounds;
 mod speech_model;
+mod stickers;
 mod store;
 mod style;
 #[cfg(all(target_os = "macos", debug_assertions))]
@@ -1134,6 +1135,10 @@ pub fn run() {
             caption_styles::delete_caption_style,
             boot,
             set_ui_context,
+            stickers::sticker_catalog,
+            stickers::sticker_search,
+            stickers::sticker_thumbs,
+            stickers::sticker_add,
             sounds::sound_library,
             sounds::sound_search,
             sounds::sound_link,

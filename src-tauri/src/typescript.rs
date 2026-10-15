@@ -151,6 +151,7 @@ fn generate() -> String {
     types.visit::<crate::cover::CoverView>();
     types.visit::<crate::cover::CoverPick>();
     types.visit::<nuzky_mcp::sounds::Page>();
+    types.visit::<nuzky_mcp::stickers::StickerCatalog>();
     types.visit::<crate::sounds::PreviewStarted>();
     types.visit::<crate::sounds::SoundSettings>();
     types.visit::<crate::jobs::StyleTimelineResult>();

@@ -40,6 +40,7 @@ pub(crate) const TOOLS: &[Rules] = &[
     // Searching reads catalogues only; adding downloads the one sound, then edits like import_media.
     rules("search_sounds", Always, false, true, false),
     rules("add_sound", Never, false, false, false),
+    rules("add_sticker", Never, false, false, false),
     // Only renders; a missing person outline behind a clip's background is made as a job into the cache.
     rules("inspect_frames", Always, false, true, true),
     // Only renders and mixes the timeline; preparing missing sound runs as a job.

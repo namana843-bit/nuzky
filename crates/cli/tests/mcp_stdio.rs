@@ -263,6 +263,99 @@ fn built_in_sounds_are_listed_and_added_with_their_credit() {
     assert_eq!(clips.iter().map(|c| c["startUs"].as_i64().unwrap()).collect::<Vec<_>>(), [1_500_000, 4_000_000]);
 }
 
+#[test]
+fn stickers_are_added_by_emoji_and_name_as_one_asset() {
+    let mut c = Client::start(true, None, Some(None));
+    let listed = c.rpc("tools/list", json!({}));
+    let tool = listed["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "add_sticker").unwrap();
+    let description = tool["description"].as_str().unwrap();
+    for item in &nuzky_mcp::stickers::catalog().groups[0].items {
+        assert!(description.contains(&item.key), "{description}");
+    }
+    assert!(description.contains("single emoji"));
+    let run = c.call("begin_run", json!({"label": "Add stickers"}))["run_id"].clone();
+    let args = json!({"run_id": run, "sticker": "🔥", "at_us": 1_500_000, "request_id": "fire"});
+    let added = c.call("add_sticker", args.clone());
+    assert_eq!(added["start_us"], 1_500_000);
+    assert_eq!(added["duration_us"], 3_000_000);
+    assert_eq!(added["sticker"], json!({"key":"1f525", "emoji":"🔥", "name":"fire"}));
+    let transform = &added["transform"];
+    assert!((transform["scale"].as_f64().unwrap() - 0.3).abs() < 1e-6);
+    for (field, expected) in [("x", 0.0), ("y", 0.0), ("rotation", 0.0), ("opacity", 1.0)] {
+        assert_eq!(transform[field], expected);
+    }
+    let disk =
+        |c: &Client| -> Value { serde_json::from_slice(&std::fs::read(c.dir.join("project.nuzky")).unwrap()).unwrap() };
+    let first = disk(&c);
+    let asset = &first["assets"][0];
+    let file = PathBuf::from(asset["path"].as_str().unwrap());
+    assert!(file.starts_with(c.dir.canonicalize().unwrap().join("data/nuzky/stickers")), "{file:?}");
+    assert_eq!(asset["kind"], "image");
+    assert_eq!(asset["width"], 1024);
+    assert_eq!(asset["height"], 1024);
+    assert!(asset["credit"].is_null());
+    let png = std::fs::read(&file).unwrap();
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 1024);
+    assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 1024);
+    assert_eq!(first["tracks"][0]["id"], "main");
+    assert_eq!(first["tracks"][0]["clips"], json!([]));
+    assert_eq!(first["tracks"][1]["kind"], "video");
+    assert_eq!(first["tracks"][1]["id"], added["track_id"]);
+    assert_eq!(first["tracks"][1]["clips"][0]["content"]["assetId"], added["asset_id"]);
+    assert_eq!(
+        serde_json::from_value::<nuzky_engine::model::Transform>(
+            first["tracks"][1]["clips"][0]["content"]["transform"].clone()
+        )
+        .unwrap(),
+        serde_json::from_value::<nuzky_engine::model::Transform>(transform.clone()).unwrap()
+    );
+    assert_eq!(c.call("add_sticker", args.clone())["clip_id"], added["clip_id"]);
+    assert_eq!(disk(&c), first);
+    let conflict =
+        c.error("add_sticker", json!({"run_id": run,"sticker":"arrow","at_us":1_500_000,"request_id":"fire"}));
+    assert!(conflict.contains("REQUEST_CONFLICT"), "{conflict}");
+    let conflict =
+        c.error("add_sticker", json!({"run_id": run,"sticker":"fire","at_us":2_000_000,"request_id":"fire"}));
+    assert!(conflict.contains("REQUEST_CONFLICT"), "{conflict}");
+    for name in ["fire", ":fire:"] {
+        let again = c.call("add_sticker", json!({"run_id":run,"sticker":name,"at_us":1_500_000}));
+        assert_eq!(again["asset_id"], added["asset_id"]);
+        assert_ne!(again["clip_id"], added["clip_id"]);
+        assert_ne!(again["track_id"], added["track_id"]);
+    }
+    for text in ["❤", "❤️"] {
+        c.call("add_sticker", json!({"run_id":run,"sticker":text,"at_us":0}));
+    }
+    let arrow = c.call("add_sticker", json!({"run_id":run,"sticker":"arrow","at_us":0}));
+    assert_eq!(arrow["sticker"]["key"], "arrow");
+    let error = c.error("add_sticker", json!({"run_id":run,"sticker":"firee","at_us":0}));
+    assert!(error.contains("STICKER_UNKNOWN") && error.contains("fire 🔥"), "{error}");
+    let before = disk(&c);
+    for bad in [
+        json!({"at_us":-1}),
+        json!({"at_us":0,"duration_us":0}),
+        json!({"at_us":0,"transform":{"x":0,"y":0,"scale":0,"rotation":0,"opacity":1}}),
+    ] {
+        let mut bad = bad.as_object().unwrap().clone();
+        bad.insert("run_id".into(), run.clone());
+        bad.insert("sticker".into(), json!("👍🏽"));
+        let error = c.error("add_sticker", Value::Object(bad));
+        assert!(error.contains("INVALID_ARGUMENTS") || error.contains("INVALID_PROJECT"), "{error}");
+        assert_eq!(disk(&c), before);
+    }
+    assert_eq!(before["assets"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        before["tracks"].as_array().unwrap().iter().map(|t| t["clips"].as_array().unwrap().len()).sum::<usize>(),
+        6
+    );
+    c.call("end_run", json!({"run_id":run,"action":"keep"}));
+    c.call("undo_run", json!({"run_id":run}));
+    let undone = disk(&c);
+    assert_eq!(undone["assets"], json!([]));
+    assert!(undone["tracks"].as_array().unwrap().iter().all(|t| t["clips"] == json!([])));
+}
+
 #[cfg(unix)]
 #[test]
 fn youtube_links_download_with_mocked_ytdlp_and_require_rights() {

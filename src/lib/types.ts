@@ -484,6 +484,12 @@ export type EditCmd = {
   startUs: number,
   durationUs?: number | null,
 } | {
+  "type": "addSticker",
+  assetId: string,
+  startUs: number,
+  durationUs?: number | null,
+  transform?: Transform | null,
+} | {
   "type": "addText",
   startUs: number,
   text: string,
@@ -1139,6 +1145,22 @@ export type SpeechModelQuestion = {
    * What the download adds up to.
    */
   sizeMb: number,
+};
+
+export type StickerCatalog = {
+  groups: Array<StickerGroup>,
+};
+
+export type StickerGroup = {
+  name: string,
+  items: Array<StickerItem>,
+};
+
+export type StickerItem = {
+  key: string,
+  emoji: string | null,
+  name: string,
+  tones: Array<string> | null,
 };
 
 /**
