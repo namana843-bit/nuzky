@@ -181,7 +181,12 @@ pub(crate) fn label(cmds: &[EditCmd]) -> &'static str {
     if cmds.iter().any(|c| matches!(c, EditCmd::ApplyMotion { .. })) {
         return "Motion";
     }
+    // A sticker the project did not have yet comes after the import of its picture.
+    if cmds.iter().any(|c| matches!(c, EditCmd::AddSticker { .. })) {
+        return "Sticker";
+    }
     match cmd {
+        EditCmd::AddSticker { .. } => "Sticker",
         EditCmd::AddAssets { .. } => "Import media",
         EditCmd::RemoveAsset { .. } => "Remove media",
         EditCmd::AddClip { .. } => "Add clip",

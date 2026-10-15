@@ -13,6 +13,7 @@ pub mod recap;
 pub mod reels;
 mod rules;
 pub mod sounds;
+pub mod stickers;
 pub mod style;
 mod tools;
 pub mod transcript;
@@ -29,6 +30,20 @@ use serde_json::Value;
 
 use bridge::Target;
 pub use tools::{Access, Backend, Client};
+
+static STICKER_DESCRIPTION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "Put any single emoji (including skin tones, such as 🔥 or 👍🏽), or a Nuzky sticker ({}) on a free overlay video track at at_us, as one edit of your run. Requires run_id. Pass the emoji itself when possible; CLDR English names and :shortcodes: also work. Works offline. Defaults to 3 seconds, centred, with its longer side 30% of the canvas's shorter side; optional duration_us and transform override this. Returns revision, session_epoch, asset_id, clip_id, track_id, start_us, duration_us, transform and sticker {{key, emoji, name}}. Reuse request_id with the same arguments to retry without another clip; changed arguments fail REQUEST_CONFLICT. STICKER_UNKNOWN offers close matches. No export credit needed.",
+        stickers::catalog()
+            .groups
+            .iter()
+            .flat_map(|g| &g.items)
+            .filter(|i| i.emoji.is_none())
+            .map(|i| i.key.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+});
 
 const GUIDE: &str = include_str!("../../../skills/nuzky-edit/SKILL.md");
 const STYLE_FIRST: &str = "This creator has their own editing style, nuzky://style: rules learned from their finished cuts and their own instructions. It is at the end of this guide. Its rules and numbers override the defaults here.\n\n";
@@ -130,6 +145,7 @@ fn catalog() -> Result<Vec<Tool>> {
             "add_sound",
             "Add a sound from search_sounds at at_us on an audio track, as ONE edit of your run (the user can undo it with the run). Requires run_id. Downloads the file first when it is not on this computer yet (seconds for music), into Nuzky's sound library; a sound the project already has gets another clip of the same asset. The asset remembers the source, author and licence, so export writes the credits beside the video. Returns asset_id, clip_id, track_id, start_us, duration_us, needs_credit and credit; when needs_credit is true, tell the user the video's description must credit it (the app's Copy credits and the .credits.txt beside the export have the text). Optional request_id: reuse it with the same id after a save failure to finish without adding the sound twice. Fails with SOUND_UNKNOWN for an id that did not come from search_sounds, OFFLINE when the file cannot be downloaded. A youtube: sound downloads only its sound through yt-dlp; it carries no credit. Before the first one, RIGHTS_UNCONFIRMED: tell the user they are responsible for the rights to the music and for following YouTube's terms, ask them (suggest_options), and only after they agree call add_sound again with rights_confirmed true; Nuzky then remembers it.",
         )?,
+        tool::<params::AddSticker>("add_sticker", &STICKER_DESCRIPTION)?,
         tool::<params::Inspect>(
             "inspect_frames",
             "Render 1–16 timeline times_us as ONE PNG contact sheet with timestamp labels and revision. Or, instead of times_us, sample: \"changes\" picks the frames itself: in range_us=[start,end) (whole timeline by default) it looks at a candidate every 0.25 s (at most 120, further apart in a longer range; candidate_every_us), compares their perceptual hashes and keeps a frame only if it differs from each of the last four kept by more than min_change of 64 bits (default 16; gestures within one shot mostly stay below it, a cut to other footage is 30 or more), at most max_frames (1-16, default 16) per page. It returns times_us of the kept frames, skipped (candidates that looked like a kept frame) and next: pass it as cursor, with sample and without range_us or min_change, for the next page without repeats; null when the range is done. A static talking head gives one frame per shot. width is per-frame pixels (96–1280; default 320). safe_area=true overlays translucent unsafe margins on vertical canvases to check captions and faces. Clips with a background need the person found in their frames first: MATTE_NOT_READY names the job doing it; wait with job action wait, then inspect again. Missing media or times outside the timeline are errors.",

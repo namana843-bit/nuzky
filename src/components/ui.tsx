@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ComponentProps, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronRight, Minus } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Minus, Search, X } from "lucide-react";
 import { followPointer } from "../lib/drag";
 import { fontCss } from "../lib/fonts";
 import { AI_EDITING, useAiLocked } from "../lib/store";
@@ -189,6 +189,54 @@ export function Field({ label, children, hint }: { label: string; children: Reac
 
 /** Accepts "12,5", "50 %" and "-3" alike. */
 const parseNumber = (s: string) => Number(s.replace(",", ".").replace(/[^\d.+-]/g, "") || "x");
+
+/**
+ * The 32 px search field of the library panels. Typing never reaches the editor's shortcuts; Esc clears
+ * it, and on an empty field goes on to the editor.
+ */
+export function SearchField({
+  value,
+  onChange,
+  placeholder,
+  onEnter,
+  onDown,
+}: {
+  value: string;
+  onChange: (text: string) => void;
+  placeholder: string;
+  onEnter?: () => void;
+  /** ↓ leaves the field, e.g. for the first result. */
+  onDown?: () => void;
+}) {
+  return (
+    <label className="relative flex h-8 min-w-0 flex-1 items-center">
+      <Search size={14} className="pointer-events-none absolute left-2.5 text-muted" />
+      <input
+        type="search"
+        value={value}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !value) return;
+          e.stopPropagation();
+          if (e.key === "Enter") onEnter?.();
+          else if (e.key === "Escape") onChange("");
+          else if (e.key === "ArrowDown" && onDown) {
+            e.preventDefault();
+            onDown();
+          }
+        }}
+        className={`h-8 w-full text-ellipsis rounded-lg border border-white/[.08] bg-white/[.055] pl-8 text-[13px] text-fg outline-none placeholder:text-muted focus:border-accent [&::-webkit-search-cancel-button]:hidden ${value ? "pr-7" : "pr-2"}`}
+      />
+      {value && (
+        <button type="button" aria-label="Clear search" onClick={() => onChange("")} className="absolute right-1.5 flex h-5 w-5 items-center justify-center rounded-full text-muted hover:text-fg">
+          <X size={13} />
+        </button>
+      )}
+    </label>
+  );
+}
 
 /**
  * Numeric field that keeps what you type until Enter or blur, so partial input like "-"
@@ -540,6 +588,25 @@ export function tabListKeys<T extends string>(ids: readonly T[], value: T, onCha
     e.stopPropagation();
     onChange(ids[to]);
     e.currentTarget.querySelector<HTMLElement>(`[data-tab="${ids[to]}"]`)?.focus();
+  };
+}
+
+/**
+ * Arrow keys move between the buttons `selector` finds in a grid, so a long grid is one Tab stop. ↑/↓ move
+ * by the row length of the focused button's own grid; Home and End go to the first and last button.
+ */
+export function gridKeys(selector: string) {
+  return (e: KeyboardEvent<HTMLElement>) => {
+    const cells = [...e.currentTarget.querySelectorAll<HTMLElement>(selector)];
+    const at = cells.indexOf(document.activeElement as HTMLElement);
+    if (at < 0) return;
+    const grid = cells.filter((c) => c.parentElement === cells[at].parentElement);
+    const row = grid.filter((c) => c.offsetTop === grid[0].offsetTop).length;
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -row, ArrowDown: row, Home: -at, End: cells.length - 1 - at }[e.key];
+    if (step === undefined) return;
+    e.preventDefault();
+    e.stopPropagation();
+    cells[Math.max(0, Math.min(cells.length - 1, at + step))].focus();
   };
 }
 

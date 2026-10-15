@@ -120,4 +120,4 @@ Nuzky is young, so a bug report helps as much as a pull request. When something 
 
 ## License
 
-GPL-3.0-or-later. FFmpeg with x264 is GPL and compatible with this licence. The export uses FFmpeg's native AAC encoder because `libfdk_aac` is not GPL compatible. The sound effects built into Nuzky are CC0 1.0; `assets/sounds/manifest.json` lists their authors and sources.
+GPL-3.0-or-later. FFmpeg with x264 is GPL and compatible with this licence. The export uses FFmpeg's native AAC encoder because `libfdk_aac` is not GPL compatible. The sound effects built into Nuzky are CC0 1.0; `assets/sounds/manifest.json` lists their authors and sources. The emoji are Google's Noto Emoji (Apache-2.0, flags public domain) with names from Unicode CLDR (Unicode License v3), and Nuzky's own stickers are CC0 1.0; `assets/stickers/catalog.json` lists their sources, and [docs/BUILDING.md](docs/BUILDING.md#bundled-emoji-and-stickers) says how they are built.

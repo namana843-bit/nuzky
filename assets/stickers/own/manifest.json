@@ -1,0 +1,14 @@
+[
+  { "id": "arrow", "name": "Arrow", "keywords": ["point", "pointer", "direction", "right", "look"] },
+  { "id": "curved-arrow", "name": "Curved arrow", "keywords": ["point", "pointer", "turn", "down", "look"] },
+  { "id": "circle", "name": "Circle", "keywords": ["ring", "round", "oval", "mark", "highlight"] },
+  { "id": "underline", "name": "Underline", "keywords": ["line", "emphasis", "mark"] },
+  { "id": "check", "name": "Check", "keywords": ["tick", "yes", "done", "correct", "ok"] },
+  { "id": "cross", "name": "Cross", "keywords": ["x", "no", "wrong", "mistake"] },
+  { "id": "heart", "name": "Heart", "keywords": ["love", "like"] },
+  { "id": "star", "name": "Star", "keywords": ["favourite", "favorite", "best", "rating"] },
+  { "id": "sparkles", "name": "Sparkles", "keywords": ["shine", "new", "magic", "glitter"] },
+  { "id": "emphasis", "name": "Emphasis lines", "keywords": ["surprise", "wow", "attention", "pop"] },
+  { "id": "highlight", "name": "Highlighter", "keywords": ["marker", "highlight", "emphasis"] },
+  { "id": "speech-bubble", "name": "Speech bubble", "keywords": ["talk", "say", "comment", "chat", "quote"] }
+]

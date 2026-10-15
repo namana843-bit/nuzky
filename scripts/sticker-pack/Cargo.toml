@@ -1,0 +1,12 @@
+[package]
+name = "sticker-pack"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+usvg = { version = "=0.48.1", default-features = false, features = ["writer"] }
+serde_json = "1.0.154"
+zstd = "0.14.2"

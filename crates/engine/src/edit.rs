@@ -116,6 +116,13 @@ pub enum EditCmd {
         start_us: i64,
         duration_us: Option<i64>,
     },
+    #[cfg_attr(feature = "ts", ts(optional_fields = nullable))]
+    AddSticker {
+        asset_id: String,
+        start_us: i64,
+        duration_us: Option<i64>,
+        transform: Option<Transform>,
+    },
     AddText {
         start_us: i64,
         text: String,
@@ -405,6 +412,8 @@ fn media(asset_id: String, transform: Transform, shape: Option<Shape>) -> ClipCo
 
 /// The longer side of a picture in picture, as a share of the canvas's shorter side.
 const PIP_SIZE: f32 = 0.45;
+/// The longer side of a new sticker, as a share of the canvas's shorter side.
+const STICKER_SIZE: f32 = 0.3;
 /// Gap to the canvas edges where no safe area applies, as a share of the canvas's shorter side.
 const PIP_MARGIN: f32 = 0.04;
 const PIP_RADIUS: f32 = 0.15;
@@ -424,6 +433,13 @@ fn picture_in_picture(canvas: &Canvas, asset: &Asset) -> Transform {
         y: (top + h * scale / 2.0) / ch - 0.5,
         scale,
         ..Transform::default()
+    }
+}
+
+fn overlay_duration(asset: &Asset, duration_us: Option<i64>, min: i64) -> i64 {
+    match (asset.kind, duration_us) {
+        (AssetKind::Image, d) => d.unwrap_or(IMAGE_DURATION_US).max(min),
+        (_, d) => d.unwrap_or(asset.duration_us).clamp(min, asset.duration_us.max(min)),
     }
 }
 
@@ -640,6 +656,7 @@ impl Project {
             | EditCmd::RemoveAsset { .. }
             | EditCmd::AddClip { .. }
             | EditCmd::AddPictureInPicture { .. }
+            | EditCmd::AddSticker { .. }
             | EditCmd::AddText { .. }
             | EditCmd::DetachAudio { .. } => self.apply_media(cmd, &mut out, &mut moved)?,
             EditCmd::MoveClip { .. }
@@ -686,6 +703,22 @@ impl Project {
         self.tidy();
         self.clamp_timing_windows();
         Ok(out)
+    }
+
+    fn add_overlay(
+        &mut self,
+        asset_id: String,
+        start_us: i64,
+        duration: i64,
+        transform: Transform,
+        shape: Option<Shape>,
+        out: &mut EditOutcome,
+    ) {
+        let start = start_us.max(0);
+        let clip = Clip::new(new_id(), start, duration, media(asset_id, transform, shape));
+        let track = self.free_track(TrackKind::Video, start, start + duration, false);
+        out.select.push(clip.id.clone());
+        self.tracks[track].clips.push(clip);
     }
 
     fn apply_media(&mut self, cmd: EditCmd, out: &mut EditOutcome, moved: &mut Option<(String, i64)>) -> Result<()> {
@@ -743,17 +776,33 @@ impl Project {
                     asset.kind != AssetKind::Audio && asset.width > 0 && asset.height > 0,
                     "Only a video or an image can be a picture in picture"
                 );
-                let duration = match (asset.kind, duration_us) {
-                    (AssetKind::Image, d) => d.unwrap_or(IMAGE_DURATION_US).max(min),
-                    (_, d) => d.unwrap_or(asset.duration_us).clamp(min, asset.duration_us.max(min)),
-                };
-                let start = start_us.max(0);
+                let duration = overlay_duration(&asset, duration_us, min);
                 let shape = Shape { radius: PIP_RADIUS, shadow: PIP_SHADOW, ..Shape::default() };
-                let content = media(asset_id, picture_in_picture(&self.canvas, &asset), Some(shape));
-                let clip = Clip::new(new_id(), start, duration, content);
-                let track = self.free_track(TrackKind::Video, start, start + duration, false);
-                out.select.push(clip.id.clone());
-                self.tracks[track].clips.push(clip);
+                self.add_overlay(
+                    asset_id,
+                    start_us,
+                    duration,
+                    picture_in_picture(&self.canvas, &asset),
+                    Some(shape),
+                    out,
+                );
+            }
+            EditCmd::AddSticker { asset_id, start_us, duration_us, transform } => {
+                let asset = self.asset(&asset_id).ok_or_else(|| anyhow!("Unknown media"))?;
+                ensure!(
+                    asset.kind != AssetKind::Audio && asset.width > 0 && asset.height > 0,
+                    "Only a video or an image can be a sticker"
+                );
+                let duration = overlay_duration(asset, duration_us, min);
+                let transform = transform.unwrap_or_else(|| {
+                    let (cw, ch) = (self.canvas.width as f32, self.canvas.height as f32);
+                    let fit = (cw / asset.width as f32).min(ch / asset.height as f32);
+                    Transform {
+                        scale: STICKER_SIZE * cw.min(ch) / (asset.width.max(asset.height) as f32 * fit),
+                        ..Transform::default()
+                    }
+                });
+                self.add_overlay(asset_id, start_us, duration, transform, None, out);
             }
             EditCmd::AddText { start_us, text, style } => {
                 let start = start_us.max(0);
@@ -2020,6 +2069,44 @@ mod tests {
         assert!((tr[0] - (1920.0 - 0.04 * 1080.0)).abs() < 0.01 && (tr[1] - 0.04 * 1080.0).abs() < 0.01, "{tr:?}");
         let sound = EditCmd::AddPictureInPicture { asset_id: "m".into(), start_us: 0, duration_us: None };
         assert!(p.apply(sound).is_err());
+    }
+
+    #[test]
+    fn stickers_use_free_overlays_and_keep_their_transform() {
+        for (width, height) in [(1080, 1920), (1920, 1080)] {
+            let mut p = project();
+            p.canvas.width = width;
+            p.canvas.height = height;
+            p.assets.push(Asset { width: 1024, height: 1024, ..asset("sticker", AssetKind::Image, 0) });
+            p.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+            let main = p.tracks[0].clone();
+            let cmd = |asset_id: &str, transform| EditCmd::AddSticker {
+                asset_id: asset_id.into(),
+                start_us: 1_500_000,
+                duration_us: None,
+                transform,
+            };
+            let id = p.apply(cmd("sticker", None)).unwrap().select[0].clone();
+            let clip = &p.tracks[1].clips[0];
+            assert_eq!(clip.id, id);
+            assert_eq!(p.tracks[1].kind, TrackKind::Video);
+            assert_eq!((clip.start_us, clip.duration_us), (1_500_000, 3_000_000));
+            assert!(clip.anim_in.is_none() && clip.anim_out.is_none());
+            let ClipContent::Media { transform, shape, .. } = &clip.content else { panic!() };
+            assert_eq!(*transform, Transform { scale: 0.3, ..Transform::default() });
+            assert!(shape.is_none());
+            let custom =
+                Transform { x: 0.2, y: -0.1, scale: 0.7, rotation: 12.0, opacity: 0.6, ..Transform::default() };
+            p.apply(cmd("sticker", Some(custom))).unwrap();
+            let ClipContent::Media { transform, .. } = &p.tracks[2].clips[0].content else { panic!() };
+            assert_eq!(*transform, custom);
+            assert_eq!(p.tracks[0], main);
+            assert!(p.apply(cmd("m", None)).is_err());
+            p.assets.push(Asset { width: 0, height: 0, ..asset("empty", AssetKind::Image, 0) });
+            assert!(p.apply(cmd("empty", None)).is_err());
+            p.apply(cmd("a", None)).unwrap();
+            assert_eq!(p.tracks[3].clips[0].duration_us, 5_000_000);
+        }
     }
 
     #[test]

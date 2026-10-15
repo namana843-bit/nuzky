@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CapCutDraft, CaptionPreset, ChatGptModel, ChatGptStatus, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelCandidate, ReelFraming, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
+import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, Animation, Boot, CapCutDraft, CaptionPreset, ChatGptModel, ChatGptStatus, Collection, CoverView, DeletedCollection, SpeechModel, EditCmd, ExportRequest, Filmstrip, FontFamilies, LayerBounds, Library, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelCandidate, ReelFraming, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StickerCatalog, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VisionModels, WordsCorrected, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
  * The session a change was made for. Mutating commands carry it, so a change still in flight when
@@ -95,6 +95,13 @@ export const api = {
   soundCancel: (id: string) => invoke<void>("sound_cancel", { id }),
   /** Adds the sound at `startUs` on an audio track, as one undo step. */
   soundAdd: (id: string, startUs: number, epoch: Epoch) => invoke<Snapshot>("sound_add", { id, startUs: Math.round(startUs), expectedEpoch: epoch }),
+  /** Nuzky's own stickers and the emoji, in the order the Text tab shows them. */
+  stickerCatalog: () => invoke<StickerCatalog>("sticker_catalog"),
+  /** Keys of the emoji and stickers that match, best first. */
+  stickerSearch: (query: string) => invoke<string[]>("sticker_search", { query }),
+  /** PNG data URLs of `keys` drawn `px` wide, in the same order; "" for an unknown key. */
+  stickerThumbs: (keys: string[], px: number) => invoke<string[]>("sticker_thumbs", { keys, px }),
+  stickerAdd: (key: string, startUs: number, epoch: Epoch) => invoke<Snapshot>("sticker_add", { key, startUs: Math.round(startUs), expectedEpoch: epoch }),
   /** The credits the video's description needs; null when no CC BY sound is heard in it. */
   soundCredits: (epoch: Epoch) => invoke<string | null>("sound_credits", { expectedEpoch: epoch }),
   soundSettings: () => invoke<SoundSettings>("sound_settings"),

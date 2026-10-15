@@ -1,7 +1,7 @@
 use nuzky_engine::{
     edit::{CaptionPreset, EditCmd, MotionKind, TimeRange},
     export::{Delivery, Quality},
-    model::{TextStyle, ThumbnailFormat},
+    model::{TextStyle, ThumbnailFormat, Transform},
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -118,6 +118,20 @@ pub struct AddSound {
     pub request_id: Option<String>,
     /// true only after the user agreed that the rights to music from YouTube links are theirs to check.
     pub rights_confirmed: Option<bool>,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddSticker {
+    pub run_id: String,
+    /// One emoji, an English emoji name, :shortcode: or Nuzky sticker id.
+    pub sticker: String,
+    pub at_us: i64,
+    /// Defaults to 3 seconds for an image.
+    pub duration_us: Option<i64>,
+    /// Defaults to centred, longer side 30% of the canvas's shorter side.
+    pub transform: Option<Transform>,
+    /// Reuse with the same arguments to retry without adding a second clip.
+    pub request_id: Option<String>,
 }
 /// Choices offered to the user; the Nuzky AI panel shows them as buttons.
 #[derive(Deserialize, JsonSchema)]

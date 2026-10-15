@@ -187,6 +187,7 @@ const TITLES: Record<string, string> = {
   inspect_frames: "Checking frames",
   activity: "Scanning picture and sound",
   import_media: "Importing media",
+  add_sticker: "Adding a sticker",
   export_video: "Exporting",
   undo_run: "Undoing its changes",
 };

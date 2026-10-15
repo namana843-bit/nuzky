@@ -1,0 +1,10 @@
+# The emoji catalogue (assets/stickers/catalog.json) names each emoji by its code points in hex
+# ("key":"1f9ce_1f3fb_200d_2640"), which the generic API key rule takes for a secret. Only matches of exactly
+# that shape are let through.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Emoji keys: Unicode code points in hex"
+regexTarget = "match"
+regexes = ['''^key":"[0-9a-f]{4,5}(_[0-9a-f]{4,5})*"$''']

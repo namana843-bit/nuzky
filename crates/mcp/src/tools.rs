@@ -64,12 +64,14 @@ pub struct Backend {
     transcript_requests: Mutex<HashMap<(String, String), PreparedTranscriptEdit>>,
     import_requests: Mutex<HashMap<(String, String), PreparedImport>>,
     sound_requests: Mutex<HashMap<(String, String), (String, PreparedSound)>>,
+    sticker_requests: Mutex<HashMap<(String, String), PreparedSticker>>,
     /// Why this agent cannot have the speech model: the user said not now, stopped the download or it failed.
     model_refused: Arc<Mutex<Option<String>>>,
 }
 
 /// The asset the sound became and the edits that add it.
 type PreparedSound = (String, Vec<EditCmd>, Expect);
+type PreparedSticker = (Value, crate::stickers::Prepared, Expect);
 
 impl Backend {
     pub fn open(project: &Path, allow_write: bool, cache: PathBuf) -> Result<Self> {
@@ -96,6 +98,7 @@ impl Backend {
             transcript_requests: Mutex::default(),
             import_requests: Mutex::default(),
             sound_requests: Mutex::default(),
+            sticker_requests: Mutex::default(),
             model_refused: Arc::default(),
         })
     }
@@ -266,6 +269,7 @@ impl Backend {
             "import_media" => self.import(parse(arguments)?, state),
             "search_sounds" => search_sounds(parse(arguments)?),
             "add_sound" => self.add_sound(parse(arguments)?, state),
+            "add_sticker" => self.add_sticker(parse(arguments)?, state),
             "activity" => self.activity(parse(arguments)?, state),
             "analyze" => self.analyze(parse(arguments)?, state),
             "segment_subject" => self.segment_subject(parse(arguments)?, state),
@@ -568,6 +572,47 @@ impl Backend {
             "start_us": clip.map(|c| c.clip.start_us), "duration_us": clip.map(|c| c.clip.duration_us),
             "needs_credit": credit.is_some_and(|c| c.license == nuzky_engine::model::License::CcBy),
             "credit": credit,
+        }))
+    }
+
+    fn add_sticker(&self, args: AddSticker, state: &SessionState) -> Result<Value> {
+        owns_run(state, &args.run_id)?;
+        ensure!(args.at_us >= 0, "INVALID_ARGUMENTS: at_us must not be negative");
+        ensure!(args.duration_us.is_none_or(|d| d > 0), "INVALID_ARGUMENTS: duration_us must be positive");
+        let pick = crate::stickers::find(&args.sticker)?;
+        let request_id = args.request_id.unwrap_or_else(new_id);
+        let tag = json!([pick.key, args.at_us, args.duration_us, args.transform]);
+        let (prepared, expect) = {
+            let mut requests = self.sticker_requests.lock().unwrap();
+            requests.retain(|(run, _), _| run == &args.run_id);
+            let key = (args.run_id.clone(), request_id.clone());
+            match requests.get(&key) {
+                Some((previous, prepared, expect)) => {
+                    ensure!(previous == &tag, "REQUEST_CONFLICT: request_id was used with other sticker arguments");
+                    (prepared.clone(), expect.clone())
+                }
+                None => {
+                    let prepared = crate::stickers::prepare(
+                        pick,
+                        &state.project.assets,
+                        args.at_us,
+                        args.duration_us,
+                        args.transform,
+                    )?;
+                    let expect = Expect { revision: Some(state.stamp.revision), speech_layout_key: None };
+                    requests.insert(key, (tag, prepared.clone(), expect.clone()));
+                    (prepared, expect)
+                }
+            }
+        };
+        let result = self.host.session.apply_edits(&args.run_id, &request_id, prepared.edits, expect)?;
+        let clip = result.clips.iter().find(|c| matches!(&c.clip.content, nuzky_engine::model::ClipContent::Media { asset_id, .. } if asset_id == &prepared.asset_id)).context("Added sticker is missing")?;
+        let nuzky_engine::model::ClipContent::Media { transform, .. } = &clip.clip.content else { unreachable!() };
+        Ok(json!({
+            "revision": result.stamp.revision, "session_epoch": result.stamp.session_epoch,
+            "asset_id": prepared.asset_id, "clip_id": clip.clip.id, "track_id": clip.track_id,
+            "start_us": clip.clip.start_us, "duration_us": clip.clip.duration_us, "transform": transform,
+            "sticker": {"key": pick.key, "emoji": pick.emoji, "name": pick.name},
         }))
     }
 
@@ -1818,6 +1863,7 @@ mod transcript_tests {
             transcript_requests: Mutex::default(),
             import_requests: Mutex::default(),
             sound_requests: Mutex::default(),
+            sticker_requests: Mutex::default(),
             model_refused: Arc::default(),
         };
         (dir, backend, project)
