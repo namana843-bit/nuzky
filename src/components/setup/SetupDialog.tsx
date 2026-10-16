@@ -9,18 +9,17 @@ const LAST = SETUP_STEPS.length - 1;
 /** Get set up: the setup steps beside each other with whether each is done or skipped; it continues where it was left. */
 export function SetupDialog() {
   const { open, states, current, closeSetup, showStep, skipStep } = useSetup();
-  const dialog = useRef<HTMLDialogElement>(null);
   const rail = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const d = dialog.current;
-    if (!d) return;
-    // Closing gives focus back to what opened it.
-    if (!open) return void (d.open && d.close());
-    if (d.open) return;
-    d.showModal();
+    if (!open) return;
+    // Closing returns focus to what opened it.
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Never Skip: a stray Enter or Space skips nothing.
     rail.current?.querySelector<HTMLElement>("[aria-selected=true]")?.focus();
+    return () => opener?.focus();
   }, [open]);
+
+  if (!open) return null;
 
   const index = SETUP_STEPS.indexOf(current);
   const done = SETUP_STEPS.filter((step) => states[step] === "done").length;
@@ -36,22 +35,22 @@ export function SetupDialog() {
   };
 
   return (
-    <dialog
-      ref={dialog}
-      aria-labelledby="setup-title"
-      aria-describedby="setup-count"
-      onCancel={(e) => {
-        e.preventDefault();
-        closeSetup();
-      }}
-      onKeyDown={(e) => {
-        // The editor's and the home screen's keys (Space plays, typing searches) wait while it is open.
-        e.stopPropagation();
-        trapTab(e);
-      }}
-      className="dialog-in overlay fixed inset-0 m-auto h-[420px] max-h-[calc(100vh-48px)] w-[640px] rounded-[20px] p-6 text-fg outline-none backdrop:bg-black/45"
-    >
-      <div className="flex h-full flex-col">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center scrim-in bg-black/45" onPointerDown={(e) => e.target === e.currentTarget && closeSetup()}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="setup-title"
+        aria-describedby="setup-count"
+        // A click on its text keeps the focus inside, so the keys below still see it.
+        tabIndex={-1}
+        onKeyDown={(e) => {
+          // The editor's and the home screen's keys (Space plays, typing searches) wait while it is open.
+          e.stopPropagation();
+          if (e.key === "Escape") closeSetup();
+          else trapTab(e);
+        }}
+        className="dialog-in overlay flex h-[420px] max-h-[calc(100vh-48px)] w-[640px] flex-col rounded-[20px] p-6 text-fg outline-none"
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 id="setup-title" className="text-[17px] font-semibold leading-[22px] tracking-[-0.025em]">
@@ -100,7 +99,9 @@ export function SetupDialog() {
           <div className="mx-4 w-px shrink-0 bg-white/[.07]" />
           <div role="tabpanel" id="setup-panel" aria-labelledby={`setup-tab-${current}`} className="flex min-w-0 flex-1 flex-col">
             <h3 className="text-[15px] font-semibold">{title}</h3>
-            <Body />
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <Body />
+            </div>
             <footer className="mt-4 flex justify-end gap-2">
               {!states[current] ? (
                 <Button pill onClick={() => skipStep(current)}>
@@ -119,6 +120,6 @@ export function SetupDialog() {
           </div>
         </div>
       </div>
-    </dialog>
+    </div>
   );
 }

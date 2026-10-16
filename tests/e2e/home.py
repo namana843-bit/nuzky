@@ -482,7 +482,7 @@ const out = [...pane.querySelectorAll('h2, button, ol li, p')].filter((el) => {
   const b = el.getBoundingClientRect(); return b.width && (b.left < p.left || b.right > p.right); }).map((el) => el.textContent);
 return pane.scrollWidth > pane.clientWidth ? [...out, `the pane scrolls sideways: ${pane.scrollWidth} > ${pane.clientWidth}`] : out;"""
 CONNECT_OPEN = "return !!document.querySelector('[role=dialog][aria-labelledby=connect-title]')"
-SETUP_OPEN = "return !!document.querySelector('dialog[aria-labelledby=setup-title]')?.open"
+SETUP_OPEN = "return !!document.querySelector('[role=dialog][aria-labelledby=setup-title]')"
 
 
 @flow('first-run', 'The first start leads from a talking head video to captions, cuts and a vertical export; the video '
@@ -516,7 +516,7 @@ def first_run(r):
         r.check('Esc closes the Connect dialog', wait(lambda: not r.s.run(CONNECT_OPEN), 5))
     r.check('Get set up is a button', click(r, 'Get set up', 'main'))
     r.check('it opens Get set up over the first start', wait(lambda: r.s.run(SETUP_OPEN), 5) and view(r)['view'] == 'home', view(r))
-    r.s.run("document.querySelector('dialog[aria-labelledby=setup-title] button[aria-label=Close]').click()")
+    r.s.run("document.querySelector('[aria-labelledby=setup-title] button[aria-label=Close]').click()")
     r.check('× closes Get set up', wait(lambda: not r.s.run(SETUP_OPEN), 5))
     r.check('back home, the first start still shows', wait(lambda: OPEN_VIDEO in text(), 5), text())
 

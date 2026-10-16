@@ -344,7 +344,7 @@ export function Home() {
   // Keys of the home screen: Esc goes back to the editor, typing searches.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (menu || useLibrary.getState().pendingSwitch || document.querySelector("dialog[open]") || useStyle.getState().learnOpen) return;
+      if (menu || useLibrary.getState().pendingSwitch || document.querySelector("dialog[open]") || useStyle.getState().learnOpen || useSetup.getState().open) return;
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
       // The style page has no search; its fields take what is typed.
       const style = useLibrary.getState().page === "style";

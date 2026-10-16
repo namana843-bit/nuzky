@@ -3,12 +3,14 @@ start's Get set up and the home sidebar's row open it, the keyboard moves throug
 closing, also quitting Nuzky, loses neither the steps' states nor the step shown."""
 import time
 
-from e2e.harness import Session, flow, press, wait
-from e2e.home import FIRST_RUN_TEXT, OPEN_VIDEO, resize
+from e2e.corrections import Hands
+from e2e.harness import FIXTURES, Session, flow, press, wait
+from e2e.home import FIRST_RUN_TEXT, OPEN_VIDEO, make, resize
 
 TITLES = ['Captions model', 'Connect your AI', 'Check this computer', 'Teach your style', 'Your first cut']
-DIALOG = """const d = document.querySelector('dialog[aria-labelledby=setup-title]');
-if (!d?.open) return null;
+BOX = '[aria-labelledby=setup-title]'
+DIALOG = """const d = document.querySelector('[aria-labelledby=setup-title]');
+if (!d) return null;
 const lines = (el) => el.innerText.split('\\n').map((l) => l.trim()).filter((l) => l && !/^\\d$/.test(l));
 const focus = document.activeElement;
 return {
@@ -25,12 +27,32 @@ FOCUS_TEXT = """const el = [...document.querySelectorAll(arguments[1] + ' button
 if (!el) return false; el.focus(); return document.activeElement === el;"""
 CLICK = """const el = [...document.querySelectorAll(arguments[1] + ' button')].find((b) => b.textContent.trim().startsWith(arguments[0]) || b.getAttribute('aria-label') === arguments[0]);
 if (!el) return false; el.click(); return true;"""
-FITS = """const d = document.querySelector('dialog[aria-labelledby=setup-title]'), b = d.getBoundingClientRect();
+FITS = """const d = document.querySelector('[aria-labelledby=setup-title]'), b = d.getBoundingClientRect();
 const out = [...d.querySelectorAll('h2, h3, p, button, [role=tab]')].filter((el) => {
   const e = el.getBoundingClientRect(); return e.width && (e.left < b.left || e.right > b.right || e.top < b.top || e.bottom > b.bottom); })
   .map((el) => el.textContent.trim());
 if (b.top < 0 || b.bottom > innerHeight || b.left < 0 || b.right > innerWidth) out.push(`the dialog leaves the window: ${JSON.stringify(b)}`);
 return out;"""
+CLOSED = """return !document.querySelector('[aria-labelledby=setup-title], #setup-panel') && !document.body.textContent.includes('Not ready yet')"""
+CONNECT_OPEN = "return !!document.querySelector('[role=dialog][aria-labelledby=connect-title]')"
+CONNECT_ON_TOP = """const c = document.querySelector('[role=dialog][aria-labelledby=connect-title]');
+if (!c) return false;
+const b = c.getBoundingClientRect();
+return !!document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)?.closest('[role=dialog][aria-labelledby=connect-title]');"""
+TALL = """const box = document.querySelector('[aria-labelledby=setup-title]'), title = box.querySelector('#setup-title');
+const step = [...box.querySelectorAll('[role=tabpanel] p')].find((p) => p.textContent === 'Not ready yet').parentElement;
+const region = step.parentElement, top = title.getBoundingClientRect().top;
+const tall = document.createElement('div');
+tall.style.cssText = 'height: 1000px; flex-shrink: 0';
+step.after(tall);
+region.scrollTop = region.scrollHeight;
+const b = box.getBoundingClientRect(), f = box.querySelector('footer button').getBoundingClientRect();
+const out = {footer: f.top >= b.top && f.bottom <= b.bottom, header: title.getBoundingClientRect().top === top,
+             box: box.scrollHeight > box.clientHeight, step: region.scrollTop > 0};
+tall.remove();
+return out;"""
+AFTER_KEY = """return {search: document.querySelector('main input[type=search]')?.value ?? null,
+        inside: !!document.activeElement?.closest('[aria-labelledby=setup-title]')};"""
 
 
 def dialog(r):
@@ -57,6 +79,7 @@ def relaunch(r):
       'moves through it, Skip moves on, and the states and the step shown stay after closing and after a restart', home=True)
 def setup(r):
     r.check('the first start shows', wait(lambda: OPEN_VIDEO in (r.s.run(FIRST_RUN_TEXT) or ''), 10))
+    r.check('while closed, nothing of Get set up is in the page', r.s.run(CLOSED))
     r.check('Get set up on the first start takes the focus', r.s.run(FOCUS_TEXT, 'Get set up', 'main'))
     press('Return')
     d = wait(lambda: dialog(r), 5)
@@ -84,6 +107,7 @@ def setup(r):
     press('Escape')
     r.check('Esc closes it', wait(lambda: not dialog(r), 3))
     r.check('the focus is back on Get set up', wait(lambda: r.s.run(FOCUS) == 'Get set up', 3), r.s.run(FOCUS))
+    r.check('closed, nothing of it stays in the page', r.s.run(CLOSED))
 
     r.check('the sidebar row counts 4 steps left, as news', row(r).get('count') == '4 steps left', row(r))
     r.s.run(CLICK, 'Get set up', 'nav[aria-label=Collections]')
@@ -91,6 +115,17 @@ def setup(r):
     r.check('the sidebar row opens it again on Connect your AI', d and d['panel'] == 'Connect your AI' and d['focus'] == 'tab: Connect your AI', d)
     r.check('with Captions model still Skipped', d and rail(d)[0] == ['Captions model', 'Skipped'], d)
     r.check('the row is not a page', row(r).get('current') is None, row(r))
+
+    r.s.run("window.__nuzky.store.setState({connectOpen: true})")
+    r.check('a dialog a step opens, Connect, shows above Get set up', wait(lambda: r.s.run(CONNECT_ON_TOP), 5))
+    time.sleep(0.5)
+    press('Escape')
+    if r.check('Esc closes only the Connect dialog; Get set up stays open', wait(lambda: not r.s.run(CONNECT_OPEN), 3) and dialog(r), dialog(r)):
+        press('Escape')
+        r.check('Esc again closes Get set up', wait(lambda: not dialog(r), 3), dialog(r))
+    r.s.run(CLICK, 'Get set up', 'nav[aria-label=Collections]')
+    d = wait(lambda: dialog(r), 5)
+    r.check('the row opens it again on Connect your AI', d and d['panel'] == 'Connect your AI', d)
 
     r.s.run("window.__nuzky.setup.getState().finishStep('ai')")
     d = wait(lambda: (dialog(r) or {}).get('count') == '1 of 5 done' and dialog(r), 3)
@@ -110,8 +145,13 @@ def setup(r):
         r.check('nothing of the dialog is cut off at the smallest window', clipped == [], clipped)
         r.shot('setup-1024')
         resize(r, 1440, 900)
+    time.sleep(0.5)
+    tall = r.s.run(TALL)
+    r.check('a step taller than the dialog scrolls inside it: Skip stays in the dialog and the header in place, '
+            'and the dialog itself does not scroll', tall == {'footer': True, 'header': True, 'box': False, 'step': True}, tall)
 
-    r.s.run(CLICK, 'Close', 'dialog')
+    make(r, 'talk.nuzky', 'Talk to camera', [FIXTURES / 'talk.mp4'], 0)
+    r.s.run(CLICK, 'Close', BOX)
     r.check('× closes it', wait(lambda: not dialog(r), 3))
 
     relaunch(r)
@@ -121,6 +161,21 @@ def setup(r):
     r.check('after a restart it opens on the step shown before, with the same states',
             d and d['panel'] == 'Check this computer' and rail(d)[:3] == [['Captions model', 'Skipped'], ['Connect your AI', 'Done'], ['Check this computer']]
             and d['count'] == '1 of 5 done', d)
+
+    hands = Hands(r)
+    r.check('a click on the step text', hands.click(f'{BOX} [role=tabpanel] p'))
+    press('a')
+    time.sleep(0.3)
+    after = r.s.run(AFTER_KEY)
+    r.check("then a letter key leaves the home screen's search empty and the focus in Get set up", after == {'search': '', 'inside': True}, after)
+    r.check('a click beside the box', hands.click('body', 0.04, 0.5))
+    r.check('a click on the scrim beside it closes Get set up', wait(lambda: not dialog(r), 3), dialog(r))
+    if dialog(r):
+        r.s.run(CLICK, 'Close', BOX)
+    r.s.run(CLICK, 'Get set up', 'nav[aria-label=Collections]')
+    d = wait(lambda: dialog(r), 5)
+    r.check('it opens again where it was, with the same states',
+            d and d['panel'] == 'Check this computer' and rail(d)[:3] == [['Captions model', 'Skipped'], ['Connect your AI', 'Done'], ['Check this computer']], d)
 
     press('End')
     r.check('End shows Your first cut', wait(lambda: (dialog(r) or {}).get('panel') == 'Your first cut', 3), dialog(r))

@@ -608,8 +608,8 @@ export default function App() {
       )}
       {launcherOpen && !home && <Launcher />}
       <ExportDialog />
-      <ConnectAgentDialog />
       <SetupDialog />
+      <ConnectAgentDialog />
       <ChatGptDialog />
       {learnOpen && <LearnDialog />}
       <SwitchDialog />
