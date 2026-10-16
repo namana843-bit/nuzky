@@ -169,6 +169,12 @@ def setup(r):
     time.sleep(0.3)
     after = r.s.run(AFTER_KEY)
     r.check("then a letter key leaves the home screen's search empty and the focus in Get set up", after == {'search': '', 'inside': True}, after)
+    r.s.run("window.__nuzky.store.getState().toast({kind: 'info', text: 'Exported Talk to camera'})")
+    press('F8')
+    r.check('F8 still takes the focus to the newest toast', wait(lambda: r.s.run("return !!document.activeElement?.closest('[data-toast]')"), 3), r.s.run(FOCUS))
+    press('Escape')
+    r.check('Esc there dismisses the toast and gives the focus back to Get set up, which stays open',
+            wait(lambda: (r.s.run(AFTER_KEY) or {}).get('inside'), 3) and dialog(r), r.s.run(FOCUS))
     r.check('a click beside the box', hands.click('body', 0.04, 0.5))
     r.check('a click on the scrim beside it closes Get set up', wait(lambda: not dialog(r), 3), dialog(r))
     r.check('and the focus is back on the sidebar row that opened it', wait(lambda: (r.s.run(FOCUS) or '').startswith('Get set up'), 3), r.s.run(FOCUS))

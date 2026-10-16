@@ -12,7 +12,6 @@ export function SetupDialog() {
   const rail = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
-    // Closing returns focus to what opened it.
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Never Skip: a stray Enter or Space skips nothing.
     rail.current?.querySelector<HTMLElement>("[aria-selected=true]")?.focus();
@@ -53,8 +52,8 @@ export function SetupDialog() {
         // A click on its text keeps the focus inside, so the keys below still see it.
         tabIndex={-1}
         onKeyDown={(e) => {
-          // The editor's and the home screen's keys (Space plays, typing searches) wait while it is open.
-          e.stopPropagation();
+          // The editor's and the home screen's keys (Space plays, typing searches) wait while it is open; F8 still reaches the toasts.
+          if (e.key !== "F8") e.stopPropagation();
           if (e.key === "Escape") closeSetup();
           else trapTab(e);
         }}
