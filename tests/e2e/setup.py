@@ -1,0 +1,135 @@
+"""Get set up: one dialog with the five setup steps side by side and whether each is done or skipped. The first
+start's Get set up and the home sidebar's row open it, the keyboard moves through the steps, Skip moves on, and
+closing, also quitting Nuzky, loses neither the steps' states nor the step shown."""
+import time
+
+from e2e.harness import Session, flow, press, wait
+from e2e.home import FIRST_RUN_TEXT, OPEN_VIDEO, resize
+
+TITLES = ['Captions model', 'Connect your AI', 'Check this computer', 'Teach your style', 'Your first cut']
+DIALOG = """const d = document.querySelector('dialog[aria-labelledby=setup-title]');
+if (!d?.open) return null;
+const lines = (el) => el.innerText.split('\\n').map((l) => l.trim()).filter((l) => l && !/^\\d$/.test(l));
+const focus = document.activeElement;
+return {
+  title: d.querySelector('#setup-title').textContent, count: d.querySelector('#setup-count').textContent,
+  steps: [...d.querySelectorAll('[role=tablist] [role=tab]')].map((t) => ({lines: lines(t), selected: t.getAttribute('aria-selected') === 'true'})),
+  panel: d.querySelector('[role=tabpanel] h3')?.textContent ?? null,
+  buttons: [...d.querySelectorAll('footer button')].map((b) => b.textContent.trim()),
+  focus: focus?.getAttribute('role') === 'tab' ? 'tab: ' + lines(focus)[0] : (focus?.textContent.trim() || focus?.getAttribute('aria-label') || focus?.tagName),
+};"""
+FOCUS = "const f = document.activeElement; return f?.textContent.trim() || f?.getAttribute('aria-label') || f?.tagName"
+ROW = """const row = [...document.querySelectorAll('nav[aria-label=Collections] [data-row]')].find((b) => b.textContent.startsWith('Get set up'));
+return row && {count: row.querySelector('[aria-label]')?.getAttribute('aria-label') ?? null, current: row.getAttribute('aria-current')};"""
+FOCUS_TEXT = """const el = [...document.querySelectorAll(arguments[1] + ' button')].find((b) => b.textContent.trim().startsWith(arguments[0]));
+if (!el) return false; el.focus(); return document.activeElement === el;"""
+CLICK = """const el = [...document.querySelectorAll(arguments[1] + ' button')].find((b) => b.textContent.trim().startsWith(arguments[0]) || b.getAttribute('aria-label') === arguments[0]);
+if (!el) return false; el.click(); return true;"""
+FITS = """const d = document.querySelector('dialog[aria-labelledby=setup-title]'), b = d.getBoundingClientRect();
+const out = [...d.querySelectorAll('h2, h3, p, button, [role=tab]')].filter((el) => {
+  const e = el.getBoundingClientRect(); return e.width && (e.left < b.left || e.right > b.right || e.top < b.top || e.bottom > b.bottom); })
+  .map((el) => el.textContent.trim());
+if (b.top < 0 || b.bottom > innerHeight || b.left < 0 || b.right > innerWidth) out.push(`the dialog leaves the window: ${JSON.stringify(b)}`);
+return out;"""
+
+
+def dialog(r):
+    return r.s.run(DIALOG, retries=3)
+
+
+def rail(d):
+    return [s['lines'] for s in d['steps']] if d else None
+
+
+def row(r):
+    return r.s.run(ROW, retries=3) or {}
+
+
+def relaunch(r):
+    r.s.close()
+    r.s = Session()
+    if not wait(lambda: r.s.run('return !!window.__nuzky?.store.getState().snap', retries=3), 60):
+        raise RuntimeError('the app did not start again')
+    time.sleep(1)
+
+
+@flow('setup', 'Get set up shows the five setup steps with their states; the first start and the sidebar open it, the keyboard '
+      'moves through it, Skip moves on, and the states and the step shown stay after closing and after a restart', home=True)
+def setup(r):
+    r.check('the first start shows', wait(lambda: OPEN_VIDEO in (r.s.run(FIRST_RUN_TEXT) or ''), 10))
+    r.check('Get set up on the first start takes the focus', r.s.run(FOCUS_TEXT, 'Get set up', 'main'))
+    press('Return')
+    d = wait(lambda: dialog(r), 5)
+    r.check('Enter on it opens the Get set up dialog', d and d['title'] == 'Get set up', d)
+    r.check('it stays on the home screen', r.s.run("return window.__nuzky.store.getState().view") == 'home')
+    r.check('the rail lists the five steps in order, none done', rail(d) == [[t] for t in TITLES], rail(d))
+    r.check('the header says 0 of 5 done', d and d['count'] == '0 of 5 done', d)
+    r.check('Captions model is shown and selected', d and d['panel'] == 'Captions model' and d['steps'][0]['selected'], d)
+    r.check("the focus is on the current step's row, not on Skip", d and d['focus'] == 'tab: Captions model', d)
+    r.check('a step still to do offers Skip', d and d['buttons'] == ['Skip'], d)
+
+    for key, title in (('Down', 'Connect your AI'), ('End', 'Your first cut'), ('Up', 'Teach your style'), ('Home', 'Captions model')):
+        press(key)
+        d = wait(lambda: (dialog(r) or {}).get('panel') == title and dialog(r), 3)
+        r.check(f'{key} shows {title} and the focus follows', d and d['focus'] == f'tab: {title}', dialog(r))
+
+    press('Tab')
+    r.check('Tab goes from the rail to Skip', wait(lambda: r.s.run(FOCUS) == 'Skip', 3), r.s.run(FOCUS))
+    press('Return')
+    d = wait(lambda: (dialog(r) or {}).get('panel') == 'Connect your AI' and dialog(r), 3)
+    r.check('Enter on Skip marks Captions model Skipped and shows Connect your AI',
+            d and rail(d)[0] == ['Captions model', 'Skipped'] and d['steps'][1]['selected'], d)
+    r.check('a skipped step does not count as done', d and d['count'] == '0 of 5 done', d)
+
+    press('Escape')
+    r.check('Esc closes it', wait(lambda: not dialog(r), 3))
+    r.check('the focus is back on Get set up', wait(lambda: r.s.run(FOCUS) == 'Get set up', 3), r.s.run(FOCUS))
+
+    r.check('the sidebar row counts 4 steps left, as news', row(r).get('count') == '4 steps left', row(r))
+    r.s.run(CLICK, 'Get set up', 'nav[aria-label=Collections]')
+    d = wait(lambda: dialog(r), 5)
+    r.check('the sidebar row opens it again on Connect your AI', d and d['panel'] == 'Connect your AI' and d['focus'] == 'tab: Connect your AI', d)
+    r.check('with Captions model still Skipped', d and rail(d)[0] == ['Captions model', 'Skipped'], d)
+    r.check('the row is not a page', row(r).get('current') is None, row(r))
+
+    r.s.run("window.__nuzky.setup.getState().finishStep('ai')")
+    d = wait(lambda: (dialog(r) or {}).get('count') == '1 of 5 done' and dialog(r), 3)
+    r.check('a finished step shows Done and the header 1 of 5 done', d and rail(d)[1] == ['Connect your AI', 'Done'], d)
+    r.check('a done step offers Next', d and d['buttons'] == ['Next'], d)
+    r.check('the row counts 3 steps left', row(r).get('count') == '3 steps left', row(r))
+    press('Tab')
+    r.check('Tab goes from the rail to Next', wait(lambda: r.s.run(FOCUS) == 'Next', 3), r.s.run(FOCUS))
+    press('Return')
+    d = wait(lambda: (dialog(r) or {}).get('panel') == 'Check this computer' and dialog(r), 3)
+    r.check('Enter on Next shows Check this computer, still to do, with Skip', d and d['buttons'] == ['Skip'], d)
+    time.sleep(0.3)
+    r.shot('setup')
+    if r.check('the window goes to its smallest size', resize(r, 1024, 640)):
+        time.sleep(0.5)
+        clipped = r.s.run(FITS)
+        r.check('nothing of the dialog is cut off at the smallest window', clipped == [], clipped)
+        r.shot('setup-1024')
+        resize(r, 1440, 900)
+
+    r.s.run(CLICK, 'Close', 'dialog')
+    r.check('× closes it', wait(lambda: not dialog(r), 3))
+
+    relaunch(r)
+    r.check('after a restart the row still counts 3 steps left', wait(lambda: row(r).get('count') == '3 steps left', 10), row(r))
+    r.s.run(CLICK, 'Get set up', 'nav[aria-label=Collections]')
+    d = wait(lambda: dialog(r), 5)
+    r.check('after a restart it opens on the step shown before, with the same states',
+            d and d['panel'] == 'Check this computer' and rail(d)[:3] == [['Captions model', 'Skipped'], ['Connect your AI', 'Done'], ['Check this computer']]
+            and d['count'] == '1 of 5 done', d)
+
+    press('End')
+    r.check('End shows Your first cut', wait(lambda: (dialog(r) or {}).get('panel') == 'Your first cut', 3), dialog(r))
+    press('Tab')
+    press('Return')
+    d = wait(lambda: rail(dialog(r)) and rail(dialog(r))[4] == ['Your first cut', 'Skipped'] and dialog(r), 3)
+    r.check('Skip on the last step marks it Skipped and stays there', d and d['panel'] == 'Your first cut', d)
+    r.check('and Skip turns into Done', d and d['buttons'] == ['Done'], d)
+    press('Return')
+    r.check('Done closes it', wait(lambda: not dialog(r), 3), dialog(r))
+    r.check('the row counts 2 steps left', row(r).get('count') == '2 steps left', row(r))
+    r.check('no error toast along the way', not r.errors(), r.errors())
