@@ -527,6 +527,6 @@ def first_run(r):
     r.check('it opens the editor with the video on the timeline', v and assets and 'talk' in assets[0], (view(r), assets))
     r.s.run("window.__nuzky.store.setState({view: 'home'})")
     r.check('after the first video, home shows the project instead of the first start',
-            wait(lambda: OPEN_VIDEO not in text() and (card(r, view(r)['name']) or {}).get('meta') == 'Open now', 10), (text(), cards(r)))
+            wait(lambda: OPEN_VIDEO not in text() and any(c['path'] == view(r)['path'] and c['meta'] == 'Open now' for c in cards(r)), 10), (text(), cards(r)))
     time.sleep(0.5)
     r.shot('home-after-first-video')
