@@ -14,6 +14,7 @@ import {
   Film,
   Info,
   LayoutGrid,
+  ListChecks,
   Loader2,
   Pencil,
   Plus,
@@ -57,6 +58,7 @@ import { FORMATS } from "../../lib/presets";
 import { openReelsToFind } from "../../lib/reels";
 import { useAgent } from "../../lib/agent";
 import { useDock } from "../../lib/dock";
+import { useSetup, stepsLeft } from "../../lib/setup";
 import { useEditor } from "../../lib/store";
 import { formatLength } from "../../lib/time";
 import type { Collection, LibraryProject, Said } from "../../lib/types";
@@ -342,7 +344,7 @@ export function Home() {
   // Keys of the home screen: Esc goes back to the editor, typing searches.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (menu || useLibrary.getState().pendingSwitch || document.querySelector("dialog[open]") || useStyle.getState().learnOpen) return;
+      if (menu || useLibrary.getState().pendingSwitch || document.querySelector("dialog[open]") || useStyle.getState().learnOpen || useSetup.getState().open) return;
       const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
       // The style page has no search; its fields take what is typed.
       const style = useLibrary.getState().page === "style";
@@ -719,7 +721,7 @@ function FirstRun() {
         {!WINDOWS && (
           <p>
             Want AI to do the cutting?{" "}
-            <button type="button" onClick={openAi} className="text-accent hover:underline">
+            <button type="button" onClick={() => useSetup.getState().openSetup()} className="text-accent hover:underline">
               Get set up
             </button>{" "}
             or{" "}
@@ -813,6 +815,7 @@ function Sidebar({
   const count = (id: string) => projects?.filter((p) => p.collection === id).length ?? 0;
   const page = useLibrary((s) => s.page);
   const suggestions = useStyle((s) => s.view?.suggestions.length ?? 0);
+  const left = useSetup((s) => stepsLeft(s.states));
   const pick = (id: string) => useLibrary.setState({ filter: id, page: "projects", selection: [] });
 
   const rowKeys = (e: KeyboardEvent<HTMLElement>) => {
@@ -843,6 +846,15 @@ function Sidebar({
           countLabel={suggestions === 1 ? "1 suggestion" : `${suggestions} suggestions`}
           on={page === "style"}
           onClick={() => useLibrary.setState({ page: "style", selection: [] })}
+          onKeyDown={rowKeys}
+        />
+        <Row
+          icon={<ListChecks size={16} />}
+          label="Get set up"
+          count={left || undefined}
+          countLabel={left === 1 ? "1 step left" : `${left} steps left`}
+          on={false}
+          onClick={() => useSetup.getState().openSetup()}
           onKeyDown={rowKeys}
         />
         <div className="mt-4 mb-1 flex h-7 items-center justify-between pl-2.5">

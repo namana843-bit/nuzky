@@ -109,10 +109,11 @@ class Hands:
             raise RuntimeError('the page did not see the pointer move')
         return at
 
-    def over(self, css):
-        """Moves the pointer to the middle of the element; true once the page sees it there."""
+    def over(self, css, x=0.5, y=0.5):
+        """Moves the pointer to a point of the element, its middle unless `x` and `y` say which share of its width
+        and height; true once the page sees it there."""
         left, top = self.r.s.run('const b = document.querySelector(arguments[0]).getBoundingClientRect();'
-                                 'return [b.left + b.width / 2, b.top + b.height / 2];', css)
+                                 'return [b.left + b.width * arguments[1], b.top + b.height * arguments[2]];', css, x, y)
         self.at = (round(self.origin[0] + left * self.scale), round(self.origin[1] + top * self.scale))
         if MACOS:
             return self.r.s.run('return !!document.elementFromPoint(arguments[0], arguments[1])?.closest(arguments[2]);',
@@ -122,14 +123,18 @@ class Hands:
                             'return !!document.elementFromPoint(x, y)?.closest(arguments[0]);', css)
 
     def double_click(self, css):
-        """Two clicks on the element within the double-click time; false when the pointer missed it."""
-        if not self.over(css):
+        return self.click(css, times=2)
+
+    def click(self, css, x=0.5, y=0.5, times=1):
+        """`times` clicks on the element, at the point `over` takes, within the double-click time; false when the
+        pointer missed it."""
+        if not self.over(css, x, y):
             if MACOS:
                 return False
             self.calibrate()
-            if not self.over(css):
+            if not self.over(css, x, y):
                 return False
-        for clicks in (1, 2):
+        for clicks in range(1, times + 1):
             if MACOS:
                 pointer('down', *self.at, clicks)
                 time.sleep(0.03)

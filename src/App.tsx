@@ -13,6 +13,7 @@ import { US, formatDuration } from "./lib/time";
 import type { JobEvent, ProjectSummary, Snapshot, SpeechModelQuestion, Transport } from "./lib/types";
 import { ChatGptDialog } from "./components/ChatGptDialog";
 import { ConnectAgentDialog } from "./components/ConnectAgentDialog";
+import { SetupDialog } from "./components/setup/SetupDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { SpeechModelDialog } from "./components/SpeechModelDialog";
 import { Inspector } from "./components/inspector/Inspector";
@@ -24,6 +25,7 @@ import { Toasts } from "./components/Toasts";
 import { DockDragLayer, DockedAiPanel, FloatingAiPanel } from "./components/ai/AiDock";
 import { listenAgentEvents, panelRunEnded, useAgent } from "./lib/agent";
 import { togglePanel, useDock, useDockLayout, useWindowSize } from "./lib/dock";
+import { useSetup } from "./lib/setup";
 import { PANE_MIN, paneLayout, setPane, usePanes } from "./lib/layout";
 import { TopBar } from "./components/TopBar";
 import { Button, DisabledHint, Splitter } from "./components/ui";
@@ -411,7 +413,7 @@ useEditor.subscribe((s, prev) => {
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
-    __nuzky: { importPaths, store: useEditor, cover: useCover, reels: useReels, openReelsToFind, speech: useSpeech, api, agent: useAgent, dock: useDock, library: useLibrary, style: useStyle, addProjects, findDrafts, newProjectFromMedia, capcut: useCapCut, openDraft, openDraftFolder, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds, stickers: useStickers, previewWindow: appWindow },
+    __nuzky: { importPaths, store: useEditor, cover: useCover, reels: useReels, openReelsToFind, speech: useSpeech, api, agent: useAgent, dock: useDock, setup: useSetup, library: useLibrary, style: useStyle, addProjects, findDrafts, newProjectFromMedia, capcut: useCapCut, openDraft, openDraftFolder, openProject, refreshLibrary, trashProjects, updates: useUpdates, checkForUpdates, sounds: useSounds, stickers: useStickers, previewWindow: appWindow },
   });
 
 async function startEditor() {
@@ -516,6 +518,7 @@ export default function App() {
   const launcherOpen = useEditor((s) => s.launcherOpen);
   // Learning from videos opens from Your style, the top bar or a toast, anywhere.
   const learnOpen = useStyle((s) => s.learnOpen);
+  const setupOpen = useSetup((s) => s.open);
   // Choosing reels: the candidates in the timeline's place, the preview wide without the inspector.
   const reels = useReels((s) => s.open);
   const full = usePreview((s) => s.full);
@@ -600,12 +603,13 @@ export default function App() {
         <DragChip />
       </div>
       {home && (
-        <div className="fixed inset-0 z-[60]" inert={snap.recovery}>
+        <div className="fixed inset-0 z-[60]" inert={snap.recovery || setupOpen}>
           <Home />
         </div>
       )}
       {launcherOpen && !home && <Launcher />}
       <ExportDialog />
+      <SetupDialog />
       <ConnectAgentDialog />
       <ChatGptDialog />
       {learnOpen && <LearnDialog />}
