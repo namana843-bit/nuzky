@@ -156,7 +156,8 @@ def setup(r):
 
     relaunch(r)
     r.check('after a restart the row still counts 3 steps left', wait(lambda: row(r).get('count') == '3 steps left', 10), row(r))
-    r.s.run(CLICK, 'Get set up', 'nav[aria-label=Collections]')
+    r.check('the sidebar row takes the focus', r.s.run(FOCUS_TEXT, 'Get set up', 'nav[aria-label=Collections]'))
+    press('Return')
     d = wait(lambda: dialog(r), 5)
     r.check('after a restart it opens on the step shown before, with the same states',
             d and d['panel'] == 'Check this computer' and rail(d)[:3] == [['Captions model', 'Skipped'], ['Connect your AI', 'Done'], ['Check this computer']]
@@ -170,12 +171,18 @@ def setup(r):
     r.check("then a letter key leaves the home screen's search empty and the focus in Get set up", after == {'search': '', 'inside': True}, after)
     r.check('a click beside the box', hands.click('body', 0.04, 0.5))
     r.check('a click on the scrim beside it closes Get set up', wait(lambda: not dialog(r), 3), dialog(r))
+    r.check('and the focus is back on the sidebar row that opened it', wait(lambda: (r.s.run(FOCUS) or '').startswith('Get set up'), 3), r.s.run(FOCUS))
     if dialog(r):
         r.s.run(CLICK, 'Close', BOX)
     r.s.run(CLICK, 'Get set up', 'nav[aria-label=Collections]')
     d = wait(lambda: dialog(r), 5)
     r.check('it opens again where it was, with the same states',
             d and d['panel'] == 'Check this computer' and rail(d)[:3] == [['Captions model', 'Skipped'], ['Connect your AI', 'Done'], ['Check this computer']], d)
+    r.s.run('document.activeElement?.blur()')
+    press('Tab')
+    r.check('with the focus lost, Tab goes into Get set up, never to the home screen under it',
+            wait(lambda: r.s.run(f"return !!document.activeElement?.closest('{BOX}')"), 3), r.s.run(FOCUS))
+    r.s.run(f"document.querySelector('{BOX} [role=tab][aria-selected=true]').focus()")
 
     press('End')
     r.check('End shows Your first cut', wait(lambda: (dialog(r) or {}).get('panel') == 'Your first cut', 3), dialog(r))

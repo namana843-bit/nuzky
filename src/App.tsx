@@ -518,6 +518,7 @@ export default function App() {
   const launcherOpen = useEditor((s) => s.launcherOpen);
   // Learning from videos opens from Your style, the top bar or a toast, anywhere.
   const learnOpen = useStyle((s) => s.learnOpen);
+  const setupOpen = useSetup((s) => s.open);
   // Choosing reels: the candidates in the timeline's place, the preview wide without the inspector.
   const reels = useReels((s) => s.open);
   const full = usePreview((s) => s.full);
@@ -602,7 +603,7 @@ export default function App() {
         <DragChip />
       </div>
       {home && (
-        <div className="fixed inset-0 z-[60]" inert={snap.recovery}>
+        <div className="fixed inset-0 z-[60]" inert={snap.recovery || setupOpen}>
           <Home />
         </div>
       )}

@@ -35,7 +35,16 @@ export function SetupDialog() {
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center scrim-in bg-black/45" onPointerDown={(e) => e.target === e.currentTarget && closeSetup()}>
+    <div
+      data-scrim
+      className="fixed inset-0 z-[100] flex items-center justify-center scrim-in bg-black/45"
+      onPointerDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        // Otherwise the press would take the focus that closing gives back to the opener.
+        e.preventDefault();
+        closeSetup();
+      }}
+    >
       <div
         role="dialog"
         aria-modal="true"
