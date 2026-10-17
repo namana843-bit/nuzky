@@ -219,7 +219,12 @@ function onJob(job: JobEvent) {
   if (job.kind === "transcript" && job.status === "done") toast({ kind: "success", text: `Transcript ready: ${job.output ?? "words"}` });
   if (job.kind === "transcript" && job.status === "failed") toast({ kind: "error", text: `Transcript failed: ${plainError(job.message ?? "")}`, action: retry });
   if (job.kind === "audio" && job.status === "failed") toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}` });
-  if (job.kind === "speech-model" && job.status === "failed") toast({ kind: "error", text: plainError(job.message ?? "") });
+  // Get set up's download finishes its step, also when the step was skipped or Get set up closed meanwhile.
+  if (job.id === "speech-model:setup" && job.status === "done") useSetup.getState().finishStep("captions");
+  // Captions model in Get set up shows its own download's failure with Try again while it is on screen.
+  const setup = useSetup.getState();
+  if (job.kind === "speech-model" && job.status === "failed" && !(job.id === "speech-model:setup" && setup.open && setup.current === "captions"))
+    toast({ kind: "error", text: plainError(job.message ?? "") });
   if (job.kind === "proxy" && job.status === "failed")
     toast({ kind: "error", text: `${job.label} failed: ${plainError(job.message ?? "")}. The preview plays the original file, which can stutter.` });
   if (job.kind === "matte" && job.status === "failed")

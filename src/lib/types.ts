@@ -1147,6 +1147,26 @@ export type SpeechModelQuestion = {
   sizeMb: number,
 };
 
+export type SpeechSetup = {
+  /**
+   * Recognition runs on the GPU: Metal on macOS, Vulkan on Linux.
+   */
+  gpu: boolean,
+  /**
+   * None when the language has no word timing model, so its word times are estimates.
+   */
+  wordTimingMb: number | null,
+  /**
+   * What `start_speech_setup` would still download for each model in this language.
+   */
+  models: Array<SpeechSetupModel>,
+};
+
+export type SpeechSetupModel = {
+  id: string,
+  missingMb: number,
+};
+
 export type StickerCatalog = {
   groups: Array<StickerGroup>,
 };
