@@ -15,7 +15,7 @@ const EDGE = 64;
 const useDrag = create<{ target: DockMode; zone: Rect } | null>(() => null);
 
 /** The place under the pointer, and the area the panel would take there. */
-function targetAt(x: number, y: number, ghost: Rect): { target: DockMode; zone: Rect } {
+function targetAt(x: number, y: number, float: Rect, slot: DOMRect | undefined): { target: DockMode; zone: Rect } {
   const w = window.innerWidth;
   const h = window.innerHeight;
   if (dockMax(w) !== null && y > TOP_BAR) {
@@ -23,14 +23,14 @@ function targetAt(x: number, y: number, ghost: Rect): { target: DockMode; zone: 
     if (x < EDGE) return { target: "left", zone: { x: GAP, y: TOP_BAR, w: width, h: h - TOP_BAR - GAP } };
     if (x > w - EDGE) return { target: "right", zone: { x: w - GAP - width, y: TOP_BAR, w: width, h: h - TOP_BAR - GAP } };
   }
-  const slot = document.querySelector<HTMLElement>("[data-dock-slot=inspector]")?.getBoundingClientRect();
   if (slot && x >= slot.left && x <= slot.right && y >= slot.top && y <= slot.bottom) return { target: "inspector", zone: { x: slot.left, y: slot.top, w: slot.width, h: slot.height } };
-  return { target: "float", zone: clampFloat(ghost) };
+  return { target: "float", zone: float };
 }
 
 /**
  * Starts moving the panel from a pointer press on its header. A press that does not move is a
- * click (`onClick`). While dragging, the place it would land shows; Esc cancels.
+ * click (`onClick`). While dragging, the panel follows the pointer at its floating size, a docking
+ * place under the pointer shows its outline, and Esc puts the panel back.
  */
 export function startMove(e: React.PointerEvent, panel: HTMLElement, onClick?: () => void) {
   if (e.button !== 0) return;
@@ -42,10 +42,31 @@ export function startMove(e: React.PointerEvent, panel: HTMLElement, onClick?: (
   // The panel keeps the point that was grabbed under the pointer, as far as its floating size allows.
   const grabX = Math.min(sx - r.left, size.w - 24);
   const grabY = Math.min(sy - r.top, 40);
+  // A floating panel moves with its frame (shadow and resize edges); a docked one lifts out of its column.
+  const box = panel.closest<HTMLElement>("[data-floating]") ?? panel;
+  const from = box.getBoundingClientRect();
+  const lift: Partial<CSSStyleDeclaration> =
+    box === panel
+      ? {
+          position: "fixed",
+          left: `${from.left}px`,
+          top: `${from.top}px`,
+          width: `${size.w}px`,
+          height: `${size.h}px`,
+          zIndex: "80",
+          boxShadow: "0 18px 50px rgb(0 0 0 / .55)",
+          outlineColor: "rgb(255 255 255 / .12)",
+        }
+      : {};
+  // Only what the drag set is taken back, so a left or top React wrote meanwhile stays.
+  const cleared = Object.fromEntries([...Object.keys(lift), "transform", "cursor"].map((k) => [k, ""]));
+  // Taken before the panel moves: in the inspector's place the panel itself is the slot.
+  const slot = document.querySelector<HTMLElement>("[data-dock-slot=inspector]")?.getBoundingClientRect();
   let moved = false;
   const end = () => {
     useDrag.setState(null, true);
     window.removeEventListener("keydown", onKey, true);
+    Object.assign(box.style, cleared);
   };
   const onKey = (k: KeyboardEvent) => {
     if (k.key !== "Escape") return;
@@ -57,8 +78,13 @@ export function startMove(e: React.PointerEvent, panel: HTMLElement, onClick?: (
   const stopFollowing = followPointer({
     move: (ev) => {
       if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+      if (!moved) Object.assign(box.style, lift, { cursor: "grabbing" });
       moved = true;
-      useDrag.setState(targetAt(ev.clientX, ev.clientY, { x: ev.clientX - grabX, y: ev.clientY - grabY, w: size.w, h: size.h }), true);
+      // It follows the pointer past the window's edge; dropped, it floats inside the window.
+      const x = ev.clientX - grabX;
+      const y = ev.clientY - grabY;
+      box.style.transform = `translate(${x - from.left}px, ${y - from.top}px)`;
+      useDrag.setState(targetAt(ev.clientX, ev.clientY, clampFloat({ x, y, w: size.w, h: size.h }), slot), true);
     },
     up: () => {
       const drop = useDrag.getState();
@@ -77,15 +103,15 @@ export function moveFloatBy(dx: number, dy: number) {
   useDock.setState({ float: clampFloat({ ...f, x: f.x + dx, y: f.y + dy }) });
 }
 
-/** Where the dragged panel would land: an outline of that area, with the place's name. */
+/** The docking place the dragged panel would land in: an outline of that area under the panel, named at its bottom. */
 export function DockDragLayer() {
   const drag = useDrag();
-  if (!drag) return null;
+  if (!drag || drag.target === "float") return null;
   const { zone, target } = drag;
   return (
     <div
       aria-hidden
-      className="pointer-events-none fixed z-[100] flex items-center justify-center rounded-xl border-2 border-accent bg-accent/[.10]"
+      className="pointer-events-none fixed z-[70] flex items-end justify-center rounded-xl border-2 border-accent bg-accent/[.10] pb-4"
       style={{ left: zone.x, top: zone.y, width: zone.w, height: zone.h }}
     >
       <span className="rounded-md bg-black/60 px-2 py-1 text-[12px] font-medium text-fg">{DOCK_LABELS[target]}</span>
@@ -103,7 +129,9 @@ export function DockedAiPanel({ side, width, inspectorMax }: { side: "left" | "r
   const inspector = inspectorMax !== undefined;
   return (
     <div className={`relative flex shrink-0 flex-col pb-1.5 ${side === "right" ? "pr-1.5" : "pl-1.5"}`} style={{ width: width + GAP }}>
-      <AiPanel panelRef={panel} className="min-h-0 flex-1" />
+      {/* Shows the column's place while the panel is lifted out of it. */}
+      <div aria-hidden className={`pane absolute top-0 bottom-1.5 ${side === "right" ? "left-0 right-1.5" : "left-1.5 right-0"}`} />
+      <AiPanel panelRef={panel} className="relative min-h-0 flex-1" />
       {/* The 6 px gap between the editor and the column; the panel grows towards the editor. */}
       <Splitter
         what="AI panel"
@@ -155,7 +183,7 @@ function resize(e: React.PointerEvent, edges: Edges, start: Rect) {
 export function FloatingAiPanel({ rect }: { rect: Rect }) {
   const panel = useRef<HTMLElement>(null);
   return (
-    <div className="fixed z-[80] flex rounded-xl shadow-[0_18px_50px_rgb(0_0_0/.55)]" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}>
+    <div data-floating className="fixed z-[80] flex rounded-xl shadow-[0_18px_50px_rgb(0_0_0/.55)]" style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}>
       <AiPanel panelRef={panel} className="min-h-0 flex-1 outline-white/[.12]" />
       {HANDLES.map(([edges, cls, label]) => (
         <div
