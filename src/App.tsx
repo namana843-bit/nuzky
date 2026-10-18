@@ -428,6 +428,10 @@ useEditor.subscribe((s, prev) => {
   if (s.playing !== prev.playing) document.documentElement.toggleAttribute("data-playing", s.playing);
 });
 
+useEditor.subscribe((s, prev) => {
+  if (s.view === "editor" && prev.view === "home") void api.maximizeWindow();
+});
+
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
 if (import.meta.env.DEV)
   Object.assign(window, {
