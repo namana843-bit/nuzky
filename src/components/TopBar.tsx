@@ -83,14 +83,14 @@ function ProjectsButton() {
   );
 }
 
-/** Background work. A speech model download shows first, with its Stop; export reopens its dialog; captions and transcripts open their tab; a preview proxy and work an AI agent started can be stopped. */
+/** Background work. A model download shows first, with its Stop; export reopens its dialog; captions and transcripts open their tab; a preview proxy and work an AI agent started can be stopped. */
 export function JobIndicator() {
   const jobs = useEditor((s) => s.jobs);
   const running = Object.values(jobs).filter((j) => j.status === "running");
   if (running.length === 0) return null;
   const j =
     // Its Stop is here (and in Get set up for the download it started); an export and recognition have theirs in their dialog and tab.
-    running.find((x) => x.kind === "speech-model") ??
+    running.find((x) => x.kind === "speech-model" || x.kind === "vision-models") ??
     running.find((x) => x.kind === "export") ??
     running.find((x) => x.kind === "captions" || x.kind === "transcript") ??
     // Ahead of the audio prepared beside them, so their Stop is there.
@@ -127,18 +127,20 @@ export function JobIndicator() {
         </Button>
       </span>
     );
-  if (j.kind === "speech-model")
+  if (j.kind === "speech-model" || j.kind === "vision-models") {
+    const stop = j.kind === "speech-model" ? "Stop downloading the speech model" : "Stop downloading the face and person models";
     return (
       <span className="bar flex h-8 items-center gap-1.5 rounded-full pl-3 pr-1 text-[12px] font-medium text-fg" role="status">
         {body}
-        <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" aria-label="Stop downloading the speech model" title="Stop downloading the speech model" onClick={() => void api.cancelJob(j.id)}>
+        <Button pill className="h-6 shrink-0 px-2.5 text-[12px]" aria-label={stop} title={stop} onClick={() => void api.cancelJob(j.id)}>
           Stop
         </Button>
       </span>
     );
-  // A cover export reopens the Export dialog; picking frames, masks and model downloads open the cover editor.
+  }
+  // A cover export reopens the Export dialog; picking frames and masks open the cover editor.
   const coverExport = j.id.startsWith("cover-export:");
-  const cover = (j.kind === "cover" && !coverExport) || j.kind === "vision-models";
+  const cover = j.kind === "cover" && !coverExport;
   return (
     <button
       type="button"
