@@ -60,7 +60,7 @@ pub(crate) fn open_input(path: &Path) -> Result<ff::format::context::Input> {
     ff::format::input_with_dictionary(path, options).with_context(|| format!("Cannot open {}", path.display()))
 }
 
-fn origin_us(input: &ff::format::context::Input) -> i64 {
+pub(crate) fn origin_us(input: &ff::format::context::Input) -> i64 {
     let start = unsafe { (*input.as_ptr()).start_time };
     if start == ff::ffi::AV_NOPTS_VALUE { 0 } else { start }
 }
@@ -363,6 +363,7 @@ pub fn probe(path: &Path, id: String) -> Result<Asset> {
         rotation: 0,
         mirror: false,
         credit: None,
+        part: None,
     };
 
     if let Some(grid) = tile_grid(&input) {
@@ -1083,6 +1084,7 @@ mod tests {
             rotation: 90,
             mirror: true,
             credit: None,
+            part: None,
         };
         let (out, w, h) = orient(&pixels, 3, 2, &asset);
         assert_eq!(
