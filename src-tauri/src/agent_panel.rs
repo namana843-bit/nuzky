@@ -330,6 +330,47 @@ fn send(
     Ok(())
 }
 
+/// A message the user sends while the agent works on `turn`: "taken" in this turn, or "next" when the panel
+/// sends it as the next message once this turn ends. Codex reads one message per turn, so once it has kept
+/// this turn's it is "stopped" for it: its run ends first, as when its bridge disconnects, so the jobs it
+/// started go on.
+#[tauri::command]
+pub async fn agent_steer(
+    app: AppHandle,
+    turn: String,
+    text: String,
+    context: PromptContext,
+) -> CmdResult<&'static str> {
+    tauri::async_runtime::spawn_blocking(move || steer(&app, &turn, &text, &context)).await.map_err(err)?
+}
+
+fn steer(app: &AppHandle, turn: &str, text: &str, context: &PromptContext) -> CmdResult<&'static str> {
+    let (panel, state) = (app.state::<AgentPanel>(), app.state::<AppState>());
+    let project = state.session.lock().unwrap().host.session.state().map_err(err)?.project;
+    let prompt = prompt(text, context, &project);
+    let this = |(id, started): &&(String, Turn)| id == turn && started.running();
+    let resumable = match panel.active.lock().unwrap().as_ref().filter(this) {
+        None => return Ok("next"),
+        Some((_, started)) => {
+            if started.steer(&prompt) {
+                return Ok("taken");
+            }
+            started.resumable()
+        }
+    };
+    if !resumable {
+        return Ok("next");
+    }
+    let ended = state.session.lock().unwrap().host.session.stop_run();
+    if let Some((_, started)) = panel.active.lock().unwrap().as_ref().filter(this) {
+        started.stop();
+    }
+    match ended {
+        Err(error) if !error.to_string().starts_with("INVALID_RUN") => Err(err(error)),
+        _ => Ok("stopped"),
+    }
+}
+
 /// Stops the agent: Nuzky ends the run first, so the editor unlocks at once whatever the agent does.
 /// A message still starting is stopped as soon as it runs. Its jobs stop too, also between turns,
 /// which is how a new conversation ends the old one's.
