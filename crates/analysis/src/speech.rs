@@ -228,7 +228,9 @@ fn recognition_params(language: &str) -> FullParams<'_, '_> {
     params.set_no_context(true);
     params.set_temperature(0.0);
     params.set_temperature_inc(0.0);
-    params.set_suppress_nst(true);
+    // Suppressing symbols also bans the opening quote Whisper sometimes needs before a word, and it then
+    // skips the word: a restarted "Hele, mě…" lost its "Hele". Annotations are dropped in WordBuilder instead.
+    params.set_suppress_nst(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_special(false);
@@ -373,13 +375,14 @@ impl WordBuilder {
             if part.first().is_some_and(u8::is_ascii_whitespace) {
                 self.flush();
             }
+            // Quotation marks are not heard, so a quote token gives no time to the word it opens.
             let content = part.trim_ascii();
-            if !content.is_empty() {
+            if content.iter().any(|&b| b != b'"') {
                 if self.bytes.is_empty() {
                     self.start = start;
                 }
                 self.end = end;
-                self.bytes.extend_from_slice(content);
+                self.bytes.extend(content.iter().filter(|&&b| b != b'"'));
                 self.probability += if probability.is_finite() { probability.clamp(0.0, 1.0) as f64 } else { 0.0 };
                 self.tokens += 1;
             }
@@ -408,24 +411,36 @@ impl WordBuilder {
 
     fn finish(mut self) -> Vec<Word> {
         self.flush();
-        let mut closing = None;
+        // An annotation runs from its opener to the word that closes it, punctuation after the closer
+        // allowed: "(smích), Ahoj" or "* music playing * Hello". An opener nothing closes is speech.
+        let mut annotation = vec![false; self.words.len()];
+        let mut i = 0;
+        while i < self.words.len() {
+            let text = self.words[i].text.trim_matches('.');
+            let end = match text.chars().next() {
+                Some('[') => Some(']'),
+                Some('(') => Some(')'),
+                Some('*') => Some('*'),
+                _ => None,
+            };
+            let close = end.and_then(|end| {
+                (i..self.words.len()).find(|&j| {
+                    let word = if j == i { &text[1..] } else { self.words[j].text.as_str() };
+                    word.trim_end_matches(|c: char| !c.is_alphanumeric() && c != end).ends_with(end)
+                })
+            });
+            match close {
+                Some(j) => {
+                    annotation[i..=j].fill(true);
+                    i = j + 1;
+                }
+                None => i += 1,
+            }
+        }
+        let mut annotation = annotation.into_iter();
         self.words.retain(|word| {
             let text = word.text.trim_matches('.');
-            if closing.is_none() {
-                closing = match text.chars().next() {
-                    Some('[') => Some(']'),
-                    Some('(') => Some(')'),
-                    Some('*') => Some('*'),
-                    _ => None,
-                };
-            }
-            if let Some(end) = closing {
-                if text.ends_with(end) {
-                    closing = None;
-                }
-                return false;
-            }
-            !is_annotation(text) && text.chars().any(char::is_alphanumeric)
+            !annotation.next().unwrap_or(false) && !is_annotation(text) && text.chars().any(char::is_alphanumeric)
         });
         self.words
     }
@@ -433,7 +448,10 @@ impl WordBuilder {
 
 fn is_annotation(text: &str) -> bool {
     let text = text.trim_matches(|c: char| c.is_whitespace() || c == '.');
-    [('[', ']'), ('(', ')'), ('*', '*')].iter().any(|&(a, b)| text.starts_with(a) && text.ends_with(b))
+    // One annotation only: "[Hudba] Ahoj. [Hudba]" is speech between two of them.
+    [('[', ']'), ('(', ')'), ('*', '*')]
+        .iter()
+        .any(|&(a, b)| text.strip_prefix(a).and_then(|rest| rest.find(b).map(|i| i + 1 == rest.len())) == Some(true))
         || text.chars().all(|c| c == '♪' || c == '♫' || c.is_whitespace())
 }
 
@@ -491,5 +509,42 @@ mod tests {
         assert_eq!(words[0].text, "Příklad.");
         assert!((words[0].probability - 0.9).abs() < 1e-6);
         assert_eq!(words[1].text, "Ahoj");
+    }
+
+    #[test]
+    fn annotations_close_after_punctuation_and_need_a_closer() {
+        let mut builder = WordBuilder::default();
+        builder.push(b" (sm\xc3\xadch), Ahoj. * music playing * Hello", 0, 500_000, 0.9);
+        let words = builder.finish();
+        assert_eq!(words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["Ahoj.", "Hello"]);
+
+        let mut builder = WordBuilder::default();
+        builder.push(" [Hudba]… Ahoj, * jak se máš?".as_bytes(), 0, 500_000, 0.9);
+        let words = builder.finish();
+        assert_eq!(words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["Ahoj,", "jak", "se", "máš?"]);
+    }
+
+    #[test]
+    fn speech_between_annotations_is_not_an_annotation() {
+        assert!(is_annotation(" [Hudba]"));
+        assert!(is_annotation("(smích)."));
+        assert!(!is_annotation(" [Hudba] Ahoj, vítejte u dalšího videa. [Hudba]"));
+        assert!(!is_annotation("*smích* No to je super. *smích*"));
+        assert!(!is_annotation(" ["));
+        assert!(!is_annotation("*"));
+    }
+
+    #[test]
+    fn quotes_neither_show_nor_move_word_times() {
+        let mut builder = WordBuilder::default();
+        builder.push(b" \"", 50_000, 50_000, 0.5);
+        builder.push(b"He", 110_000, 150_000, 0.9);
+        builder.push(b"le,", 150_000, 250_000, 0.9);
+        builder.push(b"\"", 250_000, 300_000, 0.5);
+        builder.push(b" m\xc4\x9b", 300_000, 400_000, 0.9);
+        let words = builder.finish();
+        assert_eq!(words.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["Hele,", "mě"]);
+        assert_eq!((words[0].start_us, words[0].end_us), (110_000, 250_000));
+        assert!((words[0].probability - 0.9).abs() < 1e-6);
     }
 }
