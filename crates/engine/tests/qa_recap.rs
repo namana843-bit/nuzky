@@ -17,7 +17,7 @@ const S: i64 = 1_000_000;
 
 fn sound(id: &str) -> Asset {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/sounds").join(format!("{id}.ogg"));
-    probe(&path, format!("nuzky:{id}")).unwrap()
+    probe(&path, id.into()).unwrap()
 }
 
 /// A 20 s vertical talking-head take with a 440 Hz tone, cut at 2–4 s and 10–12.5 s, with the built-in swish.
