@@ -23,12 +23,12 @@ import { paneLayout, usePanes } from "./lib/layout";
 import { Button, DisabledHint } from "./components/ui";
 import { Home } from "./components/home/Home";
 import { openDraft, useCapCut, openDraftFolder } from "./lib/capcut";
-import { newProjectFromMedia, openProject, refreshLibrary, trashProjects, useLibrary } from "./lib/library";
+import { newProjectFromMedia, openProject, refreshLibrary, showHome, trashProjects, useLibrary } from "./lib/library";
 import { checkForUpdates, startUpdates, useUpdates } from "./lib/updates";
 import { useSounds } from "./lib/sounds";
 import { useStickers } from "./lib/stickers";
 import { addProjects, findDrafts, listenStyle, loadStyle, useStyle } from "./lib/style";
-import { closeCover, deleteText, exportCover, loadModels as loadVisionModels, onCoverJob, useCover } from "./lib/cover";
+import { closeCover, closeExport, deleteText, exportCover, loadModels as loadVisionModels, onCoverJob, useCover } from "./lib/cover";
 import { candidateOf, closeReels, onReelsJob, openReelsToFind, playEnding, toggleReelPlay, useReels } from "./lib/reels";
 import { appWindow, toggleFullPreview, toggleMuted, usePreview } from "./lib/preview";
 
@@ -322,6 +322,17 @@ function useBackendEvents() {
         useEditor.getState().toast({ kind: "error", text: "macOS didn't show the window for choosing a file. Quit Nuzky, open it again and try once more." }),
       ),
     );
+    // A reloaded page starts on the projects, while the backend still remembers the editor.
+    void api.setEditorShown(useEditor.getState().view === "editor");
+    // The editor's own dialogs would cover the projects; an export goes on without its dialog.
+    offs.push(
+      listen("close-to-home", () => {
+        closeExport();
+        useYoutube.setState({ open: false, url: "" });
+        useCapCut.setState({ opened: null });
+        showHome();
+      }),
+    );
     offs.push(
       listen<string>("close-save-failed", (e) =>
         useEditor.getState().toast({ kind: "error", text: `Your last changes could not be saved: ${e.payload}. Free some disk space and close again, or close again to quit without them.` }),
@@ -430,7 +441,9 @@ useEditor.subscribe((s, prev) => {
 });
 
 useEditor.subscribe((s, prev) => {
-  if (s.view === "editor" && prev.view === "home") void api.maximizeWindow();
+  if (s.view === prev.view) return;
+  void api.setEditorShown(s.view === "editor");
+  if (s.view === "editor") void api.maximizeWindow();
 });
 
 // Test hook for WebDriver runs; native file dialogs cannot be automated.
