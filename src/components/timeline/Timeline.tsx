@@ -37,6 +37,7 @@ const HEADER_W = 140;
 const RULER_H = 28;
 /** Space between lanes. It belongs to the rows, so the track header column runs unbroken. */
 const ROW_GAP = 4;
+const LANES_AT = { left: HEADER_W, top: RULER_H };
 const END_TIP = "The video ends here. Sound after this point is not exported.";
 
 function rowHeight(track: Track) {
@@ -141,17 +142,20 @@ function tickStep(zoom: number): number {
 
 const VISIBLE_STEP = 400;
 
-/** The playhead line, the one part of the timeline that follows playback frame by frame; it keeps itself in view while playing. */
-function Playhead({ zoom, scroller }: { zoom: number; scroller: RefObject<HTMLDivElement | null> }) {
+/**
+ * The playhead line, the one part of the timeline that follows playback frame by frame; it keeps itself in view while playing,
+ * except while `follow` is off: a box select scrolls the timeline itself.
+ */
+function Playhead({ zoom, scroller, follow }: { zoom: number; scroller: RefObject<HTMLDivElement | null>; follow: boolean }) {
   const timeUs = useEditor((s) => s.timeUs);
   const playing = useEditor((s) => s.playing);
   useEffect(() => {
     const el = scroller.current;
-    if (!el || !playing) return;
+    if (!el || !playing || !follow) return;
     const x = (timeUs / US) * zoom;
     const lane = el.clientWidth - HEADER_W;
     if (x > el.scrollLeft + lane - 24 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 48);
-  }, [timeUs, playing, zoom, scroller]);
+  }, [timeUs, playing, zoom, scroller, follow]);
   // Above the ruler, below the track headers. The dark edges keep it visible on bright footage; no blur, it moves every frame.
   // It moves by transform on its own layer, so playback never repaints the clips under it.
   return (
@@ -189,24 +193,8 @@ export function Timeline({ height }: { height: number }) {
   /** The project as last shown, where a deleted clip's neighbours are found. */
   const shown = useRef(project);
   const closeMenu = useCallback(() => setMenu(null), []);
-  // While Undo or Redo is hovered, the lanes draw the project that step would restore, with what changes marked.
-  // Only the drawing: selection, focus and edits keep working on the project as it is.
-  const [peek, setPeek] = useState<Peek | null>(null);
-  const peekShown = peek && !locked && project && peek.revision === snap0?.revision ? peek : null;
-  const described = useMemo(() => (peekShown && project ? describePeek(project, peekShown.project) : null), [peekShown, project]);
-  const drawn = peekShown && described?.draw === "then" ? peekShown.project : project;
-
-  const tracks = useMemo(() => (drawn ? displayTracks(drawn) : []), [drawn]);
-  const duration = drawn ? contentEnd(drawn) : 0;
   const fps = project?.canvas.fps ?? 30;
   const minUs = Math.ceil(US / fps);
-  // A shorter preview never narrows the lanes, so the scroll position survives it.
-  const laneWidth = Math.max(view.width - HEADER_W, (Math.max(duration, project ? contentEnd(project) : 0) / US + 30) * zoom);
-  // Clips get the window they draw filmstrip tiles in. It moves in steps, with at least 200 px of margin on
-  // each side, so scrolling re-renders the clips once per step instead of on every scroll event.
-  const windowFrom = Math.floor(view.left / VISIBLE_STEP) * VISIBLE_STEP;
-  const visible = useMemo<[number, number]>(() => [windowFrom - 200, windowFrom + view.width + VISIBLE_STEP + 200], [windowFrom, view.width]);
-
   const timeAt = useCallback(
     (clientX: number) => {
       const el = scroller.current!;
@@ -215,6 +203,24 @@ export function Timeline({ height }: { height: number }) {
     },
     [zoom],
   );
+
+  const { drag: gesture, box, startClipDrag, startScrub, startBoxSelect } = useTimelineGestures({ project, zoom, snapping, minUs, rows, scroller, lanesAt: LANES_AT, timeAt });
+  // While Undo or Redo is hovered, the lanes draw the project that step would restore, with what changes marked.
+  // Only the drawing: selection, focus and edits keep working on the project as it is. A box select passing over
+  // the button never shows it, since the box selects the clips drawn.
+  const [peek, setPeek] = useState<Peek | null>(null);
+  const peekShown = peek && !locked && !box && project && peek.revision === snap0?.revision ? peek : null;
+  const described = useMemo(() => (peekShown && project ? describePeek(project, peekShown.project) : null), [peekShown, project]);
+  const drawn = peekShown && described?.draw === "then" ? peekShown.project : project;
+
+  const tracks = useMemo(() => (drawn ? displayTracks(drawn) : []), [drawn]);
+  const duration = drawn ? contentEnd(drawn) : 0;
+  // A shorter preview never narrows the lanes, so the scroll position survives it.
+  const laneWidth = Math.max(view.width - HEADER_W, (Math.max(duration, project ? contentEnd(project) : 0) / US + 30) * zoom);
+  // Clips get the window they draw filmstrip tiles in. It moves in steps, with at least 200 px of margin on
+  // each side, so scrolling re-renders the clips once per step instead of on every scroll event.
+  const windowFrom = Math.floor(view.left / VISIBLE_STEP) * VISIBLE_STEP;
+  const visible = useMemo<[number, number]>(() => [windowFrom - 200, windowFrom + view.width + VISIBLE_STEP + 200], [windowFrom, view.width]);
 
   // Media dragged from the media panel lands here.
   useEffect(() => {
@@ -282,7 +288,6 @@ export function Timeline({ height }: { height: number }) {
     return () => el.removeEventListener("wheel", onWheel);
   }, [setZoom]);
 
-  const { drag: gesture, startClipDrag, startScrub } = useTimelineGestures({ project, zoom, snapping, minUs, rows, timeAt });
   // A fade drag changes only the clip's fades; the ghost, the slot and the snap guide belong to moves and trims.
   const drag = gesture && !isFade(gesture.mode) ? gesture : null;
   const fading = gesture?.moved && isFade(gesture.mode) ? gesture : null;
@@ -587,6 +592,7 @@ export function Timeline({ height }: { height: number }) {
           {/* Tracks */}
           <div
             className="relative flex flex-1 flex-col"
+            onPointerDown={(e) => (e.target as HTMLElement).hasAttribute("data-lane") && startBoxSelect(e)}
             onKeyDown={onClipKey}
             onFocus={(e) => {
               const id = (e.target as HTMLElement).getAttribute?.("data-clip-id");
@@ -602,24 +608,19 @@ export function Timeline({ height }: { height: number }) {
               const h = rowHeight(track);
               const isMain = track.id === MAIN_TRACK;
               return (
-                <div key={track.id} className="flex shrink-0" style={{ height: h + ROW_GAP }}>
+                <div key={track.id} data-lane className="flex shrink-0" style={{ height: h + ROW_GAP }}>
                   <TrackHeader track={track} width={HEADER_W} locked={locked} />
                   <div
                     ref={(el) => {
                       if (el) rows.current.set(track.id, el);
                       else rows.current.delete(track.id);
                     }}
+                    data-lane
                     role="listbox"
                     aria-label={`${track.name || track.kind} track`}
                     aria-multiselectable
                     className={`relative flex-1 ${isMain ? "bg-white/[0.035]" : "bg-white/[0.015]"} ${assetDrag && dropTime !== null ? "outline-1 outline-dashed outline-white/20" : ""}`}
                     style={{ marginBlock: ROW_GAP / 2 }}
-                    onPointerDown={(e) => {
-                      if (e.target === e.currentTarget) {
-                        select([]);
-                        startScrub(e);
-                      }
-                    }}
                   >
                     {isMain && emptyTimeline && !peekShown && (
                       <div className="pointer-events-none absolute inset-1 flex items-center justify-center rounded-[7px] border border-dashed border-white/15 text-[12px] text-muted">
@@ -679,7 +680,7 @@ export function Timeline({ height }: { height: number }) {
             })}
             {drag?.moved && drag.target === null && dragKind === "audio" && <div className="ml-[140px] h-0.5 rounded-full bg-accent" />}
             {/* The header column runs on below the last track, so nothing scrolled under it shows through. */}
-            <div className="flex flex-1">
+            <div data-lane className="flex flex-1">
               <div className="sticky left-0 z-[47] shrink-0 border-r border-white/[.07] bg-panel" style={{ width: HEADER_W }} />
             </div>
           </div>
@@ -712,6 +713,8 @@ export function Timeline({ height }: { height: number }) {
             />
           )}
 
+          {box && <div data-box className="pointer-events-none absolute z-[35] rounded-[3px] border border-accent bg-accent/15 shadow-[0_0_0_1px_rgb(0_0_0/.45)]" style={box} />}
+
           {/* Snap guide */}
           {drag?.moved && drag.snapUs !== null && (
             <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warn shadow-[0_0_0_1px_rgba(0,0,0,0.55)]" style={{ left: HEADER_W + (drag.snapUs / US) * zoom }} />
@@ -720,7 +723,7 @@ export function Timeline({ height }: { height: number }) {
           {/* Drop position for media dragged from the panel */}
           {dropTime !== null && <div className="pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-accent" style={{ left: HEADER_W + (dropTime / US) * zoom }} />}
 
-          <Playhead zoom={zoom} scroller={scroller} />
+          <Playhead zoom={zoom} scroller={scroller} follow={!box} />
 
           {drag?.moved && ghostTiming && (
             // Pinned to the edge being dragged: the start for a move or left trim, the end for a right trim.
