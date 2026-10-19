@@ -1003,11 +1003,13 @@ fn readonly_resources_prompts_and_clear_errors() {
             && guide.contains(r#""duckDb":12"#)
             && guide.contains(r#""keepPitch":false"#)
     );
+    assert!(guide.contains("positive y DOWN") && guide.contains("−(draft y) / 2 is `y`"));
     let schema = c.rpc("resources/read", json!({"uri":"nuzky://schema"}));
     let schema = schema["result"]["contents"][0]["text"].as_str().unwrap();
     for field in ["duckDb", "keepPitch", "dereverb", "normalize", "leveler"] {
         assert!(schema.contains(&format!("\"{field}\"")), "{field}");
     }
+    assert!(schema.contains("Positive moves down"), "{schema}");
     let prompt = c.rpc("prompts/get", json!({"name":"edit_selected","arguments":{"goal":"Make a reel"}}));
     assert!(prompt["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("Make a reel"));
     // One prompt starts the whole rough cut; the user's wishes come with it.
