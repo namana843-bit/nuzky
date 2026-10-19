@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { Ban } from "lucide-react";
 import { CAPTION_STYLES, KEYWORD_COLOR, KEYWORD_PICKS, TEXT_PRESETS, isLook, sameStyle } from "../../lib/presets";
 import { editClip, useEditor } from "../../lib/store";
-import type { Animation, CaptionPreset, Clip, EditCmd, TextStyle } from "../../lib/types";
+import type { Animation, CaptionPreset, Clip, EditCmd, LetterCase, TextShadow, TextStyle } from "../../lib/types";
 import { FontPicker } from "../FontPicker";
-import { Checkbox, ColorInput, PresetTile, Section, Segmented, Slider, TextSwatch, useLockReason } from "../ui";
+import { Checkbox, ColorInput, PresetTile, Section, Segmented, Slider, TextSwatch, parseNumber, useLockReason } from "../ui";
 
 /** A label above a full-width control, like the sliders' in the inspector. */
 export function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -56,8 +57,8 @@ function unlitReason(clip: Clip, text: string) {
 export function TextSection({ clip, text, style, caption }: { clip: Clip; text: string; style: TextStyle; caption: boolean }) {
   const edit = useEditor((s) => s.edit);
   // Built from the latest confirmed style, so two quick changes to different properties both stick.
-  const setStyle = (patch: Partial<TextStyle>, key: string) =>
-    editClip(clip.id, (c) => (c.content.type === "text" ? { type: "updateClip", clipId: c.id, style: { ...c.content.style, ...patch } } : null), `${clip.id}:style:${key}`);
+  const setStyle: SetStyle = (patch, key) =>
+    editClip(clip.id, (c) => (c.content.type === "text" ? { type: "updateClip", clipId: c.id, style: patched(c.content.style, patch) } : null), `${clip.id}:style:${key}`);
   const presets = caption ? CAPTION_STYLES : TEXT_PRESETS;
   return (
     <>
@@ -113,8 +114,13 @@ export function TextSection({ clip, text, style, caption }: { clip: Clip; text: 
   );
 }
 
-/** Font, size, colour, outline and box of a text. `maxSize` is the largest font size the picture takes. */
-type SetStyle = (patch: Partial<TextStyle>, key: string) => void;
+/** A change to a style, or one worked out from the style as it is when the edit goes out. */
+export type StylePatch = Partial<TextStyle> | ((style: TextStyle) => Partial<TextStyle>);
+type SetStyle = (patch: StylePatch, key: string) => void;
+
+export function patched(style: TextStyle, patch: StylePatch): TextStyle {
+  return { ...style, ...(typeof patch === "function" ? patch(style) : patch) };
+}
 
 export function StyleSection({ style, setStyle, maxSize = 300 }: { style: TextStyle; setStyle: SetStyle; maxSize?: number }) {
   return (
@@ -138,15 +144,67 @@ export function MainStyle({ style, setStyle, maxSize = 300 }: { style: TextStyle
   );
 }
 
-/** Bold, the outline of the letters and the box behind them. */
+const CASES: { id: LetterCase; label: React.ReactNode; title: string }[] = [
+  {
+    id: "none",
+    label: (
+      <span className="flex items-center justify-center">
+        <Ban size={13} aria-hidden />
+        <span className="sr-only">As typed</span>
+      </span>
+    ),
+    title: "As typed",
+  },
+  { id: "upper", label: "AB", title: "All capitals" },
+  { id: "lower", label: "ab", title: "All small letters" },
+  { id: "title", label: "Ab", title: "Each word capitalised" },
+];
+
+/** CapCut's own shadow, as it starts when turned on. */
+const SHADOW: TextShadow = { color: "#000000", opacity: 0.9, blur: 15, distance: 5, angle: -45 };
+
+const percent = (v: number) => String(Math.round(v));
+const degrees = (s: string) => ((((parseNumber(s) + 180) % 360) + 360) % 360) - 180;
+
 export function MoreStyle({ style, setStyle }: { style: TextStyle; setStyle: SetStyle }) {
+  const shadow = style.shadow;
+  // Merged into the shadow as it is when the edit goes out, so quick changes to two of its settings both stick.
+  const setShadow = (patch: Partial<TextShadow>, key: string) => setStyle((s) => (s.shadow ? { shadow: { ...s.shadow, ...patch } } : {}), key);
   return (
     <>
       <Checkbox label="Bold" checked={style.bold} onChange={(v) => setStyle({ bold: v }, "bold")} />
+      <FieldRow label="Case">
+        <div className="min-w-0 flex-1">
+          <Segmented label="Case" value={style.letterCase ?? "none"} onChange={(letterCase) => setStyle({ letterCase }, "case")} options={CASES} />
+        </div>
+      </FieldRow>
+      <Slider label="Letter spacing" value={(style.letterSpacing ?? 0) * 100} min={-50} max={200} step={1} unit="%" format={percent} onChange={(v) => setStyle({ letterSpacing: v / 100 }, "letterSpacing")} />
+      <Slider label="Line spacing" value={(style.lineSpacing ?? 0) * 100} min={-60} max={300} step={1} unit="%" format={percent} onChange={(v) => setStyle({ lineSpacing: v / 100 }, "lineSpacing")} />
       <Slider label="Outline" value={style.strokeWidth} min={0} max={20} step={0.5} format={(v) => v.toFixed(1)} onChange={(v) => setStyle({ strokeWidth: v }, "stroke")} />
       {style.strokeWidth > 0 && <ColorInput label="Outline color" value={style.strokeColor} onChange={(v) => setStyle({ strokeColor: v }, "strokeColor")} />}
       <Checkbox label="Background box" checked={style.background !== null} onChange={(v) => setStyle({ background: v ? "#000000b3" : null }, "bg")} />
       {style.background !== null && <ColorInput label="Box color" value={style.background ?? "#000000b3"} onChange={(v) => setStyle({ background: v }, "bgColor")} />}
+      <Checkbox label="Shadow" checked={!!shadow} onChange={(v) => setStyle({ shadow: v ? SHADOW : null }, "shadow")} />
+      {shadow && (
+        <>
+          <ColorInput label="Color" name="Shadow color" value={shadow.color} onChange={(color) => setShadow({ color }, "shadowColor")} />
+          {/* A cell each, so stacked sliders' pull towards the one above leaves these rows level. */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="min-w-0">
+              <Slider label="Opacity" name="Shadow opacity" narrow value={shadow.opacity * 100} min={0} max={100} step={1} unit="%" format={percent} onChange={(v) => setShadow({ opacity: v / 100 }, "shadowOpacity")} />
+            </div>
+            <div className="min-w-0">
+              <Slider label="Blur" name="Shadow blur" narrow value={shadow.blur} min={0} max={100} step={1} unit="%" format={percent} onChange={(blur) => setShadow({ blur }, "shadowBlur")} />
+            </div>
+            <div className="min-w-0">
+              <Slider label="Distance" name="Shadow distance" narrow value={shadow.distance} min={0} max={100} step={1} format={percent} onChange={(distance) => setShadow({ distance }, "shadowDistance")} />
+            </div>
+            <div className="min-w-0">
+              <Slider label="Angle" name="Shadow angle" narrow value={shadow.angle} min={-180} max={180} step={1} unit="°" format={percent} parse={degrees} onChange={(angle) => setShadow({ angle }, "shadowAngle")} />
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }
