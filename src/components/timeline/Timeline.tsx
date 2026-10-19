@@ -136,6 +136,36 @@ function nudge(clipId: string, dir: -1 | 1, second: boolean) {
   );
 }
 
+/**
+ * Alt+↑/↓ moves a video or text clip a layer up or down: onto a new track right past the next video or
+ * text track above or below its own. Main-track clips stay, and nothing goes below the main track.
+ */
+function restack(clipId: string, up: boolean, moving: () => void) {
+  editClip(clipId, (c, track, project): EditCmd | null => {
+    if (track.kind === "audio" || track.id === MAIN_TRACK) return null;
+    const visual = project.tracks.filter((t) => t.kind !== "audio");
+    const past = visual[visual.findIndex((t) => t.id === track.id) + (up ? 1 : -1)];
+    if (!past || (!up && past.id === MAIN_TRACK)) return null;
+    moving();
+    return { type: "moveClip", clipId: c.id, trackId: past.id, startUs: c.startUs, newTrack: up ? "above" : "below" };
+  });
+}
+
+/** Focuses a clip and scrolls it into view, clear of the sticky ruler and track headers. */
+function focusClipIn(box: HTMLDivElement | null, id: string) {
+  const el = box?.querySelector<HTMLElement>(`[data-clip-id="${id}"]`);
+  if (!box || !el) return;
+  el.focus({ preventScroll: true });
+  const view = box.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const [left, right] = [view.left + HEADER_W, view.left + box.clientWidth];
+  const [top, bottom] = [view.top + RULER_H, view.top + box.clientHeight];
+  if (r.left < left) box.scrollLeft -= left - r.left + 24;
+  else if (r.right > right) box.scrollLeft += Math.min(r.left - left - 24, r.right - right + 24);
+  if (r.top < top) box.scrollTop -= top - r.top;
+  else if (r.bottom > bottom) box.scrollTop += r.bottom - bottom;
+}
+
 function tickStep(zoom: number): number {
   for (const s of [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]) if (s * zoom >= 72) return s;
   return 1200;
@@ -192,6 +222,8 @@ export function Timeline({ height }: { height: number }) {
   const [focusId, setFocusId] = useState<string | null>(null);
   /** The focused clip, so focus can move on when it is deleted; null once focus left the clips. */
   const focusPlace = useRef<string | null>(null);
+  /** A clip Alt+↑/↓ moved a layer, scrolled into view when it shows on its new track. */
+  const restacked = useRef<string | null>(null);
   /** The project as last shown, where a deleted clip's neighbours are found. */
   const shown = useRef(project);
   const closeMenu = useCallback(() => setMenu(null), []);
@@ -301,7 +333,16 @@ export function Timeline({ height }: { height: number }) {
     const before = shown.current;
     shown.current = project;
     const id = focusPlace.current;
-    if (!project || !before || !id || findClip(project, id)) return;
+    if (!project || !before || !id) return;
+    if (findClip(project, id)) {
+      // A clip moved to another track is drawn anew there and keeps the focus.
+      if (!document.activeElement || document.activeElement === document.body) {
+        if (restacked.current === id) focusClipIn(scroller.current, id);
+        else scroller.current?.querySelector<HTMLElement>(`[data-clip-id="${id}"]`)?.focus({ preventScroll: true });
+      }
+      restacked.current = null;
+      return;
+    }
     focusPlace.current = null;
     if (document.activeElement && document.activeElement !== document.body) return;
     const clips = [...(findClip(before, id)?.track.clips ?? [])].sort((a, b) => a.startUs - b.startUs);
@@ -344,7 +385,8 @@ export function Timeline({ height }: { height: number }) {
   const fades = fading && fadeContent ? { inUs: fading.mode === "fadeIn" ? fadeUs : fadeContent.fadeInUs, outUs: fading.mode === "fadeOut" ? fadeUs : fadeContent.fadeOutUs } : undefined;
   // A main-track clip trimmed at its end shows where it ends up; elsewhere the ghost follows the pointer.
   const ghostTiming = drag?.moved ? ((drag.mode !== "move" && layout?.timing.get(drag.clip.id)) || dragResult(drag, minUs)) : null;
-  const ghostTrackId = drag?.moved ? (drag.target === undefined ? drag.trackId : drag.target) : null;
+  const gapBelow = drag?.moved && drag.target && typeof drag.target === "object" ? drag.target.below : null;
+  const ghostTrackId = drag?.moved && !gapBelow ? (drag.target === undefined ? drag.trackId : (drag.target as string | null)) : null;
   // Media dropped on the magnetic main track goes in at a cut, so the line shows that cut.
   const dropTime =
     assetDrag && scroller.current
@@ -364,25 +406,11 @@ export function Timeline({ height }: { height: number }) {
   const known = (id: string | null | undefined) => !!id && allClips(project).some((c) => c.id === id);
   const tabStop = known(focusId) ? focusId : known(selection[0]) ? selection[0] : (mainClips(project)[0]?.id ?? tracks.find((t) => t.clips.length > 0)?.clips[0]?.id ?? null);
 
-  /** Focuses a clip and scrolls it into view, clear of the sticky ruler and track headers. */
-  const focusClip = (id: string) => {
-    const box = scroller.current;
-    const el = box?.querySelector<HTMLElement>(`[data-clip-id="${id}"]`);
-    if (!box || !el) return;
-    el.focus({ preventScroll: true });
-    const view = box.getBoundingClientRect();
-    const r = el.getBoundingClientRect();
-    const [left, right] = [view.left + HEADER_W, view.left + box.clientWidth];
-    const [top, bottom] = [view.top + RULER_H, view.top + box.clientHeight];
-    if (r.left < left) box.scrollLeft -= left - r.left + 24;
-    else if (r.right > right) box.scrollLeft += Math.min(r.left - left - 24, r.right - right + 24);
-    if (r.top < top) box.scrollTop -= top - r.top;
-    else if (r.bottom > bottom) box.scrollTop += r.bottom - bottom;
-  };
+  const focusClip = (id: string) => focusClipIn(scroller.current, id);
 
   // Arrows move between clips and select the one they reach, so Delete, S, Q, W and Ctrl+D act on
-  // the clip with focus. Ctrl+arrows move focus only, to add clips with Shift+Enter; Alt+arrows
-  // nudge; the Menu key or Shift+F10 opens the clip menu. The keys stop here, so the playhead does
+  // the clip with focus. Ctrl+arrows move focus only, to add clips with Shift+Enter; Alt+←/→
+  // nudge and Alt+↑/↓ move it a layer; the Menu key or Shift+F10 opens the clip menu. The keys stop here, so the playhead does
   // not also step.
   const onClipKey = (e: React.KeyboardEvent) => {
     if (cover) return;
@@ -404,10 +432,11 @@ export function Timeline({ height }: { height: number }) {
       const next = neighbour(tracks, track, clip, e.key);
       if (next) focusClip(next.id);
     } else if (arrow && e.altKey) {
-      if (e.key === "ArrowUp" || e.key === "ArrowDown") return;
       e.preventDefault();
       e.stopPropagation();
-      nudge(clip.id, e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        if (!e.shiftKey) restack(clip.id, e.key === "ArrowUp", () => (restacked.current = clip.id));
+      } else nudge(clip.id, e.key === "ArrowLeft" ? -1 : 1, e.shiftKey);
     } else if (arrow && !e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
@@ -612,7 +641,7 @@ export function Timeline({ height }: { height: number }) {
               const h = rowHeight(track);
               const isMain = track.id === MAIN_TRACK;
               return (
-                <div key={track.id} data-lane className="flex shrink-0" style={{ height: h + ROW_GAP }}>
+                <div key={track.id} data-lane className="relative flex shrink-0" style={{ height: h + ROW_GAP }}>
                   <TrackHeader track={track} width={HEADER_W} locked={locked} />
                   <div
                     ref={(el) => {
@@ -679,6 +708,14 @@ export function Timeline({ height }: { height: number }) {
                       <ClipView clip={drag.clip} track={track} project={project} zoom={zoom} height={h} visible={visible} selected ghost timing={ghostTiming} />
                     )}
                   </div>
+                  {gapBelow === track.id && ghostTiming && (
+                    <div
+                      className="pointer-events-none absolute -bottom-0.5 z-20 h-1 rounded-full bg-accent"
+                      title="Drop to create a new track here"
+                      data-testid="track-gap"
+                      style={{ left: HEADER_W + (ghostTiming.startUs / US) * zoom, width: Math.max(4, (ghostTiming.durationUs / US) * zoom) }}
+                    />
+                  )}
                 </div>
               );
             })}
