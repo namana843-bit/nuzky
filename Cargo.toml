@@ -34,6 +34,11 @@ opt-level = 1
 # and linking slower.
 debug = "line-tables-only"
 
+# The app crate is mostly glue between the UI and the engine. Optimising it took 7 of the 9 s a rebuild cost after an
+# edit there; without it the debug app prepared an hour of sound no slower, and the preview and export flows pass.
+[profile.dev.package.nuzky-app]
+opt-level = 0
+
 # Build scripts and their dependencies get the same debug info as the rest, so `cargo clippy` and `cargo test`
 # share them: with none, whisper.cpp and the FFmpeg bindings built twice in every new checkout.
 [profile.dev.build-override]
