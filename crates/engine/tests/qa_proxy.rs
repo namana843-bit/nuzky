@@ -16,7 +16,8 @@ use std::{
 const SMALL: (u32, u32) = (480, 270);
 
 /// A phone clip: HEVC 10 bit HLG, 2560x1440 stored and shown portrait, at variable frame rate (jittered
-/// 30 fps, then 12 fps), with B-frames, and with the picture starting 101.667 ms after the sound.
+/// 30 fps, then 12 fps), with B-frames, and with the picture starting 101.667 ms after the sound. Its second
+/// keyframe, at 1.4 s, splits it into two parts where the GPU makes the proxy.
 fn phone_clip(d: &Path) -> Option<PathBuf> {
     let encoders = run(Command::new("ffmpeg").args(["-hide_banner", "-encoders"]));
     if !String::from_utf8_lossy(&encoders.stdout).contains("libx265") {
@@ -162,4 +163,62 @@ fn proxy_keeps_the_frame_times_colours_and_orientation_and_export_never_reads_it
     export(&project, &cache, &with, &options, &AtomicBool::new(false), |_| {}).unwrap();
     export(&project, &d.join("cache-without"), &without, &options, &AtomicBool::new(false), |_| {}).unwrap();
     assert!(frames(&with) == frames(&without), "export reads the original whether a proxy exists or not");
+}
+
+/// Video the GPU does not decode, such as Motion JPEG, gets its proxy from the CPU, with all its frames.
+#[test]
+fn proxy_of_video_the_gpu_does_not_decode() {
+    if !available() {
+        return;
+    }
+    let d = dir("proxy-cpu");
+    let clip = d.join("mjpeg.mov");
+    ff(&["-f", "lavfi", "-i", "testsrc2=s=2560x1440:r=30:d=3", "-c:v", "mjpeg", "-q:v", "5"], &clip);
+    let cache = d.join("cache");
+    std::fs::remove_dir_all(&cache).ok();
+    assert!(proxy::wanted(&clip).unwrap(), "larger than a proxy");
+    let made = proxy::ensure_proxy(&cache, &clip, |_| Ok(())).unwrap();
+    let stream = &info(&made)["streams"][0];
+    assert_eq!((stream["width"].as_u64(), stream["height"].as_u64()), (Some(1920), Some(1080)));
+    assert_eq!(frame_times(VideoDecoder::open_proxy(&made).unwrap()), pts(&clip));
+}
+
+/// Writing the proxy can fall behind decoding: on a slow disk, or while a long first part is still being
+/// decoded. The decoders then wait for it instead of holding the rest of the video, encoded, in memory.
+#[test]
+fn proxy_decodes_little_ahead_of_writing() {
+    if !available() {
+        return;
+    }
+    let d = dir("proxy-ahead");
+    let clip = d.join("long-first-part.mp4");
+    // A keyframe at the start and then every second from 30 s on: the first part is half of the video.
+    let keys = "expr:gte(t,30+n_forced)";
+    let args = ["-g", "900", "-sc_threshold", "0", "-force_key_frames", keys];
+    ff(&[&["-f", "lavfi", "-i", "testsrc2=s=640x360:r=30:d=60", "-c:v", "libx264"], &args[..]].concat(), &clip);
+    let cache = d.join("cache");
+    std::fs::remove_dir_all(&cache).ok();
+    let written = || {
+        let files = std::fs::read_dir(cache.join("proxy")).into_iter().flatten().flatten();
+        files.filter(|f| f.file_name().to_string_lossy().ends_with(".part")).map(|f| f.metadata().unwrap().len()).sum()
+    };
+    let (mut stalled, mut after_stall, mut reports) = (false, None, Vec::<(f32, u64)>::new());
+    let made = proxy::ensure_proxy(&cache, &clip, |p| {
+        // The thread that writes reports progress, so a slow report is a slow disk.
+        if p > 0.0 && !stalled {
+            stalled = true;
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        } else if stalled && after_stall.is_none() {
+            after_stall = Some(p);
+        }
+        reports.push((p, written()));
+        Ok(())
+    })
+    .unwrap();
+    let after_stall = after_stall.unwrap();
+    assert!(after_stall < 0.1, "{:.0} % of the video was decoded while writing stalled", after_stall * 100.0);
+    // Every second of testsrc2 takes about as many bytes, so the bytes written tell the time written.
+    let size = std::fs::metadata(&made).unwrap().len() as f32;
+    let ahead = reports.iter().map(|(p, bytes)| p - *bytes as f32 / size).fold(0.0, f32::max);
+    assert!(ahead < 0.33, "decoding ran {:.0} % of the video ahead of writing", ahead * 100.0);
 }
