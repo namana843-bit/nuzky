@@ -432,6 +432,11 @@ export type CoverView = {
    * without: text behind the person in front of them and no outline.
    */
   maskMissing: boolean,
+  /**
+   * What the picture is: the frame's time, or the image with its file's version, so the editor cuts the
+   * person out once per picture.
+   */
+  source: string,
 };
 
 /**
@@ -1513,6 +1518,11 @@ export type Thumbnail = {
    * The frame, as the video shows it at this timeline time without its text tracks.
    */
   timeUs: number,
+  /**
+   * An image of the project drawn instead of the frame, such as one an agent generated; `time_us` is
+   * then unused. `frame` places it as it places the frame.
+   */
+  image?: string | null,
   /**
    * Where the frame sits, as for clips: scale 1 fits the whole frame inside the thumbnail, x and y move its
    * centre by fractions of the thumbnail, crop cuts its edges without moving the rest.

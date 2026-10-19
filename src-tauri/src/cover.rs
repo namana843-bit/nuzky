@@ -32,8 +32,11 @@ pub struct Covers {
 /// The frame of the cover shown last, kept while the picture and time stay, so moving a text does
 /// not decode the video again.
 struct Frame {
-    picture: Project,
+    /// The timeline the frame is drawn from; none for an image.
+    picture: Option<Project>,
     time_us: i64,
+    /// The image the cover is made from instead of a frame: its id, file and the file's version.
+    still: Option<(String, String, String)>,
     image: Image,
     /// The person's mask, once it is in the cache.
     mask: Option<Vec<u8>>,
@@ -60,6 +63,9 @@ pub struct CoverView {
     /// The cover cuts the person out of the frame and their mask is not made yet, so it is drawn
     /// without: text behind the person in front of them and no outline.
     pub mask_missing: bool,
+    /// What the picture is: the frame's time, or the image with its file's version, so the editor cuts the
+    /// person out once per picture.
+    pub source: String,
 }
 
 /// The cover of `format` `width` pixels wide, as the export draws it: a little-endian u32 with the
@@ -122,7 +128,7 @@ impl Covers {
         let thumbnail =
             project.thumbnail(format).context("THUMBNAIL_MISSING: this project has no cover in that format")?;
         let width = width.clamp(16, format.size().0);
-        if let Some(name) = missing_at(project, thumbnail.time_us).first() {
+        if let Some(name) = cover_missing(project, thumbnail).first() {
             anyhow::bail!("MEDIA_MISSING: {name}");
         }
         if self.renderer.is_none() {
@@ -133,18 +139,28 @@ impl Covers {
         }
         let renderer = self.renderer.as_mut().unwrap();
         // Only what the frame is drawn from: the cover's own texts and settings do not change it.
-        let mut shown = picture(project);
-        shown.thumbnails.clear();
-        let waiting: usize = nuzky_engine::matte::missing(cache, &shown).iter().map(|(_, chunks)| chunks.len()).sum();
-        let fresh = !self
-            .frame
-            .as_ref()
-            .is_some_and(|f| f.time_us == thumbnail.time_us && f.picture == shown && f.waiting == waiting);
+        let shown = thumbnail.image.is_none().then(|| {
+            let mut shown = picture(project);
+            shown.thumbnails.clear();
+            shown
+        });
+        let still = thumbnail.image.as_ref().and_then(|id| {
+            let path = &project.asset(id)?.path;
+            Some((id.clone(), path.clone(), nuzky_engine::thumbnail::file_version(path)))
+        });
+        let waiting: usize = match &shown {
+            Some(shown) => nuzky_engine::matte::missing(cache, shown).iter().map(|(_, chunks)| chunks.len()).sum(),
+            None => 0,
+        };
+        let fresh = !self.frame.as_ref().is_some_and(|f| match &still {
+            Some(_) => f.still == still,
+            None => f.still.is_none() && f.time_us == thumbnail.time_us && f.picture == shown && f.waiting == waiting,
+        });
         if fresh {
             self.frame = None;
             let image = renderer.thumbnail_frame(project, thumbnail)?;
             let mask = nuzky_vision::cached_alpha(&image.data, (image.width, image.height), cache);
-            self.frame = Some(Frame { picture: shown, time_us: thumbnail.time_us, image, mask, waiting });
+            self.frame = Some(Frame { picture: shown, time_us: thumbnail.time_us, still, image, mask, waiting });
         }
         let frame = self.frame.as_mut().unwrap();
         if refresh_mask && frame.mask.is_none() {
@@ -177,6 +193,10 @@ impl Covers {
             hidden: if mask_missing { vec![0.0; thumbnail.texts.len()] } else { rendered.hidden },
             frame: rendered.frame_bounds,
             mask_missing,
+            source: match &frame.still {
+                Some((id, _, version)) => format!("{id}:{version}"),
+                None => thumbnail.time_us.to_string(),
+            },
         };
         Ok((view, rendered.rgba))
     }
@@ -185,6 +205,14 @@ impl Covers {
 /// Names of the missing files of the pictures shown at `t_us`.
 fn missing_at(project: &Project, t_us: i64) -> Vec<String> {
     missing(project, Some(t_us))
+}
+
+/// Names of the missing files a cover is drawn from: its image, or the pictures at its frame.
+fn cover_missing(project: &Project, thumbnail: &Thumbnail) -> Vec<String> {
+    match thumbnail.image.as_deref().and_then(|id| project.asset(id)) {
+        Some(image) => (!Path::new(&image.path).is_file()).then(|| image.name.clone()).into_iter().collect(),
+        None => missing_at(project, thumbnail.time_us),
+    }
 }
 
 /// Names of the missing files of the pictures, at `at` or anywhere on the timeline.
@@ -389,10 +417,38 @@ fn jpeg_url(width: u32, height: u32, rgba: Vec<u8>) -> anyhow::Result<String> {
     Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
-/// Masks the person in the timeline frame at `time_us`, downloading the mask model on first use.
+/// Masks the person in the timeline frame at `time_us`, or in the project image `image` a cover is made
+/// from, downloading the mask model on first use.
 #[tauri::command]
-pub fn start_cover_mask(app: AppHandle, time_us: i64, expected_epoch: Option<String>) -> CmdResult<String> {
+pub fn start_cover_mask(
+    app: AppHandle,
+    time_us: i64,
+    image: Option<String>,
+    expected_epoch: Option<String>,
+) -> CmdResult<String> {
     let project = job_project(&app, expected_epoch.as_deref())?;
+    if let Some(id) = image {
+        let asset = project.asset(&id).ok_or("The cover's image is no longer in the project.")?;
+        if !Path::new(&asset.path).is_file() {
+            return Err(format!("MEDIA_MISSING: {}", asset.name));
+        }
+        let cache = app.state::<AppState>().cache_dir.clone();
+        return spawn(
+            &app,
+            "cover-mask",
+            "Finding the person".into(),
+            "The person is already being found",
+            move |cancel, rep| {
+                download_models(models::MASK, false, "Downloading cover models", cancel, rep)?;
+                let still = Renderer::new().context("Starting the cover renderer")?.still(&project, &id)?;
+                let size = (still.width, still.height);
+                let rgba = std::sync::Arc::unwrap_or_clone(still.data);
+                let mask =
+                    nuzky_vision::segment_picture(rgba, size, &models_dir(), &cache, cancel, &mut mask_progress(rep))?;
+                Ok(Some(serde_json::json!({"person": mask.person, "found": mask.subject_box.is_some()}).to_string()))
+            },
+        );
+    }
     if !(0..project.duration_us()).contains(&time_us) {
         return Err("The cover's frame is past the end of the video. Choose its frame again.".into());
     }
@@ -430,13 +486,15 @@ pub fn start_cover_export(
         .project;
     let thumbnail = project.thumbnail(format).cloned().ok_or("Make the cover first.")?;
     nuzky_engine::export::check_source_path(&project, &out).map_err(err)?;
-    if let Some(name) = missing_at(&project, thumbnail.time_us).first() {
+    if let Some(name) = cover_missing(&project, &thumbnail).first() {
         return Err(format!("MEDIA_MISSING: {name}"));
     }
     let cache = app.state::<AppState>().cache_dir.clone();
     let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     spawn(&app, "cover-export", format!("Exporting {name}"), "A cover is already being exported", move |cancel, rep| {
-        prepare_mattes(&project, &cache, cancel, rep)?;
+        if thumbnail.image.is_none() {
+            prepare_mattes(&project, &cache, cancel, rep)?;
+        }
         rep.progress(0.0, Some("Rendering"));
         let mut renderer = Renderer::new().context("Starting the cover renderer")?;
         renderer.use_mattes(cache.clone(), Pending::Fail);

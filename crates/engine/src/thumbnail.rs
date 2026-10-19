@@ -13,8 +13,18 @@ use ffmpeg_next as ff;
 
 use crate::gpu::{Draw, Image, Layer, Mask};
 use crate::media::{Transfer, init, set_sws_colorspace};
-use crate::model::{Adjust, Canvas, Crop, Project, Thumbnail, TrackKind, parse_color};
+use crate::model::{Adjust, AssetKind, Canvas, Clip, Crop, Project, Thumbnail, TrackKind, Transform, parse_color};
 use crate::render::{BACKGROUND_MAX_RADIUS, MAX_TEXT_SCALE, Quad, Renderer, WHOLE, Wait, quad, small_image, solid};
+
+/// The size and modification time of a file, which change when it is saved anew; empty when it cannot be read.
+pub fn file_version(path: &str) -> String {
+    std::fs::metadata(path)
+        .map(|m| {
+            let modified = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+            format!("{}-{}", m.len(), modified.map_or(0, |d| d.as_nanos()))
+        })
+        .unwrap_or_default()
+}
 
 /// YouTube takes thumbnails up to 2 MB.
 pub const MAX_JPEG_BYTES: usize = 2 * 1024 * 1024;
@@ -58,8 +68,12 @@ impl ImageKind {
 }
 
 impl Renderer {
-    /// The thumbnail's frame at canvas resolution, as exported without text: what its mask is made from.
+    /// The thumbnail's frame at canvas resolution, as exported without text, or its image: what its mask is
+    /// made from.
     pub fn thumbnail_frame(&mut self, project: &Project, thumbnail: &Thumbnail) -> Result<Image> {
+        if let Some(id) = &thumbnail.image {
+            return self.still(project, id);
+        }
         ensure!(
             thumbnail.time_us < project.duration_us(),
             "INVALID_RANGE: the thumbnail's frame at {:.2} s is past the end of the video; choose its frame again",
@@ -67,6 +81,32 @@ impl Renderer {
         );
         let (width, height) = (project.canvas.width, project.canvas.height);
         let rgba = self.render(&picture(project), thumbnail.time_us, width, height, Wait::Exact, false)?;
+        Ok(Image { width, height, data: Arc::new(rgba) })
+    }
+
+    /// An image of the project on its own, as it is turned, at its size or the largest the GPU takes.
+    pub fn still(&mut self, project: &Project, asset_id: &str) -> Result<Image> {
+        self.still_within(project, asset_id, self.max_texture_dimension())
+    }
+
+    /// The image no longer on its long side than `max_side` pixels.
+    pub fn still_within(&mut self, project: &Project, asset_id: &str, max_side: u32) -> Result<Image> {
+        let asset = project
+            .asset(asset_id)
+            .filter(|a| a.kind == AssetKind::Image)
+            .ok_or_else(|| anyhow!("INVALID_ARGUMENTS: {asset_id} is not an image of this project"))?;
+        let (w, h) = if asset.rotation % 180 == 90 { (asset.height, asset.width) } else { (asset.width, asset.height) };
+        let k = (max_side.min(self.max_texture_dimension()) as f32 / w.max(h).max(1) as f32).min(1.0);
+        let (width, height) = (((w as f32 * k) as u32).max(1), ((h as f32 * k) as u32).max(1));
+        let mut still = Project::new(&asset.name);
+        still.canvas.width = width;
+        still.canvas.height = height;
+        still.assets.push(asset.clone());
+        let content = crate::edit::media(asset, Transform::default(), None);
+        // A file saved anew under the same path gets a new decoder, so the picture is never an old one.
+        let id = format!("still:{asset_id}:{}", file_version(&asset.path));
+        still.tracks[0].clips.push(Clip::new(id, 0, 1_000_000, content));
+        let rgba = self.render(&still, 0, width, height, Wait::Exact, false)?;
         Ok(Image { width, height, data: Arc::new(rgba) })
     }
 
