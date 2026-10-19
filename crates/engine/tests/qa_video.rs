@@ -151,7 +151,29 @@ fn hevc_with_wavefronts_seeks_match_ffmpeg() {
     }
     if encoders.contains("hevc_videotoolbox") {
         let path = d.join("apple.mov");
-        ff(&[&source[..], &["-c:v", "hevc_videotoolbox", "-b:v", "4M", "-g", "30", "-tag:v", "hvc1"]].concat(), &path);
+        // GitHub's macOS runners have no hardware HEVC encoder; NV12 lets Apple's software one skip the pixel
+        // conversion inside VideoToolbox, which fails there too (-12905).
+        ff(
+            &[
+                &source[..],
+                &[
+                    "-c:v",
+                    "hevc_videotoolbox",
+                    "-allow_sw",
+                    "1",
+                    "-pix_fmt",
+                    "nv12",
+                    "-b:v",
+                    "4M",
+                    "-g",
+                    "30",
+                    "-tag:v",
+                    "hvc1",
+                ],
+            ]
+            .concat(),
+            &path,
+        );
         check_seek(&path, &[]);
         checked += 1;
     }
