@@ -1,6 +1,6 @@
-//! What a person can send when Nuzky misbehaves: a log of what went wrong in the `logs` folder of Nuzky's data
-//! folder, and a short diagnostics text with the version, system, graphics and the end of the log. Nothing is sent
-//! anywhere; the person copies the text or opens the folder.
+//! What a person can send when Nuzky misbehaves: a log of what went wrong and what they did in the `logs` folder of
+//! Nuzky's data folder, and a report that adds the version, system, graphics, the project's shape and the format of
+//! its files. Nothing is sent anywhere; the person attaches the report to an issue they submit themselves.
 //!
 //! The log keeps no one's work or identity. Text between double quotes, curly quotes or backticks, where captions,
 //! project names and other typed text appear in error and panic messages, is left out, a path keeps only its last
@@ -14,16 +14,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
 use log::{Level, Log, Metadata, Record};
-use tauri::AppHandle;
+use nuzky_engine::model::{Asset, Clip, ClipContent, Project, TrackKind};
+use tauri::{AppHandle, Manager};
+use tauri_plugin_opener::OpenerExt;
 
-use crate::{CmdResult, store, updates};
+use crate::{AppState, CmdResult, jobs, store, updates};
 
 const LOG: &str = "nuzky.log";
 const OLDER_LOG: &str = "nuzky.1.log";
 /// Each of the two files grows to this size; then the older one is replaced.
 const MAX_BYTES: u64 = 1 << 20;
-/// How much of the log Copy diagnostics includes.
-const TAIL_LINES: usize = 200;
+/// How much of the log a report includes.
+const TAIL_LINES: usize = 300;
+const REPORT_ACTIONS: usize = 100;
+/// A project's files a report describes; past this many, more do not tell more.
+const MAX_FILES: usize = 30;
+/// What of a report goes into the issue form's address, which GitHub limits in length.
+const SUMMARY_FILES: usize = 5;
+const SUMMARY_ACTIONS: usize = 15;
+const SUMMARY_ERRORS: usize = 3;
+const REPORT: &str = "nuzky-report-";
+const REPORTS_KEPT: usize = 5;
 const RUNNING: &str = "running-";
 /// A marker while it is being locked, before it is published under `RUNNING`.
 const STARTING: &str = "starting-";
@@ -187,27 +198,243 @@ pub fn set_graphics(adapter: &str) {
     *GRAPHICS.lock().unwrap_or_else(PoisonError::into_inner) = Some(adapter.to_owned());
 }
 
-fn text(version: &str, dir: &Path) -> String {
+/// This Nuzky's version with the commit it was built from.
+fn version(app: &AppHandle) -> String {
+    format!("{} ({})", app.package_info().version, env!("NUZKY_COMMIT"))
+}
+
+/// The computer and this Nuzky, a fact a line.
+fn about(version: &str) -> Vec<String> {
     let graphics = GRAPHICS.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    let mut lines: Vec<String> = [OLDER_LOG, LOG]
+    let mut lines = vec![
+        format!("Nuzky {version}"),
+        format!("System: {}", updates::system()),
+        format!("Graphics: {}", graphics.as_deref().unwrap_or("the preview has not started")),
+    ];
+    if let Some(gb) = memory_gb() {
+        lines.push(format!("Memory: {gb} GB"));
+    }
+    let speech: Vec<_> = jobs::speech_models().into_iter().filter(|m| m.downloaded).map(|m| m.id).collect();
+    lines.push(format!("Speech models: {}", if speech.is_empty() { "none".into() } else { speech.join(", ") }));
+    let vision = nuzky_vision::models::missing(nuzky_vision::models::ALL, &nuzky_analysis::models_dir()).is_empty();
+    lines.push(format!("Face and subject models: {}", if vision { "installed" } else { "not installed" }));
+    if crashed_before() {
+        lines.push("The Nuzky before this one closed unexpectedly.".into());
+    }
+    lines
+}
+
+#[cfg(unix)]
+fn memory_gb() -> Option<u64> {
+    let (pages, size) = unsafe { (libc::sysconf(libc::_SC_PHYS_PAGES), libc::sysconf(libc::_SC_PAGESIZE)) };
+    (pages > 0 && size > 0).then(|| (pages as u64 * size as u64).div_ceil(1 << 30))
+}
+
+#[cfg(not(unix))]
+fn memory_gb() -> Option<u64> {
+    None
+}
+
+/// The open project's shape, then a line for each of its files: what they are, never what they are called.
+fn project_lines(project: &Project, ai_editing: bool, jobs: usize, describe: impl Fn(&Asset) -> String) -> Vec<String> {
+    let canvas = &project.canvas;
+    let tracks = |kind| project.tracks.iter().filter(|t| t.kind == kind).count();
+    let clips: usize = project.tracks.iter().map(|t| t.clips.len()).sum();
+    let captions = if project.tracks.iter().any(|t| t.is_captions()) { " with captions" } else { "" };
+    let mut line = format!(
+        "Project: {}×{} {} fps · {:.1} s · {} video, {} audio, {} text tracks{captions} · {clips} clips · {} files",
+        canvas.width,
+        canvas.height,
+        canvas.fps,
+        project.duration_us() as f64 / 1e6,
+        tracks(TrackKind::Video),
+        tracks(TrackKind::Audio),
+        tracks(TrackKind::Text),
+        project.assets.len(),
+    );
+    if ai_editing {
+        line.push_str(" · an AI edit is running");
+    }
+    if jobs > 0 {
+        line.push_str(&format!(" · {jobs} jobs running"));
+    }
+    let uses = |id: &str| {
+        let media = |c: &&Clip| matches!(&c.content, ClipContent::Media { asset_id, .. } if asset_id == id);
+        project.tracks.iter().flat_map(|t| &t.clips).filter(media).count()
+    };
+    let files = project.assets.iter().take(MAX_FILES).enumerate().map(|(i, asset)| {
+        let kind = format!("{:?}", asset.kind).to_lowercase();
+        format!("File {} ({kind}, {} clips): {}", i + 1, uses(&asset.id), describe(asset))
+    });
+    std::iter::once(line).chain(files).collect()
+}
+
+fn log_lines(dir: &Path) -> Vec<String> {
+    [OLDER_LOG, LOG]
         .iter()
         .filter_map(|name| std::fs::read(dir.join(name)).ok())
         .flat_map(|bytes| String::from_utf8_lossy(&bytes).lines().map(String::from).collect::<Vec<_>>())
-        .collect();
-    lines.drain(..lines.len().saturating_sub(TAIL_LINES));
-    let log = if lines.is_empty() { "The log is empty.".to_owned() } else { lines.join("\n") };
-    format!(
-        "Nuzky {version}\nSystem: {}\nGraphics: {}\n\nLast {} lines of the log:\n{log}\n",
-        updates::system(),
-        graphics.as_deref().unwrap_or("the preview has not started"),
-        lines.len(),
-    )
+        .collect()
 }
 
-/// What Copy diagnostics puts on the clipboard. The log in it was already cleaned when written.
+fn newest<T>(items: &[T], n: usize) -> &[T] {
+    &items[items.len().saturating_sub(n)..]
+}
+
+struct Report {
+    /// The file the person attaches to the issue.
+    full: String,
+    /// What fits into the issue form's address, a line each.
+    summary: Vec<String>,
+}
+
+/// Everything that can help reproduce a bug: this Nuzky and the computer, the project and its files, what the person
+/// and the AI did, and the end of the log. The log, and with it the actions, was cleaned when written.
+fn report(about: &[String], project: &[String], dir: &Path) -> Report {
+    let log = log_lines(dir);
+    let actions: Vec<String> = log
+        .iter()
+        .filter_map(|line| line.split_once(" INFO action: ").map(|(at, what)| format!("{at} {what}")))
+        .collect();
+    let errors: Vec<&String> = log.iter().filter(|line| line.contains(" ERROR ")).collect();
+    let warnings = log.iter().filter(|line| line.contains(" WARN ")).count();
+    let listed = |title: &str, lines: &[String], empty: &str| {
+        if lines.is_empty() { format!("{empty}\n") } else { format!("{title}:\n  {}\n", lines.join("\n  ")) }
+    };
+
+    let mut full = format!("{}\n{}\n\n", about.join("\n"), project.join("\n"));
+    let recent = newest(&actions, REPORT_ACTIONS);
+    full += &listed(&format!("Last {} actions", recent.len()), recent, "No actions recorded yet.");
+    let tail = newest(&log, TAIL_LINES);
+    full += &format!("\n{}", listed(&format!("Last {} lines of the log", tail.len()), tail, "The log is empty."));
+
+    let mut summary: Vec<String> = about.to_vec();
+    summary.extend(project.iter().take(SUMMARY_FILES + 1).cloned());
+    if project.len() > SUMMARY_FILES + 1 {
+        summary.push(format!("…and {} more files", project.len() - SUMMARY_FILES - 1));
+    }
+    summary.push("Last actions:".into());
+    summary.extend(newest(&actions, SUMMARY_ACTIONS).iter().map(|a| format!("  {a}")));
+    // The summary fills the public issue form by itself, so it names where the newest errors came from, never what
+    // they said, which can name a file; the report the person reads before attaching it has them whole.
+    let mut sources: Vec<&str> = Vec::new();
+    for error in newest(&errors, SUMMARY_ERRORS) {
+        let source = error.split_once(" ERROR ").and_then(|(_, rest)| rest.split_once(": ")).map(|(target, _)| target);
+        if let Some(source) = source.filter(|s| !sources.contains(s)) {
+            sources.push(source);
+        }
+    }
+    let mut log = format!("Log: {} errors, {warnings} warnings", errors.len());
+    if !sources.is_empty() {
+        log += &format!("; the newest errors from {}", sources.join(", "));
+    }
+    summary.push(log);
+    Report { full, summary }
+}
+
+/// A file's line in a report never names it, not even in the error FFmpeg gives when it cannot be read.
+fn describe(asset: &Asset) -> String {
+    let path = Path::new(&asset.path);
+    nuzky_engine::media::describe(path).unwrap_or_else(|error| {
+        let mut error = scrub(&format!("{error:#}"));
+        let file = path.file_name().map(|name| name.to_string_lossy().into_owned());
+        for name in file.iter().chain([&asset.name]).filter(|name| !name.is_empty()) {
+            error = error.replace(name.as_str(), "the file");
+        }
+        format!("cannot read it: {error}")
+    })
+}
+
+/// Builds the report off the async runtime: describing the files opens each of them.
+async fn build(app: &AppHandle) -> CmdResult<Report> {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let session = state.session.lock().unwrap_or_else(PoisonError::into_inner).host.session.state().ok();
+        let jobs = state.jobs.lock().unwrap_or_else(PoisonError::into_inner).len();
+        let project = session
+            .map(|s| project_lines(&s.project, s.open_run.is_some(), jobs, describe))
+            .unwrap_or_else(|| vec!["No project is open.".into()]);
+        report(&about(&version(&app)), &project, &logs_dir())
+    })
+    .await
+    .map_err(crate::err)
+}
+
+/// What Copy diagnostics puts on the clipboard and the report dialog shows: the whole report.
 #[tauri::command]
-pub fn diagnostics(app: AppHandle) -> String {
-    text(&app.package_info().version.to_string(), &logs_dir())
+pub async fn diagnostics(app: AppHandle) -> CmdResult<String> {
+    Ok(build(&app).await?.full)
+}
+
+static LAST_REPORT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedReport {
+    name: String,
+    /// Why the browser did not open; the report is saved all the same.
+    open_error: Option<String>,
+}
+
+/// Saves the report in the logs folder, keeping the newest few, and opens the bug report form with the description
+/// and a summary filled in. Nothing is sent: the person attaches the file and submits the form.
+#[tauri::command]
+pub async fn report_bug(app: AppHandle, description: String) -> CmdResult<SavedReport> {
+    let report = build(&app).await?;
+    let text = match description.trim() {
+        "" => report.full,
+        said => format!("What happened:\n{said}\n\n{}", report.full),
+    };
+    let path = save_report(&logs_dir(), &text).map_err(crate::err)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    *LAST_REPORT.lock().unwrap_or_else(PoisonError::into_inner) = Some(path);
+    let open_error = updates::open(&app, &updates::bug_url(&version(&app), &description, &report.summary)).err();
+    Ok(SavedReport { name, open_error })
+}
+
+/// Shows the saved report in the file manager, to drag into the issue.
+#[tauri::command]
+pub fn show_bug_report(app: AppHandle) -> CmdResult<()> {
+    let path = LAST_REPORT.lock().unwrap_or_else(PoisonError::into_inner).clone().ok_or("No report was saved yet")?;
+    if cfg!(debug_assertions) && std::env::var_os("NUZKY_OPENED_URLS").is_some() {
+        return updates::open(&app, &format!("reveal {}", path.display()));
+    }
+    app.opener().reveal_item_in_dir(&path).map_err(crate::err)
+}
+
+/// Saves the report under a name of its own, then removes all but the newest few, so a failed save loses none.
+fn save_report(dir: &Path, text: &str) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    // A second report in the same second sorts after the first, so the oldest are the first by name.
+    let stamp = jiff::Timestamp::now().strftime("%Y-%m-%d-%H%M%S").to_string();
+    let mut saved = None;
+    for n in 1.. {
+        let name = if n == 1 { format!("{REPORT}{stamp}.txt") } else { format!("{REPORT}{stamp}_{n:02}.txt") };
+        let path = dir.join(name);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                if let Err(error) = file.write_all(text.as_bytes()) {
+                    std::fs::remove_file(&path).ok();
+                    return Err(error);
+                }
+                saved = Some(path);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let mut reports: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().starts_with(REPORT)))
+        .collect();
+    reports.sort();
+    for path in &reports[..reports.len().saturating_sub(REPORTS_KEPT)] {
+        std::fs::remove_file(path).ok();
+    }
+    Ok(saved.expect("names never run out"))
 }
 
 #[tauri::command]
@@ -359,6 +586,9 @@ fn hide_secrets(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use nuzky_engine::edit::EditCmd;
+    use nuzky_engine::model::AssetKind;
+
     use super::*;
 
     #[test]
@@ -442,22 +672,122 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    fn asset(id: &str, kind: AssetKind) -> Asset {
+        Asset {
+            id: id.into(),
+            name: format!("{id} private name.mov"),
+            path: format!("/home/jana/Videos/{id}.mov"),
+            kind,
+            duration_us: 10_000_000,
+            width: 1080,
+            height: 1920,
+            fps: 30.0,
+            has_audio: true,
+            rotation: 0,
+            mirror: false,
+            credit: None,
+            part: None,
+        }
+    }
+
+    /// A project says its shape and what each file is, by number: never a file's name, folder or the project's name.
     #[test]
-    fn diagnostics_end_with_the_newest_lines_of_both_logs() {
-        let dir = std::env::temp_dir().join(format!("nuzky-diagnostics-{}", std::process::id()));
+    fn a_project_is_described_by_its_shape_and_its_files_formats() {
+        let mut project = Project::new("Jana's wedding");
+        project
+            .apply(EditCmd::AddAssets { assets: vec![asset("a", AssetKind::Video), asset("b", AssetKind::Audio)] })
+            .unwrap();
+        for _ in 0..2 {
+            project.apply(EditCmd::AddClip { asset_id: "a".into(), start_us: None, track_id: None }).unwrap();
+        }
+        let lines = project_lines(&project, true, 2, |asset| format!("format of {}", asset.id));
+        assert_eq!(
+            lines,
+            [
+                "Project: 1080×1920 30 fps · 20.0 s · 1 video, 0 audio, 0 text tracks · 2 clips · 2 files · an AI edit is running · 2 jobs running",
+                "File 1 (video, 2 clips): format of a",
+                "File 2 (audio, 0 clips): format of b",
+            ]
+        );
+        assert!(!lines.join("\n").contains("private") && !lines.join("\n").contains("wedding"), "{lines:?}");
+    }
+
+    /// A file that cannot be read is still described by its number only: the error FFmpeg gives names the file.
+    #[test]
+    fn a_file_that_cannot_be_read_keeps_its_name_out_of_the_report() {
+        let mut missing = asset("a", AssetKind::Video);
+        missing.path = "/home/jana/Videos/HIV-test-Jana.mov".into();
+        let line = describe(&missing);
+        assert!(line.starts_with("cannot read it") && !line.contains("Jana") && !line.contains("Videos"), "{line}");
+    }
+
+    #[test]
+    fn a_report_holds_the_actions_and_the_newest_lines_of_both_logs() {
+        let dir = std::env::temp_dir().join(format!("nuzky-report-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(OLDER_LOG), (0..150).map(|n| format!("old {n}\n")).collect::<String>()).unwrap();
-        std::fs::write(dir.join(LOG), (0..100).map(|n| format!("new {n}\n")).collect::<String>()).unwrap();
-        let text = text("0.1.0-alpha", &dir);
-        assert!(text.starts_with("Nuzky 0.1.0-alpha\nSystem: "), "{text}");
+        let line = |n: usize| match n % 50 {
+            0 => format!("2026-10-19T14:00:{:02}Z INFO action: user splitClip atUs={n}", n % 60),
+            1 if n == 1051 => {
+                format!("2026-10-19T14:00:00Z ERROR nuzky_app::jobs: Exporting Client-confidential {n}.mp4 failed")
+            }
+            1 => format!("2026-10-19T14:00:00Z ERROR ui: failure in Client-confidential {n}.mov"),
+            2 => format!("2026-10-19T14:00:00Z WARN nuzky_engine::media: odd {n}"),
+            _ => format!("other {n}"),
+        };
+        std::fs::write(dir.join(OLDER_LOG), (0..1000).map(|n| line(n) + "\n").collect::<String>()).unwrap();
+        std::fs::write(dir.join(LOG), (1000..1100).map(|n| line(n) + "\n").collect::<String>()).unwrap();
+        let report =
+            report(&["Nuzky 0.1.0-alpha (abc1234)".into()], &["Project: shape".into(), "File 1: hevc".into()], &dir);
+
+        let full = &report.full;
         assert!(
-            text.contains(&format!(" · {}\nGraphics: the preview has not started\n", std::env::consts::ARCH)),
-            "{text}"
+            full.starts_with("Nuzky 0.1.0-alpha (abc1234)\nProject: shape\nFile 1: hevc\n\nLast 22 actions:\n"),
+            "{full}"
         );
-        assert!(text.contains("\n\nLast 200 lines of the log:\nold 50\n"), "{text}");
-        assert!(text.contains("\nold 149\nnew 0\n") && text.ends_with("\nnew 99\n"), "{text}");
-        assert!(!text.contains("old 49\n"), "{text}");
+        assert!(
+            full.contains(
+                "\n  2026-10-19T14:00:40Z user splitClip atUs=1000\n  2026-10-19T14:00:30Z user splitClip atUs=1050\n"
+            ),
+            "{full}"
+        );
+        assert!(
+            full.contains(
+                "\nLast 300 lines of the log:\n  2026-10-19T14:00:20Z INFO action: user splitClip atUs=800\n"
+            ),
+            "{full}"
+        );
+        assert!(full.ends_with("\n  other 1099\n") && !full.contains("other 799\n"), "{full}");
+
+        let summary = report.summary.join("\n");
+        assert!(summary.starts_with("Nuzky 0.1.0-alpha (abc1234)\nProject: shape\nFile 1: hevc\nLast actions:\n  2026-10-19T14:00:50Z user splitClip atUs=350\n"), "{summary}");
+        // The summary fills the public issue form by itself, so it says where errors came from, never what they said.
+        assert!(
+            summary.ends_with("atUs=1050\nLog: 22 errors, 22 warnings; the newest errors from ui, nuzky_app::jobs"),
+            "{summary}"
+        );
+        assert!(!summary.contains("Client-confidential"), "{summary}");
+        assert!(full.contains("ERROR nuzky_app::jobs: Exporting Client-confidential 1051.mp4 failed"), "{full}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn reports_never_replace_one_another_and_only_the_newest_stay() {
+        let dir = std::env::temp_dir().join(format!("nuzky-reports-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(LOG), "kept\n").unwrap();
+        for day in 1..=6 {
+            std::fs::write(dir.join(format!("{REPORT}2026-01-0{day}-120000.txt")), format!("day {day}")).unwrap();
+        }
+        let first = save_report(&dir, "first").unwrap();
+        let second = save_report(&dir, "second").unwrap();
+        assert_ne!(first, second, "a second report in the same second gets a name of its own");
+        let mut left: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).collect();
+        left.sort();
+        let left: Vec<String> = left.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect();
+        assert_eq!(left, ["day 4", "day 5", "day 6", "first", "second", "kept\n"]);
+        assert_eq!(std::fs::read_to_string(dir.join(LOG)).unwrap(), "kept\n");
         std::fs::remove_dir_all(dir).ok();
     }
 
