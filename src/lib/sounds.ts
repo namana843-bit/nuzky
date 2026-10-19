@@ -29,6 +29,8 @@ const waitsForYtdlp = (link: Link) => !!link.error?.startsWith("YTDLP_");
 type State = {
   tab: AudioTab;
   builtIn: Sound[];
+  /** Songs from YouTube links already in the sound library, from any project. */
+  downloaded: Sound[];
   search: Record<SoundKind, Search>;
   /** The sound playing, or still loading to play. */
   preview: { id: string; loading: boolean } | null;
@@ -48,6 +50,7 @@ type State = {
 export const useSounds = create<State>(() => ({
   tab: "project",
   builtIn: [],
+  downloaded: [],
   search: { music: EMPTY, effect: EMPTY },
   preview: null,
   progress: {},
@@ -77,6 +80,10 @@ function listenOnce() {
 export async function loadBuiltIn() {
   listenOnce();
   if (useSounds.getState().builtIn.length === 0) useSounds.setState({ builtIn: await api.soundLibrary() });
+}
+
+export async function loadDownloaded() {
+  useSounds.setState({ downloaded: await api.soundDownloaded() });
 }
 
 const searches: Record<SoundKind, number> = { music: 0, effect: 0 };
