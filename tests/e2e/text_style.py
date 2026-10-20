@@ -1,7 +1,8 @@
 """CapCut's text settings in the inspector: case, letter spacing and a shadow, set by keyboard, change what the
 preview, the engine's frame and the export draw, while the stored text stays as typed. The text ends in the creator's
 CapCut caption look (size 12 at 152 %, #fff059, a black shadow at 41 %, Blur 23 %, Distance 5, -45°); two quick
-changes to the shadow both stick, an AI run locks the controls with a reason, and one undo takes a change back."""
+changes to the shadow both stick, an AI run locks the controls with a reason, and one undo takes a change back. With
+three texts selected, as with every caption, one shadow goes on all of them at once."""
 import json, subprocess, time
 
 from e2e.harness import AI_EDITING, CLI, Bridge, changed_share, export, flow, preview_crop, preview_rect, press, wait, webdriver
@@ -103,6 +104,25 @@ def look(r, name):
 
 
 SHADOW_VIEW = f"{CASE}.closest('section').querySelector('input[aria-label=\"Shadow angle value\"]').scrollIntoView({{block: 'end'}})"
+TEXTS = """return window.__nuzky.store.getState().snap.project.tracks.flatMap((t) => t.clips)
+  .filter((c) => c.content.type === 'text').map((c) => ({id: c.id, shadow: c.content.style.shadow ?? null}));"""
+PLACE = """window.__nuzky.store.getState().edit((p) => {
+  const c = p.tracks.flatMap((t) => t.clips).find((c) => c.id === arguments[0]);
+  return {type: 'updateClip', clipId: c.id, transform: {...c.content.transform, y: arguments[1]}};
+})"""
+SHADOW_BOX = f"[...document.querySelectorAll('{SECTION} label')].find((l) => l.textContent.trim() === 'Shadow')?.querySelector('input')"
+OPACITY = f"document.querySelector('{SECTION} input[aria-label=\"Shadow opacity value\"]')"
+BOX = """window.__nuzky.store.getState().edit((p) => arguments[0].map(([id, background]) => {
+  const c = p.tracks.flatMap((t) => t.clips).find((c) => c.id === id);
+  return {type: 'updateClip', clipId: id, style: {...c.content.style, background}};
+}))"""
+BOXES = """return window.__nuzky.store.getState().snap.project.tracks.flatMap((t) => t.clips)
+  .filter((c) => c.content.type === 'text').map((c) => [c.id, c.content.style.background]);"""
+PICK = f"""const input = document.querySelector('{SECTION} input[type=color][aria-label="Box color"]');
+Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, arguments[0]);
+input.dispatchEvent(new Event('input', {{bubbles: true}}));"""
+BOX_LABEL = f"""return [...document.querySelectorAll('{SECTION} label')].find((l) => l.querySelector('input[aria-label="Box color"]'))
+  ?.querySelector('span.tabular')?.textContent"""
 
 
 def shadow(r):
@@ -111,7 +131,7 @@ def shadow(r):
 
 @flow('text-style', 'Case, letter spacing and a shadow from the text inspector, by keyboard, in the preview, the frame and '
       'the export, in the creator\'s CapCut look, with the typed text kept, quick changes kept, locked during an AI run '
-      'and undone in one step', before=grey)
+      'and undone in one step, and on three selected texts at once', before=grey)
 def text_style(r):
     r.import_media(r.grey)
     r.add_clip('grey.png')
@@ -235,4 +255,48 @@ def text_style(r):
         r.check('the lock ends with the run', wait(lambda: not r.state()['aiRun'], 10))
     finally:
         bridge.close()
+    several(r, text['id'], font)
     r.check('no error toast', not r.errors(), r.errors())
+
+
+def several(r, first, font):
+    """Two more texts above and below the first, without a shadow, and all three selected, as with every caption."""
+    for _ in range(2):
+        r.s.call(ADD_TEXT, font)
+    others = [t['id'] for t in wait(lambda: len(r.s.run(TEXTS)) == 3 and r.s.run(TEXTS), 5) if t['id'] != first]
+    for clip_id, y in zip(others, (-0.3, 0.3)):
+        r.s.call(PLACE, clip_id, y)
+    r.s.run('window.__nuzky.store.getState().select(arguments[0])', [first, *others])
+    box = wait(lambda: r.s.run(f'const b = {SHADOW_BOX}; return b && {{mixed: b.indeterminate, rows: !!{OPACITY}}}'), 10)
+    r.check('three selected texts have Shadow, with a dash as only one has it, and no shadow rows yet',
+            box and box['mixed'] and not box['rows'], box)
+    shadows = lambda: {t['id']: t['shadow'] for t in r.s.run(TEXTS)}
+    r.s.run(f'{SHADOW_BOX}.focus()')
+    press('space')
+    r.check("Space gives the two without one CapCut's shadow, and the first keeps its own",
+            wait(lambda: same(shadows()[first], LOOK) and all(same(shadows()[i], SHADOW_ON) for i in others), 5), shadows())
+    r.check('Opacity shows a dash, as the shadows differ', r.s.run(f'return {OPACITY}.value') == '—', r.s.run(f'return {OPACITY}.value'))
+    type_value(r, 'Shadow opacity', 60)
+    r.check('a typed opacity of 60 % goes on all three, each keeping its own blur',
+            wait(lambda: all(abs(s['opacity'] - 0.6) < 1e-6 for s in shadows().values()), 5)
+            and shadows()[first]['blur'] == 23 and all(shadows()[i]['blur'] == 15 for i in others), shadows())
+    look(r, 'inspector-several-texts')
+    r.s.run('document.activeElement?.blur()')
+    r.key('z', ctrlKey=True)
+    r.check('one Ctrl+Z takes the opacity back on all three',
+            wait(lambda: same(shadows()[first], LOOK) and all(same(shadows()[i], SHADOW_ON) for i in others), 5), shadows())
+    time.sleep(1.5)  # Saved about a second after the edit; `nuzky frame` reads the saved file.
+    from PIL import Image
+    drawn = Image.open(engine_frame(r, 'engine-three-shadows')).convert('RGB')
+    w, h = drawn.size
+    bands = [ink(drawn.crop((0, h * i // 3, w, h * (i + 1) // 3))) for i in range(3)]
+    r.check('the engine draws a shadow down and to the right of each of the three texts',
+            all(b[0] and b[1] and b[1][0] > b[0][0] and b[1][1] > b[0][1] and b[2] > 0.0005 for b in bands), bands)
+
+    r.s.call(BOX, [[first, '#000000b3'], *[[i, '#ff000080'] for i in others]])
+    r.check('Box color shows a dash while the box colours differ', wait(lambda: r.s.run(BOX_LABEL) == '—', 5), r.s.run(BOX_LABEL))
+    r.s.run(PICK, '#2050ff')
+    boxes = lambda: dict(r.s.run(BOXES))
+    r.check('a picked box colour goes on all three, each keeping its own opacity',
+            wait(lambda: boxes()[first] == '#2050ffb3' and all(boxes()[i] == '#2050ff80' for i in others), 5), boxes())
+    r.check('and the dash gives way to the picked colour', wait(lambda: r.s.run(BOX_LABEL) == '#2050FF', 5), r.s.run(BOX_LABEL))
