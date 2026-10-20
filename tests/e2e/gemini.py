@@ -6,7 +6,7 @@ import json, time
 from pathlib import Path
 
 from e2e.connect import MCP, SETTINGS
-from e2e.harness import Bridge, flow, press, wait, webdriver
+from e2e.harness import MACOS, Bridge, flow, press, wait, webdriver
 
 HERE = Path(__file__).parent
 GUIDE = """const a = document.querySelector('aside[aria-label=AI]');
@@ -18,6 +18,9 @@ return a && {text: a.innerText, title: a.querySelector('h3')?.textContent ?? nul
 MENU = """return [...document.querySelectorAll('[role=menu] [role^=menuitem]')].map((i) => ({text: i.textContent,
   checked: i.getAttribute('aria-checked'), disabled: i.getAttribute('aria-disabled')}));"""
 
+
+# The guide names the terminal the way the system does (src/components/setup/agentConnect.tsx).
+TITLE = 'Use Gemini from Terminal' if MACOS else 'Use Gemini from a terminal'
 
 def before(r):
     """agy's settings live in a home folder of this run; the agy Nuzky finds is a stand-in, not installed at first."""
@@ -64,10 +67,10 @@ def gemini(r):
     r.check('Set up beside Gemini switches the panel to it', click(r, 'Set up'))
     g = wait(lambda: (x := guide(r)) and x.get('steps') and x, 10)
     r.check('the panel shows how to use Gemini from a terminal, with no field to write in',
-            g and g['title'] == 'Use Gemini from a terminal' and not g['field'], g)
+            g and g['title'] == TITLE and not g['field'], g)
     r.check('in two sentences it says why: Google lets no other app run Gemini on the account, so it runs in a terminal and edits here',
             g and "Google doesn't let other apps run Gemini on your Google account" in g['text'] and 'edits the video open in Nuzky, live' in g['text'], g)
-    r.check('the focus is on the title, not on a button a stray Enter would press', g and g['focus'] == 'Use Gemini from a terminal', g)
+    r.check('the focus is on the title, not on a button a stray Enter would press', g and g['focus'] == TITLE, g)
     r.check('step 1, not installed, shows the official install command', g and 'Not installed' in g['steps'][0]['text']
             and g['steps'][0]['commands'] == ['curl -fsSL https://antigravity.google/cli/install.sh | bash']
             and g['steps'][0]['buttons'] == ['Install guide', 'Copy the command', 'Check again'], g)
