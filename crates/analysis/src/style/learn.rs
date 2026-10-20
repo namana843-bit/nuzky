@@ -3,6 +3,7 @@
 
 use std::fmt::Write as _;
 
+use nuzky_engine::model::{KeywordPick, LetterCase};
 use serde::{Deserialize, Serialize};
 
 use crate::Word;
@@ -962,10 +963,12 @@ fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> 
         Choice::number("Position", height.clone(), centre as f64, 0.03),
     ];
     if let Some(look) = look(edits) {
+        // Read as written: 0.41, not the 0.4099999964 a single-precision number turns into.
+        let hundredths = |v: f32| (f64::from(v) * 100.0).round() / 100.0;
         let font = look.font.as_deref().unwrap_or("the editor's default font");
         let weight = if look.bold { " bold" } else { "" };
-        let outline =
-            look.outline.as_ref().map_or(String::new(), |(c, w)| format!(" with a {c} outline {w:.0} pixels wide"));
+        let outline = look.outline.as_ref().map_or(String::new(), |(c, _)| format!(" with a {c} outline"));
+        let width = look.outline.as_ref().map(|(_, w)| *w);
         let shadow = look.shadow.as_ref().map_or(String::new(), |s| {
             format!(
                 ", a {} shadow at {:.0} %, blur {:.0} %, distance {:.0}, at {:.0}°",
@@ -976,7 +979,33 @@ fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> 
                 s.angle
             )
         });
-        let said = format!("{font}{weight}, {:.0} pixels, {}{outline}{shadow}", look.size, look.color);
+        let case = match look.letter_case {
+            LetterCase::None => "",
+            LetterCase::Upper => " in capitals",
+            LetterCase::Lower => " in small letters",
+            LetterCase::Title => " with each word capitalised",
+        };
+        let background = look.background.as_ref().map_or(String::new(), |b| format!(", on a {b} box"));
+        let highlight = look.highlight.as_ref().map_or(String::new(), |h| format!(", the word being said in {h}"));
+        let keywords = look.keywords.as_ref().map_or(String::new(), |k| {
+            let which = match k.pick {
+                KeywordPick::Emphasis => "numbers and words said louder",
+                KeywordPick::First => "first word",
+                KeywordPick::Last => "last word",
+                KeywordPick::Longest => "longest word",
+            };
+            format!(", the {which} in {}", k.color)
+        });
+        let spacing: String = [("letter", look.letter_spacing), ("line", look.line_spacing)]
+            .into_iter()
+            .filter(|&(_, v)| hundredths(v) != 0.0)
+            .map(|(what, v)| format!(", {what} spacing {:.0} % of the size", hundredths(v) * 100.0))
+            .collect();
+        let wide = width.map_or(String::new(), |w| format!(" {w} pixels wide"));
+        let said = format!(
+            "{font}{weight}{case}, {} pixels, {}{outline}{wide}{shadow}{background}{highlight}{keywords}{spacing}",
+            look.size, look.color
+        );
         let at = out.find("Times in the examples").unwrap_or(out.len());
         out.insert_str(at, &format!("They are drawn in {said}, on a frame 1080 pixels across its shorter side. "));
         let mut style = serde_json::json!({"fontSize": look.size, "color": look.color, "bold": look.bold});
@@ -989,8 +1018,6 @@ fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> 
         } else {
             style["strokeWidth"] = 0.into();
         }
-        // Read as written: 0.41, not the 0.4099999964 a single-precision number turns into.
-        let hundredths = |v: f32| (f64::from(v) * 100.0).round() / 100.0;
         if let Some(s) = &look.shadow {
             style["shadow"] = serde_json::json!({"color": s.color, "opacity": hundredths(s.opacity),
                 "blur": hundredths(s.blur), "distance": hundredths(s.distance), "angle": hundredths(s.angle)});
@@ -1000,8 +1027,26 @@ fn captions(edits: &[Edit], say: &dyn Fn(&[Example]) -> String) -> Option<Rule> 
                 style[key] = hundredths(value).into();
             }
         }
+        for (key, value) in [("background", &look.background), ("highlight", &look.highlight)] {
+            if let Some(value) = value {
+                style[key] = value.clone().into();
+            }
+        }
+        if let Some(keywords) = &look.keywords {
+            style["keywords"] = serde_json::json!(keywords);
+        }
+        if !look.letter_case.is_none() {
+            style["letterCase"] = serde_json::json!(look.letter_case);
+        }
         settings.push(("build_captions style".into(), style.to_string()));
-        choices.push(Choice::text("Look", said));
+        // Sizes move a little from video to video; only a real change of size or outline is a new choice.
+        choices.push(Choice::number("Caption size", format!("{} pixels", look.size), look.size.into(), 2.0));
+        let drawn = width.map_or("none".into(), |w| format!("{w} pixels"));
+        choices.push(Choice::number("Outline", drawn, width.unwrap_or(0.0).into(), 1.0));
+        choices.push(Choice::text(
+            "Look",
+            format!("{font}{weight}{case}, {}{outline}{shadow}{background}{highlight}{keywords}{spacing}", look.color),
+        ));
     }
     Some(Rule {
         title: "Captions",
@@ -1508,6 +1553,55 @@ mod tests {
         let doc = learn(&[source(&unseen)]);
         assert!(doc.contains("- Captions and zoom not measured in reel.mp4 (too long)"), "{doc}");
         assert!(!doc.contains("none found") && !doc.contains("## Captions"), "{doc}");
+    }
+
+    #[test]
+    fn a_caption_size_a_little_off_is_the_same_look_and_spacing_is_part_of_it() {
+        let (words, cut_words, alignment, picture) = fixture();
+        let captions = |look: CaptionLook| {
+            let picture = Picture { look: Some(look), ..picture.clone() };
+            let source = Source {
+                recording: "talk.mov".into(),
+                cut: "reel.mp4".into(),
+                language: "en".into(),
+                recording_us: 30_000_000,
+                words: &words,
+                cut_words: &cut_words,
+                alignment: &alignment,
+                picture: &picture,
+                places: None,
+                corrections: &[],
+            };
+            super::learned(&[source]).rules.into_iter().find(|r| r.title == "Captions").unwrap()
+        };
+        let reel = CaptionLook {
+            font: None,
+            size: 90.0,
+            color: "#ffffff".into(),
+            bold: true,
+            outline: Some(("#000000".into(), 7.5)),
+            shadow: None,
+            letter_spacing: 0.0,
+            line_spacing: 0.0,
+            background: None,
+            highlight: None,
+            keywords: None,
+            letter_case: LetterCase::None,
+        };
+        let accepted = captions(reel.clone()).choices;
+        let same = |look: CaptionLook| Rule::same(&accepted, &captions(look).choices);
+        assert!(same(CaptionLook { size: 90.5, outline: Some(("#000000".into(), 8.0)), ..reel.clone() }));
+        assert!(!same(CaptionLook { size: 120.0, ..reel.clone() }), "a larger size is a change");
+        assert!(!same(CaptionLook { outline: Some(("#000000".into(), 12.0)), ..reel.clone() }));
+        assert!(!same(CaptionLook { outline: None, ..reel.clone() }), "no outline is a change");
+        assert!(!same(CaptionLook { color: "#ffe14d".into(), ..reel.clone() }));
+        let spaced = captions(CaptionLook { letter_spacing: 0.05, line_spacing: 0.2, ..reel.clone() });
+        assert!(!Rule::same(&accepted, &spaced.choices), "spacing alone is a change");
+        assert!(
+            spaced.text.contains("letter spacing 5 % of the size, line spacing 20 % of the size"),
+            "{}",
+            spaced.text
+        );
     }
 
     #[test]
