@@ -169,8 +169,26 @@ pub struct ActiveRule {
     pub summary: String,
     /// The creator changed it by hand, so learning leaves it alone.
     pub by_you: bool,
-    /// How well the videos learned from now back it; none when they no longer show it.
+    /// How well the videos learned from now back it; none when they no longer make its choices.
     pub confidence: Option<Confidence>,
+    pub state: RuleState,
+}
+
+/// What learning finds now for a rule of the style.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(rename = "StyleRuleState"))]
+#[serde(rename_all = "camelCase")]
+pub enum RuleState {
+    /// The same choices, as sure as the confidence says.
+    Backed,
+    /// Other choices, which a suggestion would change the rule to.
+    ChangeSuggested,
+    /// Other choices, but the creator kept the rule: they rejected the change, reverted the rule
+    /// or changed it by hand.
+    Kept,
+    /// Nothing of it.
+    NotSeen,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -202,7 +220,8 @@ pub struct Change {
 #[cfg_attr(feature = "ts", ts(rename = "StyleConfidence"))]
 #[serde(rename_all = "camelCase")]
 pub struct Confidence {
-    /// High in 3 or more videos, medium in 2, low in 1.
+    /// High in 3 or more videos or at 10 or more moments, medium in 2 videos or at 3 or more
+    /// moments, low otherwise.
     pub level: Level,
     pub videos: usize,
     /// Videos learned from in all.
@@ -218,6 +237,18 @@ pub enum Level {
     High,
     Medium,
     Low,
+}
+
+impl Level {
+    /// Learning from one project makes one video however long the creator works in it, so the
+    /// moments count too.
+    fn of(videos: usize, moments: usize) -> Level {
+        match (videos, moments) {
+            (3.., _) | (_, 10..) => Level::High,
+            (2, _) | (_, 3..) => Level::Medium,
+            _ => Level::Low,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -718,11 +749,7 @@ impl Store {
             videos.sort_unstable();
             videos.dedup();
             Confidence {
-                level: match videos.len() {
-                    3.. => Level::High,
-                    2 => Level::Medium,
-                    _ => Level::Low,
-                },
+                level: Level::of(videos.len(), rule.moments.len()),
                 videos: videos.len(),
                 of: evidence.len(),
                 moments: rule.moments.len(),
@@ -735,16 +762,22 @@ impl Store {
                 // A rule changed by hand says what the creator wrote, which neither the summary
                 // nor what learning finds now describes.
                 let by_you = current.frozen.get(title) == Some(&Frozen::Edited);
+                let accepted = current.accepted.get(title).filter(|_| !by_you);
+                let now = rules_now(title);
+                // Learning that now makes other choices backs a different rule, not this one.
+                let backed = now.filter(|r| accepted.is_some_and(|a| Rule::same(&a.choices, &r.choices)));
                 ActiveRule {
                     title: title.to_owned(),
-                    summary: current
-                        .accepted
-                        .get(title)
-                        .filter(|_| !by_you)
-                        .map(|a| a.summary.clone())
-                        .unwrap_or_default(),
+                    summary: accepted.map(|a| a.summary.clone()).unwrap_or_default(),
                     by_you,
-                    confidence: rules_now(title).filter(|_| !by_you).map(confidence),
+                    confidence: backed.map(confidence),
+                    state: match (now, backed) {
+                        (None, _) => RuleState::NotSeen,
+                        (_, Some(_)) => RuleState::Backed,
+                        // Learning leaves a frozen rule alone, so it suggests no change to it.
+                        _ if current.frozen.contains_key(title) => RuleState::Kept,
+                        _ => RuleState::ChangeSuggested,
+                    },
                 }
             })
             .collect();
@@ -1514,7 +1547,11 @@ mod tests {
         let view = add(&store, evidence("talk", 120_000));
         assert_eq!(file(&dir), None, "learning alone never writes the style");
         assert!(view.suggestions.len() >= 4 && view.versions.is_empty(), "{:?}", titles(&view));
-        assert!(view.suggestions.iter().all(|s| !s.update && s.confidence.level == Level::Low && s.confidence.of == 1));
+        assert!(view.suggestions.iter().all(|s| !s.update && s.confidence.videos == 1 && s.confidence.of == 1));
+        // One video backs a rule as much as the moments it was seen at.
+        let level = |title: &str| view.suggestions.iter().find(|s| s.title == title).map(|s| s.confidence.level);
+        assert_eq!(level("Restarted sentences"), Some(Level::Medium), "seen at 3 moments");
+        assert_eq!(level("Captions"), Some(Level::High), "seen at 10 or more moments");
         let restart = view.suggestions.iter().find(|s| s.title == "Restarted sentences").unwrap();
         assert!(restart.moments.len() == 3 && restart.moments[0].video == "talk.mov", "{:?}", restart.moments);
 
@@ -1531,6 +1568,7 @@ mod tests {
         let cli = learning::learn(&[evidence("talk", 120_000).source()]);
         assert_eq!(file(&dir).unwrap(), cli, "accepting every suggestion gives the CLI's EDIT.md byte for byte");
         assert!(view.suggestions.is_empty() && view.versions[0].label.starts_with("Accepted "), "{:?}", view.versions);
+        assert!(view.rules.iter().all(|r| r.confidence.is_some() && r.state == RuleState::Backed), "{:?}", view.rules);
 
         // The same video learned again with a few more milliseconds of pause is no news; a much
         // longer pause is, and only for Pauses.
@@ -1547,7 +1585,36 @@ mod tests {
             "{:?}",
             pauses.changes
         );
+        // The accepted rule is not backed by what learning finds now; the others still are.
+        let pauses = view.rules.iter().find(|r| r.title == "Pauses").unwrap();
+        assert!(pauses.confidence.is_none() && pauses.state == RuleState::ChangeSuggested, "{pauses:?}");
+        let restart = view.rules.iter().find(|r| r.title == "Restarted sentences").unwrap();
+        assert!(restart.confidence.is_some() && restart.state == RuleState::Backed, "{restart:?}");
         assert_eq!(file(&dir).unwrap(), cli, "a suggestion changes nothing until accepted");
+        // Rejected, the change no longer waits and the style keeps the rule as it was accepted.
+        let view = store.act(StyleAction::Reject { title: "Pauses".into() }).unwrap();
+        let pauses = view.rules.iter().find(|r| r.title == "Pauses").unwrap();
+        assert!(pauses.confidence.is_none() && pauses.state == RuleState::Kept, "{pauses:?}");
+        assert_eq!(file(&dir).unwrap(), cli);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn confidence_counts_videos_and_moments() {
+        assert_eq!(Level::of(1, 2), Level::Low);
+        assert_eq!(Level::of(1, 3), Level::Medium);
+        assert_eq!(Level::of(1, 9), Level::Medium);
+        assert_eq!(Level::of(1, 10), Level::High);
+        assert_eq!(Level::of(2, 2), Level::Medium);
+        assert_eq!(Level::of(3, 3), Level::High);
+
+        let (store, dir) = store();
+        add(&store, evidence("one", 120_000));
+        add(&store, evidence("two", 130_000));
+        let view = add(&store, evidence("three", 140_000));
+        let restart = view.suggestions.iter().find(|s| s.title == "Restarted sentences").unwrap();
+        let c = restart.confidence;
+        assert!((c.level, c.videos, c.of, c.moments) == (Level::High, 3, 3, 9), "{c:?}");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1864,6 +1931,30 @@ mod tests {
         assert_eq!(rule.summary, r#"Write "w00" as "Nuzky", "w01" as "Nuzky", "w02" as "Nuzky""#);
         drop(host);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn one_shot_held_at_its_framing_is_one_moment() {
+        let (dir, host) = talk();
+        // The last sentence cut: one shot of 26 s at scale 1 that plays speech, and a silent tail.
+        host.session.edit(cut(5, 0), None, Default::default()).unwrap();
+        let project = host.session.state().unwrap().project;
+        let evidence = project_evidence(&project, &dir.join("talk.nuzky"), &host.transcripts).unwrap().unwrap();
+        assert!(evidence.picture.zooms.is_empty() && evidence.picture.framing.len() > 40, "{:?}", evidence.picture);
+        let (store, store_dir) = store();
+        let view = add(&store, evidence);
+        let zoom = view.suggestions.iter().find(|s| s.title == "Zoom").unwrap();
+        let c = zoom.confidence;
+        assert!((c.level, c.moments) == (Level::Low, 1), "{c:?}");
+        assert!(
+            zoom.text.contains("framed at scale 1.00")
+                && zoom.text.lines().filter(|l| l.starts_with("- ") && l.contains(" scale 1.00, ")).count() >= 3,
+            "the style still shows the framing on its samples: {}",
+            zoom.text
+        );
+        drop(host);
+        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(store_dir).unwrap();
     }
 
     #[test]

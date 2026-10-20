@@ -1322,7 +1322,8 @@ export type StyleChange = {
 
 export type StyleConfidence = {
   /**
-   * High in 3 or more videos, medium in 2, low in 1.
+   * High in 3 or more videos or at 10 or more moments, medium in 2 videos or at 3 or more
+   * moments, low otherwise.
    */
   level: StyleLevel,
   videos: number,
@@ -1386,10 +1387,16 @@ export type StyleRule = {
    */
   byYou: boolean,
   /**
-   * How well the videos learned from now back it; none when they no longer show it.
+   * How well the videos learned from now back it; none when they no longer make its choices.
    */
   confidence: StyleConfidence | null,
+  state: StyleRuleState,
 };
+
+/**
+ * What learning finds now for a rule of the style.
+ */
+export type StyleRuleState = "backed" | "changeSuggested" | "kept" | "notSeen";
 
 export type StyleSource = {
   title: string,

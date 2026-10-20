@@ -19,7 +19,10 @@ const LEVEL = { high: ["High", 3], medium: ["Medium", 2], low: ["Low", 1] } as c
 function Confidence({ c }: { c: StyleConfidence }) {
   const [label, lit] = LEVEL[c.level];
   return (
-    <span className="flex items-center gap-1.5 text-[12px] text-muted" title={`${label} confidence: seen in ${c.videos} of the ${plural(c.of, "video")} learned from`}>
+    <span
+      className="flex items-center gap-1.5 text-[12px] text-muted"
+      title={`${label} confidence: seen at ${plural(c.moments, "moment")} in ${c.videos} of the ${plural(c.of, "video")} learned from. High takes 3 videos or 10 moments, Medium 2 videos or 3 moments.`}
+    >
       <Bars lit={lit} />
       <span className="text-fg/85">{label}</span>
       <span aria-hidden>·</span>
@@ -247,6 +250,13 @@ function toastUndo(text: string, version: number) {
   useEditor.getState().toast({ kind: "success", text, action: undoTo(version) });
 }
 
+/** What a learned rule's row says when the videos learned from do not back it as it is. */
+const RULE_STATE = {
+  changeSuggested: ["Change suggested", "What learning finds now differs from this rule. Accept or Reject the change under Suggestions."],
+  kept: ["Kept as you chose", "What learning finds now differs from this rule, and you kept it as it is. Learn again under Not learned suggests the change."],
+  notSeen: ["Not seen lately", "The videos learned from no longer show this rule."],
+} as const;
+
 function LearnedRules({ view, changed }: { view: StyleView; changed: Set<string> }) {
   const [menu, setMenu] = useState<{ rule: StyleRule; at: { x: number; y: number; align: "end" }; keyboard: boolean; back: HTMLElement } | null>(null);
   if (view.rules.length === 0) return null;
@@ -272,7 +282,15 @@ function LearnedRules({ view, changed }: { view: StyleView; changed: Set<string>
                 </span>
               )}
             </span>
-            {rule.confidence ? <Confidence c={rule.confidence} /> : rule.byYou ? <span /> : <span className="text-[12px] text-muted">Not seen lately</span>}
+            {rule.confidence ? (
+              <Confidence c={rule.confidence} />
+            ) : rule.byYou || rule.state === "backed" ? (
+              <span />
+            ) : (
+              <span className="text-[12px] text-muted" title={RULE_STATE[rule.state][1]}>
+                {RULE_STATE[rule.state][0]}
+              </span>
+            )}
             <IconButton
               label={`More for ${rule.title}`}
               aria-haspopup="menu"
