@@ -119,7 +119,8 @@ mod tests {
         let state = host.session.state().unwrap();
         let derived = transcript::derive(&state.project, &host.transcripts).unwrap();
         let proposal = ReelProposal { from: 2, to: 4, title: "Middle".into(), why: String::new(), score: 0.5 };
-        let candidates = reels::plan(&state.project, &derived, &[proposal], reels::DEFAULT_MAX_DURATION_US).unwrap();
+        let max = reels::DEFAULT_MAX_DURATION_US;
+        let candidates = reels::plan(&state.project, &derived, &[proposal], max, transcript::DEFAULT_PAUSE_US).unwrap();
         let proposed = EditCmd::SetReelCandidates { candidates: candidates.clone() };
         host.session.edit(vec![proposed], None, Expect::default()).unwrap();
         let ids = vec![candidates[0].id.clone()];
