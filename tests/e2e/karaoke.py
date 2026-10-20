@@ -356,7 +356,7 @@ def caption_styles(r):
     r.s = Session()
     r.check('the app starts again', wait(lambda: r.s.run('return !!window.__nuzky?.store.getState().snap', retries=3), 60))
     r.s.run("window.__nuzky.store.setState({view: 'editor'})")
-    r.s.run("[...document.querySelectorAll('[role=tab]')].find((t) => t.textContent.trim() === 'Captions')?.click()")
+    wait(lambda: r.s.run("const t = [...document.querySelectorAll('[role=tab]')].find((t) => t.textContent.trim() === 'Captions'); t?.click(); return !!t"), 10)
     if r.check('after a restart My styles still has Green longest', wait(lambda: r.s.run(tile_js('Green longest') + ' ? true : false'), 10, 0.5)):
         r.s.run(tile_js('Green longest') + '.click()')
         r.check('it brings the font, pop-in and key words back to every caption',

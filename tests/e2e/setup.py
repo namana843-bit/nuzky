@@ -5,7 +5,7 @@ import time
 
 from e2e.corrections import Hands
 from e2e.diagnostics import CRASHED, TOASTS, app_pid
-from e2e.harness import FIXTURES, MACOS, Session, close_window, leave_editor, flow, press, wait
+from e2e.harness import FIXTURES, MACOS, Session, close_window, leave_editor, flow, press, start_driver, stop, wait
 from e2e.home import FIRST_RUN_TEXT, OPEN_VIDEO, make, resize
 
 TITLES = ['Captions model', 'Face and person models', 'Music from YouTube', 'Connect your AI']
@@ -76,6 +76,10 @@ def relaunch(r):
     close_window()
     r.check('the window closes and Nuzky quits', wait(lambda: (r.app.poll() is not None) if MACOS else app_pid(r) is None, 15))
     r.s.close()
+    if not MACOS:
+        # WebKitWebDriver starts the app with its own environment, so a new one brings r.env as it is now.
+        stop(r.driver)
+        start_driver(r)
     r.s = Session()
     if not wait(lambda: r.s.run('return !!window.__nuzky?.store.getState().snap', retries=3), 60):
         raise RuntimeError('the app did not start again')
