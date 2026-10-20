@@ -936,7 +936,7 @@ mod tests {
         let done = connect(Agent::Antigravity, &path, Some(&settings), &command(), 3).unwrap();
         assert!(std::fs::symlink_metadata(&settings).unwrap().file_type().is_symlink());
         // On macOS the temporary folder is reached through the /var symlink, and the backup goes beside the real file.
-        assert_eq!(done.backups, [dir.canonicalize().unwrap().join("real.json.nuzky-backup-3").display().to_string()]);
+        assert_eq!(done.backups, [dunce::canonicalize(&dir).unwrap().join("real.json.nuzky-backup-3").display().to_string()]);
         assert_eq!(std::fs::read_to_string(&done.backups[0]).unwrap(), "{}");
         assert!(std::fs::read_to_string(&real).unwrap().contains("mcp(nuzky/*)"));
         std::fs::write(&real, "not json").unwrap();
