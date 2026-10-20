@@ -19,7 +19,7 @@ const COPIES: { setup: AgentSetup; label: string; name: string }[] = [
   { setup: "other", label: "Copy MCP config", name: "your agent" },
 ];
 
-/** Connect your agent: one click writes Nuzky into Claude Code's or Codex's own settings, a copy serves any other agent, and Agent access decides whether they may edit. */
+/** Connect your agent: one click writes Nuzky into Claude Code's, Codex's or Antigravity CLI's own settings, a copy serves any other agent, and Agent access decides whether they may edit. */
 export function ConnectAgentDialog() {
   const open = useEditor((s) => s.connectOpen);
   const [rows, setRows] = useState<AgentConnection[] | null>(null);
@@ -79,10 +79,10 @@ export function ConnectAgentDialog() {
       setRows((all) => all?.map((r) => (r.agent === done.agent ? done : r)) ?? null);
       // Connecting turns Agent access on, now and at every launch.
       setAccess(await api.agentAccess());
-      useEditor.getState().toast({
-        kind: "success",
-        text: `${done.name} is connected. Restart ${done.name}, then ask it to edit your video.${done.backup ? ` Your old settings are in ${done.backup}.` : ""}`,
-      });
+      const old = done.backups.length > 1 ? " Your old settings are backed up next to them." : done.backups.length ? ` Your old settings are in ${done.backups[0]}.` : "";
+      // agy may not be on a new terminal's PATH yet, so the AI panel's Gemini guide gives the command to paste.
+      const next = done.agent === "antigravity" ? "Choose Gemini in the AI panel to see how to ask it in a terminal." : `Restart ${done.name}, then ask it to edit your video.`;
+      useEditor.getState().toast({ kind: "success", text: `${done.name} is connected. ${next}${old}` });
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -196,7 +196,7 @@ export function ConnectAgentDialog() {
               {error}
             </p>
           )}
-          <p className="text-[12px] text-muted">Connect backs up the agent's settings file and adds only Nuzky.</p>
+          <p className="text-[12px] text-muted">Connect backs up the agent's settings and adds only Nuzky. For Gemini, it also lets Antigravity CLI use Nuzky's tools without asking.</p>
         </div>
         <div className="mt-6 flex justify-end">
           <Button pill variant={rows && !first ? "primary" : undefined} data-autofocus={!first || undefined} onClick={close}>
