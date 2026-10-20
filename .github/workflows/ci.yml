@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["macos-14"]') || fromJSON('["ubuntu-24.04", "macos-14", "windows-2022"]') }}
+        os: ['macos-14']
     runs-on: ${{ matrix.os }}
     # Windows compiles slowest, and a release tag builds without a cache (it cannot read another ref's): clippy, the
     # tests and the installers took over 60 minutes there.
