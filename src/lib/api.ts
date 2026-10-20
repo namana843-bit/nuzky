@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type Channel } from "@tauri-apps/api/core";
 import type { AgentAccess, AgentConnection, AgentKind, AgentSetup, AgentStatus, Animation, Boot, CapCutDraft, CaptionPreset, ChatGptStatus, Collection, CoverView, DeletedCollection, SpeechModel, SpeechSetup, EditCmd, ExportRequest, Filmstrip, FontFamilies, HistoryPeek, LayerBounds, Library, Part, PreviewStarted, ProjectSummary, ProjectVersion, RecapInfo, ReelCandidate, ReelFraming, Said, Snapshot, Sound, SoundKind, SoundPage, SoundSettings, StickerCatalog, StyleAction, StylePair, StyleView, TextStyle, Thumbnail, ThumbnailFormat, TimelinePlan, TranscriptCut, TranscriptView, VideoPreview, VisionModels, WordsCorrected, YoutubeVideo, ZoomSuggestions, ZoomsApplied } from "./types";
 
 /**
@@ -210,8 +210,14 @@ export const api = {
   reelBounds: (id: string, from: number, to: number) => invoke<ReelCandidate>("reel_bounds", { id, from, to }),
   /** A project of its own beside this one for each reel candidate, as a `reels` job; marked made here as one undo step. */
   startMakeReels: (ids: string[], canvas: ReelFraming, epoch: Epoch) => invoke<string>("start_make_reels", { ids, canvas, expectedEpoch: epoch }),
-  /** A newer released version, or null when this one is the latest. */
-  checkForUpdate: () => invoke<string | null>("check_for_update"),
+  /** A newer released version and whether this copy can install it itself, or null when this one is the latest. */
+  checkForUpdate: () => invoke<{ version: string; canInstall: boolean } | null>("check_for_update"),
+  /** Downloads the newer version and checks its signature; the backend keeps it for `restartToUpdate`. `progress` gets the percentage downloaded. */
+  downloadUpdate: (progress: Channel<number>) => invoke<string>("download_update", { progress }),
+  /** Saves the project, installs the downloaded update and restarts Nuzky; `note` goes to the restarted UI. True when work started meanwhile, which postpones the restart. */
+  restartToUpdate: (note: string) => invoke<boolean>("restart_to_update", { note }),
+  /** Stops the download; `downloadUpdate` then fails with CANCELLED. */
+  cancelUpdate: () => invoke<void>("cancel_update"),
   openReleasePage: () => invoke<void>("open_release_page"),
   /** The idea form with this version filled in, or the author's X profile, in the browser. */
   openFeedback: (kind: FeedbackKind) => invoke<void>("open_feedback", { kind }),

@@ -131,6 +131,8 @@ pub struct Boot {
     update_checks: bool,
     /// The Nuzky that ran before this one ended without quitting.
     crashed: bool,
+    /// What the Nuzky before this one left when it restarted to update (`restartToUpdate` in src/lib/updates.ts).
+    update_note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -502,6 +504,8 @@ fn boot(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Boot> {
         startup_notice: state.startup_notice.clone(),
         version: app.package_info().version.to_string(),
         update_checks: updates::enabled(),
+        // Taken first: a Nuzky that ended for its update did not crash.
+        update_note: updates::take_note(),
         crashed: diagnostics::crashed_before(),
     })
 }
@@ -1181,6 +1185,8 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updates::Updates::default())
         .setup(|app| {
             // GTK has set the process's locale from the system, so on a Czech or German system C code reads numbers
             // with a decimal comma. ONNX Runtime read its operators' default values that way when the first model
@@ -1380,6 +1386,9 @@ pub fn run() {
             style::style_use_learned,
             updates::check_for_update,
             updates::open_release_page,
+            updates::download_update,
+            updates::restart_to_update,
+            updates::cancel_update,
             updates::open_feedback,
             diagnostics::diagnostics,
             diagnostics::open_logs,
@@ -1396,6 +1405,12 @@ pub fn run() {
         .expect("error while building Nuzky")
         .run(|app, event| match event {
             tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. } => {
+                // Quitting would cut short the rewriting of the app; it restarts in a moment.
+                if updates::installing(app) {
+                    api.prevent_close();
+                    app.emit("close-while-installing", ()).ok();
+                    return;
+                }
                 let state = app.state::<AppState>();
                 // Cleared here, so a second close quits even if the page never went home.
                 if state.editor_shown.swap(false, Ordering::AcqRel) {
@@ -1440,6 +1455,8 @@ pub fn run() {
                 app.state::<agent_panel::AgentPanel>().stop();
                 app.state::<AppState>().quit();
                 diagnostics::quit();
+                #[cfg(target_os = "linux")]
+                updates::start_again(app);
             }
             _ => {}
         });
@@ -1452,11 +1469,16 @@ impl AppState {
     /// Running work that closing the window would cancel. Preparing audio, a preview proxy or a person
     /// outline is not asked about: it starts again with the project.
     fn running_work(&self) -> Option<&'static str> {
+        quit_question(&self.running_kinds())
+    }
+
+    /// The kinds of the app's jobs and the agents' jobs that run.
+    fn running_kinds(&self) -> Vec<String> {
         let mut kinds: Vec<String> =
             self.jobs.lock().unwrap().keys().map(|id| id.split(':').next().unwrap_or(id).to_owned()).collect();
         let host = self.session.lock().unwrap().host.clone();
         kinds.extend(host.jobs.running().into_iter().map(String::from));
-        quit_question(&kinds)
+        kinds
     }
 
     /// Quitting stops agents, cancels every job, gives exports a moment to remove their
