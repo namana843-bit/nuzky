@@ -502,6 +502,7 @@ export function Checkbox({
   tabIndex,
   detail,
   children,
+  tour,
 }: {
   label: string;
   checked: boolean;
@@ -517,6 +518,8 @@ export function Checkbox({
   detail?: ReactNode;
   /** What it says in place of `label`, such as a name over a line about it; `label` still names it. */
   children?: ReactNode;
+  /** Names it for the first-run tour, which points at it. */
+  tour?: string;
 }) {
   const lock = useLockReason();
   disabled = disabled || !!lock;
@@ -528,6 +531,7 @@ export function Checkbox({
     <label
       className={`flex cursor-pointer has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40 ${children ? "min-w-0 flex-1 items-start gap-3" : "items-center gap-2"}`}
       title={lock ?? title}
+      data-tour={tour}
     >
       <span className={`relative inline-flex ${children ? "mt-0.5" : ""}`}>
         <input

@@ -4,6 +4,7 @@ import { api, errorText, plainError } from "../../lib/api";
 import { addSound, answerRights, copyCredits, installYtdlp, loadBuiltIn, loadDownloaded, openLink, searchSounds, stopPreview, togglePreview, useSounds } from "../../lib/sounds";
 import { useEditor } from "../../lib/store";
 import { formatDuration } from "../../lib/time";
+import { SONG, useTour } from "../../lib/tour";
 import type { Sound, SoundKind, SoundSettings } from "../../lib/types";
 import { Button, Checkbox, IconButton, LockReason, SearchField, lockedProps, trapTab, useLockReason } from "../ui";
 
@@ -18,6 +19,8 @@ function SoundRow({ sound, inProject, showKind = true }: { sound: Sound; inProje
   const adding = useSounds((s) => s.adding.includes(sound.id));
   const progress = useSounds((s) => s.progress[sound.id] ?? 0);
   const lock = useLockReason();
+  // The tour points at this row's +, so it shows without the pointer over it.
+  const pointedAt = useTour((s) => s.step === "song") && sound.id === SONG;
   const online = sound.provider !== "Built in";
   const license = sound.license === "by" ? "CC BY" : "CC0";
   const licensed = online && sound.license !== null;
@@ -49,7 +52,9 @@ function SoundRow({ sound, inProject, showKind = true }: { sound: Sound; inProje
       </button>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="truncate text-[13px] text-fg">{sound.title}</span>
-        {(online || showKind) && <span className="truncate text-[12px] text-muted">{online ? `${sound.author} · ${sound.provider}` : sound.category}</span>}
+        {(online || showKind) && (
+          <span className="truncate text-[12px] text-muted">{online || sound.kind === "music" ? `${sound.author} · ${sound.provider}` : sound.category}</span>
+        )}
       </div>
       {licensed && (
         <button
@@ -87,7 +92,7 @@ function SoundRow({ sound, inProject, showKind = true }: { sound: Sound; inProje
             title={inProject ? "In this project. Add it again at the playhead" : "Add at playhead"}
             onClick={() => addSound(sound)}
             {...lockedProps(lock)}
-            className={`btn-prominent ${ACTION} ${inProject ? "hidden group-focus-within:flex group-hover:flex" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"}`}
+            className={`btn-prominent ${ACTION} ${pointedAt ? "" : inProject ? "hidden group-focus-within:flex group-hover:flex" : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"}`}
           >
             <Plus size={16} />
           </button>
@@ -207,13 +212,14 @@ function SoundSearch({ kind }: { kind: SoundKind }) {
 /** Music from YouTube has no credit; its file in the library is named after the video. */
 const YOUTUBE_FILE = /^youtube-([\w-]{11})\.\w+$/;
 
-/** Ids of the library sounds the project already has. */
+/** Ids of the library sounds the project already has. A credited video, such as the tour's sample from YouTube, is no sound. */
 function useInProject() {
   const assets = useEditor((s) => s.snap?.project.assets);
   return new Set(
     (assets ?? []).flatMap((a) => {
+      if (a.kind !== "audio") return [];
       if (a.credit) return [`${a.credit.source}:${a.credit.id}`];
-      const video = a.kind === "audio" ? YOUTUBE_FILE.exec(a.path.split(/[\\/]/).pop() ?? "")?.[1] : undefined;
+      const video = YOUTUBE_FILE.exec(a.path.split(/[\\/]/).pop() ?? "")?.[1];
       return video ? [`youtube:${video}`] : [];
     }),
   );
@@ -243,7 +249,7 @@ function OnlineResults({ kind, titled = kind === "effect" }: { kind: SoundKind; 
           ))}
         </div>
       )}
-      {search.error && offline && kind === "effect" && (
+      {search.error && offline && (
         <div className="mx-1.5 flex items-center gap-2 text-[12px] text-muted" role="alert">
           <WifiOff size={14} className="shrink-0" />
           <span className="min-w-0 flex-1">You're offline.</span>
@@ -252,13 +258,10 @@ function OnlineResults({ kind, titled = kind === "effect" }: { kind: SoundKind; 
           </Button>
         </div>
       )}
-      {search.error && !(offline && kind === "effect") && (
+      {search.error && !offline && (
         <div className="mx-1.5 my-2 flex flex-col items-center gap-2 rounded-xl p-4 text-center" role="alert">
-          {offline && <WifiOff size={24} className="text-muted" />}
-          <p className="text-[13px] font-semibold text-fg">{offline ? "You're offline" : "Search didn't work"}</p>
-          <p className="text-[12px] text-muted">
-            {offline ? "Music search needs the internet. Built-in sound effects still work." : plainError(search.error)}
-          </p>
+          <p className="text-[13px] font-semibold text-fg">Search didn't work</p>
+          <p className="text-[12px] text-muted">{plainError(search.error)}</p>
           <Button className="mt-1 h-7 text-[12px]" onClick={() => searchSounds(kind, search.query)}>
             Try again
           </Button>
@@ -282,7 +285,8 @@ function OnlineResults({ kind, titled = kind === "effect" }: { kind: SoundKind; 
 }
 
 function Effects() {
-  const builtIn = useSounds((s) => s.builtIn);
+  const all = useSounds((s) => s.builtIn);
+  const builtIn = all.filter((s) => s.kind === "effect");
   const query = useSounds((s) => s.search.effect.query.trim().toLowerCase());
   const [category, setCategory] = useState<string | null>(null);
   const inProject = useInProject();
@@ -513,6 +517,7 @@ function Music() {
   const query = useSounds((s) => s.search.music.query);
   const linked = useSounds((s) => s.link.sound?.id);
   const downloaded = useSounds((s) => s.downloaded);
+  const builtIn = useSounds((s) => s.builtIn);
   const inProject = useInProject();
   // A song the user or an agent adds from a link joins the list with the asset.
   const assets = useEditor((s) => s.snap?.project.assets.length);
@@ -520,7 +525,9 @@ function Music() {
     loadDownloaded().catch((e) => useEditor.getState().toast({ kind: "error", text: `The songs from YouTube could not be read: ${errorText(e)}` }));
   }, [assets]);
   const words = query.trim().toLowerCase();
-  const shown = downloaded.filter((s) => s.id !== linked && (!words || [s.title, s.author].some((t) => t.toLowerCase().includes(words))));
+  const matching = (s: Sound) => !words || [s.title, s.author].some((t) => t.toLowerCase().includes(words));
+  const songs = builtIn.filter((s) => s.kind === "music" && matching(s));
+  const shown = downloaded.filter((s) => s.id !== linked && matching(s));
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3.5">
       <LinkResult />
@@ -533,8 +540,18 @@ function Music() {
           ))}
         </div>
       )}
+      {songs.length > 0 && (
+        <section aria-label="Built in" className="flex flex-col gap-0.5">
+          <h3 className="mx-1.5 mb-1 flex items-baseline gap-1.5 text-[13px] font-semibold text-fg">
+            Built in <span className="tabular text-[12px] font-normal text-muted">{songs.length}</span>
+          </h3>
+          {songs.map((sound) => (
+            <SoundRow key={sound.id} sound={sound} inProject={inProject.has(sound.id)} />
+          ))}
+        </section>
+      )}
       {shown.length > 0 && (
-        <section aria-label="From YouTube" className="flex flex-col gap-0.5">
+        <section aria-label="From YouTube" className={`flex flex-col gap-0.5 ${songs.length > 0 ? "mt-2" : ""}`}>
           <h3 className="mx-1.5 mb-1 flex items-baseline gap-1.5 text-[13px] font-semibold text-fg">
             From YouTube <span className="tabular text-[12px] font-normal text-muted">{shown.length}</span>
           </h3>
@@ -543,7 +560,7 @@ function Music() {
           ))}
         </section>
       )}
-      {words && <OnlineResults kind="music" titled={shown.length > 0} />}
+      {words && <OnlineResults kind="music" titled={shown.length + songs.length > 0} />}
     </div>
   );
 }
@@ -587,25 +604,33 @@ export function SoundLibrary({ kind }: { kind: SoundKind }) {
   );
 }
 
-/** How many CC BY sounds play on the timeline; their credits go in the video's description. */
+/** How many CC BY sounds and videos play on the timeline; their credits go in the video's description. */
 export function CreditsBar() {
   const bar = useRef<HTMLDivElement>(null);
-  const count = useEditor((s) => {
+  // What needs credit, by kind, as a string, so the bar redraws only when that changes: "1 video and 2 sounds need credit".
+  const needed = useEditor((s) => {
     const project = s.snap?.project;
-    if (!project) return 0;
+    if (!project) return null;
     const used = new Set(project.tracks.flatMap((t) => t.clips.flatMap((c) => (c.content.type === "media" ? [c.content.assetId] : []))));
-    return project.assets.filter((a) => a.credit?.license === "by" && used.has(a.id)).length;
+    const credited = project.assets.filter((a) => a.credit?.license === "by" && used.has(a.id));
+    if (!credited.length) return null;
+    const parts = (["video", "image", "audio"] as const)
+      .map((kind) => [credited.filter((a) => a.kind === kind).length, { video: "video", image: "picture", audio: "sound" }[kind]] as const)
+      .filter(([n]) => n > 0)
+      .map(([n, word]) => `${n} ${word}${n === 1 ? "" : "s"}`);
+    const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+    return `${what} ${credited.length === 1 ? "needs" : "need"} credit`;
   });
   // Toasts move above the bar while it shows, so they never cover Copy credits.
   useLayoutEffect(() => {
-    if (count === 0) return;
+    if (!needed) return;
     useEditor.setState({ toastLift: bar.current?.offsetHeight ?? 0 });
     return () => useEditor.setState({ toastLift: 0 });
-  }, [count]);
-  if (count === 0) return null;
+  }, [needed]);
+  if (!needed) return null;
   return (
     <div ref={bar} className="flex shrink-0 items-center gap-2 border-t border-white/[.07] px-3.5 py-2.5 text-[12px] text-muted">
-      <span className="min-w-0 flex-1">{count === 1 ? "1 sound needs credit" : `${count} sounds need credit`}</span>
+      <span className="min-w-0 flex-1">{needed}</span>
       <Button pill className="h-7 gap-1.5 text-[12px]" onClick={copyCredits} title="Copy the credits for the video's description">
         <Copy size={13} /> Copy credits
       </Button>

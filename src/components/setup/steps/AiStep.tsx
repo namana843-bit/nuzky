@@ -5,6 +5,7 @@ import { api, errorText, plainError } from "../../../lib/api";
 import { pickOneVideo } from "../../../lib/library";
 import { useSetup } from "../../../lib/setup";
 import { useEditor } from "../../../lib/store";
+import { useTour } from "../../../lib/tour";
 import type { AgentKind, AgentStatus } from "../../../lib/types";
 import { Button } from "../../ui";
 import { StepActions } from "../StepActions";
@@ -100,7 +101,7 @@ function Agents() {
   // Connect or Check again going away leaves the focus nowhere; it goes to the prominent button, never to Skip.
   useEffect(() => {
     if (document.activeElement !== document.body) return;
-    (document.querySelector<HTMLElement>("#setup-panel .btn-prominent") ?? document.querySelector<HTMLElement>("#setup-panel footer button"))?.focus();
+    (document.querySelector<HTMLElement>("#setup-panel .btn-prominent") ?? document.querySelector<HTMLElement>("#setup-panel footer button:not([data-sample])"))?.focus();
   });
 
   return (
@@ -265,10 +266,13 @@ function AgentCard({
 
 /** Skipped, or on Windows: the way to cut by hand in the transcript, and the video to start with. */
 function WithoutAi({ windows, onAgents }: { windows: boolean; onAgents: () => void }) {
-  // Pressing Skip leaves the focus on the footer's Done that took its place; Open a video… is the way on.
+  // Pressing Skip leaves the focus on the footer's Done that took its place; the prominent button is the way on: Open a
+  // video…, or on the first launch Try the sample video.
+  const firstSetup = useTour((s) => s.firstSetup);
+  const ended = useSetup((s) => !!s.states.ai);
   useEffect(() => {
     const focus = document.activeElement;
-    if (focus === document.body || focus?.closest("#setup-panel footer")) document.querySelector<HTMLElement>("#setup-panel footer button")?.focus();
+    if (focus === document.body || focus?.closest("#setup-panel footer")) document.querySelector<HTMLElement>("#setup-panel footer .btn-prominent")?.focus();
   }, []);
   const openVideo = () =>
     void pickOneVideo(() => {
@@ -300,7 +304,7 @@ function WithoutAi({ windows, onAgents }: { windows: boolean; onAgents: () => vo
         </button>
       )}
       <StepActions>
-        <Button pill variant="primary" onClick={openVideo}>
+        <Button pill variant={firstSetup && ended ? "secondary" : "primary"} onClick={openVideo}>
           Open a video…
         </Button>
       </StepActions>

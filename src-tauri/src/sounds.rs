@@ -44,7 +44,7 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> anyhow::Result<T> + 
     tauri::async_runtime::spawn_blocking(work).await.map_err(err)?.map_err(err)
 }
 
-/// The sound effects built into Nuzky.
+/// The sound effects and songs built into Nuzky; `kind` tells them apart.
 #[tauri::command]
 pub fn sound_library() -> Vec<Sound> {
     sounds::built_in("")
@@ -199,7 +199,7 @@ pub async fn sound_add(
     Ok(snap)
 }
 
-/// The credits the video's description needs, as export writes them beside it; none without CC BY sounds.
+/// The credits the video's description needs, as export writes them beside it; none without CC BY sounds or footage.
 #[tauri::command]
 pub fn sound_credits(state: State<'_, AppState>, expected_epoch: Option<String>) -> CmdResult<Option<String>> {
     let project = lock_session(&state.session, expected_epoch.as_deref())?.host.session.state().map_err(err)?.project;

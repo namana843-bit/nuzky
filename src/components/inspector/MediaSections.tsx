@@ -226,6 +226,7 @@ export function DuckingRow({ clips, coalesce }: { clips: Clip[]; coalesce: strin
     <>
       <Checkbox
         label="Lower under speech"
+        tour="duck"
         checked={all}
         mixed={!all && on.length > 0}
         title="Turns this sound down while someone speaks in a video and back up in the pauses"
