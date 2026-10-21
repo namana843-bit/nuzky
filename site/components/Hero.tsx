@@ -184,7 +184,7 @@ function Pipeline({ spoken }: { spoken: Spoken }) {
         return (
           <li
             key={titles[i]}
-            className={`surface relative flex h-full flex-col rounded-[20px] ${last ? "w-[236px] border-transparent ring-[1.5px] ring-accent" : "w-[196px]"}`}
+            className={`surface relative flex h-full flex-col rounded-[20px] ${last ? "w-[236px] border-[1.5px] border-accent" : "w-[196px]"}`}
           >
             <div className="flex h-[66px] items-start gap-2.5 px-4 pt-4">
               <Num n={i + 1} last={last} />
