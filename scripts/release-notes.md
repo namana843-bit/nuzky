@@ -6,7 +6,12 @@ The first alpha of Nuzky, a free, open-source video editor for your computer. It
 - **Retakes and pauses.** Transcribe a talking video and delete words straight from the text, or press Remove retakes and pauses to cut restarted sentences, filler words and silences in one step. One Undo takes it back.
 - **Export.** MP4 from 720p to 4K, with presets for Reels & TikTok, Shorts and YouTube and no watermark. The file looks exactly like the preview.
 - **Phone videos.** iPhone and Android videos open the right way up, selfies included, and every cut lands on the frame you picked.
-- **AI editing with Claude Code or Codex.** Connect agent sets up Claude Code or Codex in one click, and the AI panel chats with your own Claude Code or Codex. You watch it edit, Stop works at any time, and one Undo takes back the whole run. It runs on the Claude or ChatGPT plan you already have.
+- **AI editing with ChatGPT, Claude Code or Codex.** Sign in with ChatGPT in the AI panel, no terminal needed, or connect Claude Code or Codex in one click. You watch it edit, Stop works at any time, and one Undo takes back the whole run. It runs on the plan you already have. Gemini works from a terminal through Google's Antigravity CLI, and the AI panel shows how.
+- **Your CapCut drafts.** The home screen lists the drafts CapCut keeps on your computer. Open one and its clips, cuts, speed, volume, keyframes, texts, captions and transitions come over. A list says what didn't, and the draft itself stays as it was.
+- **Reels from a long video.** AI finds the moments that stand on their own, you trim each one by its words, and Nuzky makes a vertical project for every reel.
+- **Covers and thumbnails.** A 9:16 cover and a 16:9 thumbnail from a frame of your video, with your text behind you, saved as PNG or JPEG.
+- **Music and sound.** Paste a YouTube or YouTube Music link to add its sound, search CC0 and CC BY music and effects, or use the effects built in. Nuzky lists the credits to copy.
+- **Picture and voice.** Blur or replace the background behind a person, keep a face in frame when you change the shape, and clean up a voice recorded in a room.
 - Nuzky saves after every edit and recovers after a crash.
 
 ## Not yet
@@ -24,8 +29,6 @@ macOS works and is where Nuzky is tested. Linux is only partly tested. Windows i
 - **Windows 10 or 11, x64**: the `-setup.exe`. The installer downloads Microsoft WebView2 if it's missing.
 - **Linux, x86_64**: the `.deb` for Ubuntu 24.04 or newer (`sudo apt install ./Nuzky_*.deb`), or the `.AppImage` for other distributions with glibc 2.39 or newer. Make the AppImage executable with `chmod +x` and run it.
 
-`SHA256SUMS` lists the checksums of the installers and the source archive.
-
 ## Opening an unsigned build
 
 - **macOS**: Apple hasn't checked this build, so macOS won't open it the first time. Close the message, open System Settings → Privacy & Security, click Open Anyway next to Nuzky and confirm.
@@ -41,4 +44,4 @@ Open an issue at https://github.com/nuzkyapp/nuzky/issues, or use Send feedback 
 
 ## Source
 
-Nuzky is GPL-3.0-or-later. `Nuzky_*_source.tar.gz` is the source code of this release. The installers include FFmpeg, ONNX Runtime and other libraries. Each `build-info-*.txt` lists their versions and where their source comes from, and their source code is attached to this release.
+Nuzky is GPL-3.0-or-later, and its source is the Source code archive below. The installers include FFmpeg, ONNX Runtime and other libraries. Their source, and what each installer was built from, is in [Third-party source for Nuzky v0.1.0-alpha](https://github.com/nuzkyapp/nuzky/releases/tag/third-party-source-0.1.0-alpha).
