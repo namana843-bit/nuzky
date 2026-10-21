@@ -1,7 +1,7 @@
 """Get set up: one dialog with the setup steps side by side and whether each is done or skipped, only the steps that
 are built. The first start's Get set up and the home sidebar's row open it, the keyboard moves through the steps,
 Skip moves on, and closing, also quitting Nuzky, loses neither the steps' states nor the step shown."""
-import time
+import os, signal, subprocess, time
 
 from e2e.corrections import Hands
 from e2e.diagnostics import CRASHED, TOASTS, app_pid
@@ -72,12 +72,21 @@ def row(r):
 
 def relaunch(r):
     """Starts the app again, with r.env as it is now."""
-    leave_editor(r)
-    close_window()
-    r.check('the window closes and Nuzky quits', wait(lambda: (r.app.poll() is not None) if MACOS else app_pid(r) is None, 15))
-    r.s.close()
-    if not MACOS:
-        # WebKitWebDriver starts the app with its own environment, so a new one brings r.env as it is now.
+    if MACOS:
+        leave_editor(r)
+        close_window()
+        r.check('the window closes and Nuzky quits', wait(lambda: r.app.poll() is not None, 15))
+        r.s.close()
+    else:
+        # Ending the session would make WebKitWebDriver kill the app, which leaves the crash marker; a SIGTERM ends it
+        # as logging out does. A new WebKitWebDriver starts the app with r.env as it is now.
+        os.kill(app_pid(r), signal.SIGTERM)
+        r.check('Nuzky quits', wait(lambda: app_pid(r) is None, 15))
+        # WebKit's network process writes localStorage half a second after a change and finishes after the app ends;
+        # stopping the driver's process group before it does would lose the last choices.
+        others = lambda: subprocess.run(['pgrep', '-g', str(r.driver.pid)], capture_output=True, text=True).stdout.split()
+        r.check("WebKit's own processes end after the app", wait(lambda: others() == [str(r.driver.pid)], 15), others())
+        r.s.close()
         stop(r.driver)
         start_driver(r)
     r.s = Session()
