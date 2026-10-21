@@ -5,6 +5,7 @@ changes to the shadow both stick, an AI run locks the controls with a reason, an
 three texts selected, as with every caption, one shadow goes on all of them at once."""
 import json, subprocess, time
 
+from e2e.adjust import select_all
 from e2e.harness import AI_EDITING, CLI, Bridge, changed_share, export, flow, preview_crop, preview_rect, press, wait, webdriver
 
 SECTION = 'aside[aria-label=Inspector]'
@@ -93,8 +94,7 @@ def saved_style(r):
 
 def type_value(r, label, value):
     """Types into a property row's number field and confirms with Enter, as a person does."""
-    r.s.run(f"document.querySelector('{SECTION} input[aria-label=\"{label} value\"]').focus()")
-    r.s.run(f"document.querySelector('{SECTION} input[aria-label=\"{label} value\"]').select()")
+    wait(lambda: select_all(r, f"document.querySelector('{SECTION} input[aria-label=\"{label} value\"]')"), 5)
     for key in str(value):
         press(key)
     typed = lambda: r.s.run(f"return document.querySelector('{SECTION} input[aria-label=\"{label} value\"]').value")

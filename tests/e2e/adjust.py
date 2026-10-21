@@ -42,10 +42,18 @@ def warm_hue(rgb):
     return 60 * (g - b) / max(r - b, 1)
 
 
+def select_all(r, field):
+    """Selects the field's text once it stays selected: the previous field's value can still be rendering, which puts
+    the caret back at the end of this one."""
+    r.s.run(f'{field}.focus(); {field}.select()')
+    time.sleep(0.3)
+    return r.s.run(f'const f = {field}; return f.selectionStart === 0 && f.selectionEnd === f.value.length')
+
+
 def type_value(r, label, value):
     """Types into an Adjust row's number field and confirms with Enter, as a person does."""
-    r.s.run(f"document.querySelector('aside[aria-label=Inspector] input[aria-label=\"{label} value\"]').focus()")
-    r.s.run(f"document.querySelector('aside[aria-label=Inspector] input[aria-label=\"{label} value\"]').select()")
+    field = f"document.querySelector('aside[aria-label=Inspector] input[aria-label=\"{label} value\"]')"
+    wait(lambda: select_all(r, field), 5)
     for key in str(value):
         press(key)
     typed = lambda: r.s.run(f"return document.querySelector('aside[aria-label=Inspector] input[aria-label=\"{label} value\"]').value")
