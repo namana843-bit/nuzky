@@ -31,6 +31,9 @@ const BEHIND_MAX_RADIUS: f32 = 12.0;
 const BEHIND_SAMPLES: usize = 2;
 /// A background image is decoded once, at most this many pixels on its longer side.
 const PICTURE_MAX_SIDE: u32 = 2048;
+/// The largest transparent picture converted at its full size to be shrunk by alpha, a 4096 px square logo; a larger
+/// one is scaled like an opaque one, which bounds the memory it takes.
+const ALPHA_SHRINK_MAX_PIXELS: u64 = 4096 * 4096;
 pub(crate) const MAX_TEXT_SCALE: f32 = 8.0;
 const PREFETCH_US: i64 = 1_000_000;
 const IDLE_WORKER: Duration = Duration::from_secs(5);
@@ -351,19 +354,7 @@ impl Renderer {
         let k = out_w as f32 / canvas.width.max(1) as f32;
         let mut draws = Vec::new();
         let mut blur_used = Vec::new();
-        if !self.pictures.is_empty() {
-            let shown: HashSet<String> = project
-                .tracks
-                .iter()
-                .flat_map(|t| &t.clips)
-                .filter_map(|c| match &c.content {
-                    ClipContent::Media { background: Background::Image { asset_id }, .. } => project.asset(asset_id),
-                    _ => None,
-                })
-                .map(|a| file_key(&a.path))
-                .collect();
-            self.pictures.retain(|key, _| shown.contains(key));
-        }
+        self.keep_pictures(project);
         for track in &project.tracks {
             let mut visible = visible_clips(track, t_us);
             let Some(first) = visible.next() else { continue };
@@ -656,8 +647,25 @@ impl Renderer {
         Ok(Some(Box::new(Matte { alpha: Image { width: SIDE, height: SIDE, data: alpha }, fill })))
     }
 
-    /// A background image, upright, at most `PICTURE_MAX_SIDE` pixels on its longer side; decoded once.
-    fn picture(&mut self, asset: &Asset) -> Option<Image> {
+    /// Forgets the decoded images `project` no longer shows behind a person or on a cover. The images on covers stay
+    /// while a frame is drawn, so choosing another frame for a cover does not decode them again.
+    pub(crate) fn keep_pictures(&mut self, project: &Project) {
+        if self.pictures.is_empty() {
+            return;
+        }
+        let backgrounds = project.tracks.iter().flat_map(|t| &t.clips).filter_map(|c| match &c.content {
+            ClipContent::Media { background: Background::Image { asset_id }, .. } => Some(asset_id),
+            _ => None,
+        });
+        let overlays = project.thumbnails.iter().flat_map(|t| &t.overlays).map(|o| &o.asset_id);
+        let shown: HashSet<String> =
+            backgrounds.chain(overlays).filter_map(|id| project.asset(id)).map(|a| file_key(&a.path)).collect();
+        self.pictures.retain(|key, _| shown.contains(key));
+    }
+
+    /// A background image or one on a cover, upright, at most `PICTURE_MAX_SIDE` pixels on its longer side, its
+    /// transparency kept; decoded once.
+    pub(crate) fn picture(&mut self, asset: &Asset) -> Option<Image> {
         let key = file_key(&asset.path);
         if let Some(image) = self.pictures.get(&key) {
             return Some(image.clone());
@@ -665,9 +673,23 @@ impl Renderer {
         let decoded = (|| -> Result<Image> {
             let mut decoder = VideoDecoder::open(Path::new(&asset.path))?;
             let (t, f) = decoder.next_frame()?.ok_or_else(|| anyhow::anyhow!("no picture"))?;
-            let k = (PICTURE_MAX_SIDE as f32 / f.width().max(f.height()) as f32).min(1.0);
-            let size = ((f.width() as f32 * k).round() as u32, (f.height() as f32 * k).round() as u32);
-            let frame = decoder.convert(&f, t, size.0, size.1)?;
+            let long = f.width().max(f.height());
+            let alpha = f
+                .format()
+                .descriptor()
+                .is_some_and(|d| unsafe { (*d.as_ptr()).flags } & ffmpeg_next::ffi::AV_PIX_FMT_FLAG_ALPHA as u64 != 0);
+            let pixels = f.width() as u64 * f.height() as u64;
+            let frame = if alpha && long > PICTURE_MAX_SIDE && pixels <= ALPHA_SHRINK_MAX_PIXELS {
+                // Scaled as straight colour, a transparent edge would turn dark; averaged by alpha, as covers shrink.
+                let full = decoder.convert(&f, t, f.width(), f.height())?;
+                let full = Image { width: full.width, height: full.height, data: full.data };
+                crate::thumbnail::shrink(&full, long.div_ceil(PICTURE_MAX_SIDE) as usize)
+            } else {
+                let k = (PICTURE_MAX_SIDE as f32 / long as f32).min(1.0);
+                let size = ((f.width() as f32 * k).round() as u32, (f.height() as f32 * k).round() as u32);
+                let frame = decoder.convert(&f, t, size.0, size.1)?;
+                Image { width: frame.width, height: frame.height, data: frame.data }
+            };
             let (data, width, height) = orient(&frame.data, frame.width, frame.height, asset);
             Ok(Image { width, height, data: Arc::new(data) })
         })();
@@ -677,7 +699,7 @@ impl Renderer {
                 Some(image)
             }
             Err(error) => {
-                log::warn!("Cannot decode the background image {}: {error:#}", asset.path);
+                log::warn!("Cannot decode the image {}: {error:#}", asset.path);
                 None
             }
         }
