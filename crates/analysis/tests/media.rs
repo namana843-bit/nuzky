@@ -6,8 +6,8 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use nuzky_analysis::{
-    AudioSource, SceneParams, SilenceParams, loudness, scene_cuts, silences, silences_cancellable,
-    transcribe_words_cancellable,
+    AudioSource, Range, SceneParams, SilenceParams, loudness, scene_cuts, scene_cuts_in, silences,
+    silences_cancellable, transcribe_words_cancellable,
 };
 use nuzky_engine::media::probe;
 
@@ -68,6 +68,28 @@ fn hard_cuts_detected_and_slow_fade_ignored() -> Result<()> {
     assert_eq!(cuts[1].time_us, 2_000_000);
     assert!(cuts.iter().all(|c| c.score >= 0.18 && c.score <= 1.0));
     assert_eq!(scene_cuts(&asset, SceneParams { min_gap_us: 2_000_000, ..Default::default() })?.len(), 1);
+    // Reading only around moments finds the same cuts there and none elsewhere.
+    let around = |windows: &[[i64; 2]]| {
+        let windows: Vec<_> = windows.iter().map(|&[start_us, end_us]| Range { start_us, end_us }).collect();
+        scene_cuts_in(&asset, &windows, SceneParams::default(), || false)
+    };
+    assert_eq!(around(&[[1_500_000, 2_200_000], [800_000, 1_200_000]])?, cuts);
+    assert!(around(&[[1_100_000, 1_900_000]])?.is_empty());
+    Ok(())
+}
+
+/// A camera that starts moving fast at once, as a whip pan, changes every following frame a little: one cut where
+/// it starts, not one after every gap while it moves.
+#[test]
+fn motion_that_sets_in_at_once_is_one_cut() -> Result<()> {
+    let dir = directory("onset")?;
+    let path = dir.join("onset.mp4");
+    let filter = "color=gray:s=160x90:r=25:d=3,format=yuv420p,\
+                  geq=lum='if(lt(N,25),40,40+16*abs(mod(N-25,22)-11))':cb=128:cr=128";
+    ffmpeg(&["-f", "lavfi", "-i", filter, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-threads", "1"], &path)?;
+    let asset = probe(&path, "onset".into())?;
+    let cuts = scene_cuts(&asset, SceneParams { threshold: 0.05, ..Default::default() })?;
+    assert_eq!(cuts.iter().map(|c| c.time_us).collect::<Vec<_>>(), [1_000_000]);
     Ok(())
 }
 
@@ -107,6 +129,8 @@ fn rotation_and_variable_frame_pts_are_preserved() -> Result<()> {
     let cuts = scene_cuts(&asset, SceneParams::default())?;
     assert_eq!(cuts.len(), 1, "{cuts:?}");
     assert!((cuts[0].time_us - 1_080_000).abs() <= 1, "{cuts:?}");
+    let window = Range { start_us: 1_000_000, end_us: 1_200_000 };
+    assert_eq!(scene_cuts_in(&asset, &[window], SceneParams::default(), || false)?, cuts);
     Ok(())
 }
 

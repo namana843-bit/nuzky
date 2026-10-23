@@ -509,6 +509,19 @@ fn speech_cut(
     Ok((without_slivers(project, &bounds, &unnumbered, ranges), speech))
 }
 
+/// Where the first heard piece of a word starts on the timeline and where the last one ends.
+pub fn heard_span(project: &Project, derived: &Derived) -> Option<(i64, i64)> {
+    let (words, fragments, _) = editing_bounds(project, derived);
+    words
+        .iter()
+        .map(|w| (w.start_us, w.end_us))
+        .chain(fragments.iter().map(|f| (f.start_us, f.end_us)))
+        .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+}
+
+/// A kept stretch shorter than this between a cut and a join shows as a sliver of a clip or shot.
+pub const SLIVER_US: i64 = 400_000;
+
 /// Where a take starts speaking at once, the silence a cut keeps before its first word lies at
 /// the end of the take before it, cut off from that take's last word: a sliver of a clip on the
 /// timeline. That silence moves next to the last word instead, so the pause keeps its length and
@@ -520,7 +533,6 @@ fn without_slivers(
     fragments: &[TimeRange],
     mut ranges: Vec<TimeRange>,
 ) -> Vec<TimeRange> {
-    const SLIVER_US: i64 = 400_000;
     let joins: Vec<i64> = project
         .tracks
         .iter()
