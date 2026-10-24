@@ -2,7 +2,7 @@ import json, os, shutil, subprocess, threading, time, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from e2e.harness import CLI, FIXTURES, MACOS, Session, clipboard, close_window, leave_editor, flow, preview_crop, preview_rect, press, wait, webdriver
+from e2e.harness import CLI, FIXTURES, LINUX, WINDOWS, clipboard, close_window, flow, leave_editor, press, preview_crop, preview_rect, Session, set_clipboard, wait, webdriver, win32
 from e2e.history import alive as window_alive
 
 FAKE = Path(__file__).resolve().parent / 'fake_agent'
@@ -43,6 +43,11 @@ def runs(r):
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
+def bridges(r):
+    log = r.work / 'fake/bridges.jsonl'
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
 def panel(r):
     return r.s.run(PANEL, retries=3)
 
@@ -64,6 +69,9 @@ def send(r, text):
 
 
 def alive(pid):
+    if WINDOWS:
+        # Signal 0 there is Ctrl+C.
+        return win32.alive(pid)
     try:
         os.kill(pid, 0)
         return True
@@ -233,7 +241,8 @@ def setup_chatgpt(r):
     from e2e.chatgpt import SCOPES
     setup(r)
     r.env.update(NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_CODEX=str(r.work / 'no-codex'))
-    (r.work / 'data/nuzky/EDIT.md').write_text(STYLE)
+    # As written, not with Windows' line ends, so the check below finds it.
+    (r.work / 'data/nuzky/EDIT.md').write_bytes(STYLE.encode())
     (r.work / 'data/nuzky/chatgpt.json').write_text(json.dumps({
         'host_id': f'urn:uuid:{uuid.uuid4()}', 'client_id': 'oaiapp_e2e', 'subject': 'e2e-editor', 'email': 'editor@example.test'}))
     (r.work / 'keychain.json').write_text(json.dumps({
@@ -1006,15 +1015,17 @@ def ai_panel(r):
     captions = [t for t in saved['tracks'] if t['name'] == 'Captions']
     r.check('the cut and the captions are in the saved project', captions and len(captions[0]['clips']) == 2, [t['name'] for t in saved['tracks']])
     first = runs(r)[0]
+    # Windows has no private folder of the user's outside the profile, so there it is Nuzky's own in the run's temp folder.
+    outside = Path(first['cwd']) == Path(r.env['XDG_RUNTIME_DIR'], 'nuzky-agent') if WINDOWS else not first['cwd'].startswith(str(Path.home()))
     r.check("the agent ran with Nuzky's tools only: built-ins and hooks off, in a folder outside home",
-            not first['missing'] and not first['cwd'].startswith(os.environ['HOME']) and not first['resume'], first)
+            not first['missing'] and outside and not first['resume'], first)
     r.check('the message carried the selection, the playhead and the frame',
             f"Selected clips: {clip['id']}" in first['prompt'] and '[Nuzky] Playhead' in first['prompt'] and 'points at the frame at the playhead' in first['prompt'],
             first['prompt'])
     r.shot('run-done')
     # A real key press, as the clipboard takes text only from something the user did. On macOS it is the person's
     # own clipboard, so their text goes back right after.
-    theirs = clipboard() if MACOS else None
+    theirs = clipboard() if not LINUX else None
     found = r.s.run("""const b = document.querySelector('aside[aria-label=AI] button[aria-label="Copy message"]');
         b?.focus(); return !!b;""")
     try:
@@ -1033,7 +1044,7 @@ def ai_panel(r):
         r.shot('reply-copied')
     finally:
         if theirs is not None:
-            subprocess.run(['pbcopy'], input=theirs, text=True, check=True)
+            set_clipboard(theirs)
     r.check('Copy beside my message puts exactly what I sent on the clipboard and says it is copied',
             found and copied and shown, {'button': found, 'clipboard': got, 'copied shown': shown})
     r.check("Copy under the agent's reply puts exactly its text on the clipboard and says it is copied",
@@ -1133,11 +1144,13 @@ def ai_panel(r):
         send(r, 'slow edit please')
         r.check(f'a slow edit locks the editor ({where})', wait(lambda: r.state()['aiRun'] and 'Pracuju' in panel(r)['text'], 15))
         pid = runs(r)[-1]['pid']
+        bridge = next(b['bridge'] for b in bridges(r) if b['pid'] == pid)
         started = time.time()
         click(r, where, 'aside[aria-label=AI]' if where == 'Stop' else 'header')
-        gone = wait(lambda: not alive(pid), 5, 0.05)
+        gone = wait(lambda: not alive(pid) and not alive(bridge), 5, 0.05)
         took = round(time.time() - started, 2)
-        r.check(f'{where} ends the agent within seconds and unlocks the editor', gone and wait(lambda: not r.state()['aiRun'], 3), {'seconds': took})
+        r.check(f'{where} ends the agent and the bridge it started within seconds and unlocks the editor',
+                gone and wait(lambda: not r.state()['aiRun'], 3), {'seconds': took, 'agent': alive(pid), 'bridge': alive(bridge)})
         r.check(f'what it did so far stays, and the stopped card says what ({where})',
                 wait(lambda: idle(r) and 'Stopped: Slow edit' in panel(r)['text'] and 'Split talk.mp4\n00:02' in panel(r)['text'], 5), panel(r)['text'])
         if where == 'Stop':

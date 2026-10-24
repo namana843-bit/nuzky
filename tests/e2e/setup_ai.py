@@ -3,15 +3,19 @@ in and connected to Nuzky. A missing agent shows its official install command wi
 Check again finds it once installed; a signed-out one says how to sign in; Connect puts Nuzky into the agent's own
 settings and checks that the agent's own command reaches this Nuzky, and when it does not, says why and offers Try
 again. Skip leads to cutting by hand in the transcript, which works without any agent."""
-import json, subprocess, time
+import json, time
 from pathlib import Path
 
 from e2e.connect import MCP, SETTINGS
 from e2e.corrections import Hands
-from e2e.harness import FIXTURES, MACOS, clipboard, flow, link_models, press, wait
+from e2e.harness import FIXTURES, LINUX, WINDOWS, clipboard, flow, link_models, press, set_clipboard, wait, windows_stand_in
 from e2e.setup import BOX, FOCUS, dialog, rail
 
 HERE = Path(__file__).parent
+# The official install commands of Claude Code, Codex and Antigravity CLI: PowerShell's on Windows.
+INSTALL = (['irm https://claude.ai/install.ps1 | iex', 'npm install -g @openai/codex', 'irm https://antigravity.google/cli/install.ps1 | iex']
+           if WINDOWS else ['curl -fsSL https://claude.ai/install.sh | bash', 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+                            'curl -fsSL https://antigravity.google/cli/install.sh | bash'])
 CLAUDE = '{\n  "numStartups": 3,\n  "mcpServers": {\n    "other": {\n      "type": "stdio",\n      "command": "other-server"\n    }\n  }\n}\n'
 CARDS = """return Object.fromEntries([...document.querySelectorAll('#setup-panel [role=group]')].map((g) => [g.getAttribute('aria-label'), {
   text: g.innerText, command: g.querySelector('code')?.textContent ?? null, alert: g.querySelector('[role=alert]')?.textContent ?? null,
@@ -48,10 +52,15 @@ def agent(r, name, gone=False, **answers):
     """Installs the stand-in for `name`, answering as `answers` say (FAKE_AGENT_SIGNED_OUT, FAKE_AGENT_MCP), or
     takes it away."""
     path = r.work / 'bin' / name
+    if WINDOWS:
+        path = path.with_suffix('.cmd')
     if gone:
         path.unlink(missing_ok=True)
         return
     fake = HERE / {'claude': 'fake_agent', 'codex': 'fake_codex', 'agy': 'fake_agy'}[name]
+    if WINDOWS:
+        windows_stand_in(path, fake.name, **answers)
+        return
     path.write_text('#!/bin/sh\n' + ''.join(f'export {k}={v}\n' for k, v in answers.items()) + f'exec "{fake}" "$@"\n')
     path.chmod(0o755)
 
@@ -76,13 +85,13 @@ def press_button(r, label, scope=BOX):
       'again, Connect and a check that the agent reaches Nuzky, a failed connection with its reason, and Skip to cutting '
       'by hand in the transcript', before=before, home=True)
 def setup_ai(r):
-    theirs = clipboard() if MACOS else None
+    theirs = clipboard() if not LINUX else None
     try:
         agents(r, Path(r.env['HOME']))
         skip_to_transcript(r)
     finally:
         if theirs is not None:
-            subprocess.run(['pbcopy'], input=theirs, text=True, check=True)
+            set_clipboard(theirs)
 
 
 def agents(r, home):
@@ -96,16 +105,14 @@ def agents(r, home):
     c = wait(lambda: (x := cards(r)) and all('Not installed' in v['text'] for v in x.values()) and x, 10)
     r.check('with no agents installed, all three say Not installed', c and r.s.run("return [...document.querySelectorAll('#setup-panel [role=group]')].map((g) => g.getAttribute('aria-label'))") == ['Claude Code', 'Codex', 'Gemini'], cards(r))
     r.check('each shows its official install command, with Copy and the install guide',
-            c and c['Claude Code']['command'] == 'curl -fsSL https://claude.ai/install.sh | bash'
-            and c['Codex']['command'] == 'curl -fsSL https://chatgpt.com/codex/install.sh | sh'
-            and c['Gemini']['command'] == 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
+            c and [c[name]['command'] for name in ('Claude Code', 'Codex', 'Gemini')] == INSTALL
             and all(c[name]['buttons'] == ['Install guide', 'Copy the command'] for name in ('Claude Code', 'Codex'))
             and c['Gemini']['buttons'] == ['Install guide', 'Details', 'Copy the command'], c)
     r.check('Gemini says why it runs in a terminal', c and "Google doesn't let other apps run Gemini" in c['Gemini']['text'], c)
     d = dialog(r)
     r.check('the footer offers Check again before Skip', d and d['buttons'] == ['Check again', 'Skip'], d)
     r.check('Copy for Claude Code', press_button(r, 'Copy the command', f'{BOX} [role=group][aria-label="Claude Code"]'))
-    r.check('puts its install command on the clipboard', wait(lambda: clipboard() == 'curl -fsSL https://claude.ai/install.sh | bash', 3), clipboard())
+    r.check('puts its install command on the clipboard', wait(lambda: clipboard() == INSTALL[0], 3), clipboard())
     r.check('and says Copied', wait(lambda: 'Copied' in cards(r)['Claude Code']['buttons'], 2), cards(r))
     time.sleep(0.3)
     r.shot('setup-ai-missing')
@@ -192,12 +199,12 @@ def agents(r, home):
     # "Checking that Gemini sees Nuzky" comes first; how to ask shows once the check passed.
     c = wait(lambda: card_says(r, 'Gemini', 'ask it, for example') and cards(r), 30)
     r.check('Gemini connects, lists both backups, turns on Agent access and allows its tools',
-            c and all(line in c['Gemini']['text'] for line in ('Backed up ~/.gemini/config/mcp_config.json',
-                'Backed up ~/.gemini/antigravity-cli/settings.json', 'Added Nuzky and turned on Agent access',
+            c and all(line in c['Gemini']['text'] for line in (f'Backed up {Path("~/.gemini/config/mcp_config.json")}',
+                f'Backed up {Path("~/.gemini/antigravity-cli/settings.json")}', 'Added Nuzky and turned on Agent access',
                 "Let Gemini use Nuzky's tools without asking")), cards(r))
     commands = r.s.run("return [...document.querySelectorAll('#setup-panel [role=group][aria-label=Gemini] code')].map((c) => c.textContent)")
     r.check('Gemini shows how to ask in a terminal, with the agy Nuzky found and an example',
-            commands == [str(r.work / 'bin/agy'), 'Cut the pauses and retakes in the video open in Nuzky, then add captions']
+            commands == [str(r.work / ('bin/agy.cmd' if WINDOWS else 'bin/agy')), 'Cut the pauses and retakes in the video open in Nuzky, then add captions']
             and c and 'choose Google OAuth' in c['Gemini']['text'] and 'close that window and paste the command in a new one' in c['Gemini']['text'], commands)
     r.check('the focus goes to copying agy, the next thing to do, not to Done', r.s.run(FOCUS) == 'Copy the command', r.s.run(FOCUS))
     r.check('with all three connected, only Done is left in the footer', c and (dialog(r) or {}).get('buttons') == ['Done'], dialog(r))
@@ -216,22 +223,6 @@ def skip_to_transcript(r):
     r.s.run("window.__nuzky.setup.setState({states: {}, current: 'ai'}); window.__nuzky.setup.getState().openSetup()")
     wait(lambda: card_says(r, 'Codex', 'Not installed'), 10)
 
-    # On Windows, where agents cannot attach to Nuzky yet, the step says so first and shows only the way by hand.
-    r.s.run("Object.defineProperty(navigator, 'userAgent', {value: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', configurable: true})")
-    press('Home')
-    press('End')
-    d = wait(lambda: (x := dialog(r)) and x['panel'] == 'Connect your AI' and x, 5)
-    text = r.s.run("return document.querySelector('#setup-panel').innerText") or ''
-    r.check("on Windows the step says at once that AI editing isn't available there yet, with no agents to set up",
-            [line for line in text.split('\n') if line.strip()][1].startswith("AI editing isn't available on Windows yet")
-            and 'Claude Code, Codex and Gemini edit in Nuzky on macOS and Linux' in text
-            and 'Cut without AI' in text and not cards(r) and 'Set up Claude Code, Codex or Gemini instead' not in text, text)
-    r.check('and offers Open a video… before Skip', d and d['buttons'] == ['Open a video…', 'Skip'], d)
-    r.shot('setup-ai-windows')
-    r.s.run("delete navigator.userAgent")
-    press('Home')
-    press('End')
-    wait(lambda: card_says(r, 'Codex', 'Not installed'), 10)
     r.check('Skip', press_button(r, 'Skip'))
     d = wait(lambda: (x := dialog(r)) and x['steps'][3]['lines'] == ['Connect your AI', 'Skipped'] and x, 5)
     text = r.s.run("return document.querySelector('#setup-panel').innerText") or ''

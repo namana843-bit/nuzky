@@ -6,7 +6,7 @@ model depends on the language, the chosen model follows the language while it is
 downloaded and at least as big. Czech is only the test's system language here."""
 import json, time
 
-from e2e.harness import FIXTURES, MACOS, MODELS, flow, press, wait
+from e2e.harness import FIXTURES, MACOS, MODELS, WINDOWS, flow, press, wait
 from e2e.home import focus_card, make, resize, wait_library
 from e2e.setup import BOX, CLICK, FOCUS_TEXT, relaunch
 from e2e.speech_model import Models
@@ -64,6 +64,9 @@ def before(r):
                  LANGUAGE='cs', LANG='cs_CZ.UTF-8')
     if MACOS:
         r.args = ['-AppleLanguages', '(cs)']
+    if WINDOWS:
+        # WebView2 otherwise takes the display language of Windows.
+        r.env['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = '--lang=cs'
 
 
 def step(r):

@@ -159,7 +159,6 @@ fn err(e: impl std::fmt::Display) -> String {
 
 struct OpenSession {
     host: Arc<Host>,
-    #[cfg(unix)]
     listener: Option<nuzky_mcp::ipc::Listener>,
     bridge_error: Option<String>,
     path: PathBuf,
@@ -202,7 +201,6 @@ impl OpenSession {
         HOSTS.lock().unwrap().push((host.session.locked_path()?, Arc::downgrade(&host)));
         let mut session = Self {
             host,
-            #[cfg(unix)]
             listener: None,
             bridge_error: None,
             path,
@@ -215,7 +213,6 @@ impl OpenSession {
 
     /// The project stays open for editing when the live agent bridge cannot start.
     fn start_bridge(&mut self) {
-        #[cfg(unix)]
         match nuzky_mcp::ipc::Listener::start(self.host.clone(), connect::access_flag()) {
             Ok(listener) => {
                 self.listener = Some(listener);
@@ -229,7 +226,6 @@ impl OpenSession {
     }
 
     fn close_ipc(&mut self) {
-        #[cfg(unix)]
         self.listener.take();
     }
 
@@ -824,7 +820,7 @@ fn list_projects() -> Vec<ProjectSummary> {
 async fn agent_connections() -> CmdResult<Vec<connect::Connection>> {
     tauri::async_runtime::spawn_blocking(|| {
         let command = connect::Command::this_app().map_err(err)?;
-        let home = dirs::home_dir().ok_or("No home folder")?;
+        let home = std::env::home_dir().ok_or("No home folder")?;
         Ok(connect::Agent::ALL
             .map(|agent| connect::status(agent, &agent.config(&home), &command).shown_from(&home))
             .to_vec())
@@ -850,7 +846,7 @@ pub struct AgentStatus {
 async fn agent_status(agent: connect::Agent) -> CmdResult<AgentStatus> {
     tauri::async_runtime::spawn_blocking(move || {
         let info = nuzky_agent::find(agent.id());
-        let home = dirs::home_dir().ok_or("No home folder")?;
+        let home = std::env::home_dir().ok_or("No home folder")?;
         let command = connect::Command::this_app().map_err(err)?;
         Ok(AgentStatus {
             installed: info.path.is_some(),
@@ -869,7 +865,7 @@ async fn verify_agent(agent: connect::Agent) -> CmdResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
         let info = nuzky_agent::find(agent.id());
         let program = info.path.ok_or_else(|| format!("Install {} first.", info.name))?;
-        let home = dirs::home_dir().ok_or("No home folder")?;
+        let home = std::env::home_dir().ok_or("No home folder")?;
         connect::verify(agent, &program, &home)?;
         if !connect::access().on {
             return Err(format!("Agent access is off, so {} can't edit your video. Try again turns it on.", info.name));
@@ -886,7 +882,7 @@ async fn verify_agent(agent: connect::Agent) -> CmdResult<()> {
 async fn connect_agent(agent: connect::Agent) -> CmdResult<connect::Connection> {
     tauri::async_runtime::spawn_blocking(move || {
         let command = connect::Command::this_app().map_err(err)?;
-        let home = dirs::home_dir().ok_or("No home folder")?;
+        let home = std::env::home_dir().ok_or("No home folder")?;
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         let connection =
             connect::connect(agent, &agent.config(&home), agent.settings(&home).as_deref(), &command, stamp)
@@ -1203,6 +1199,20 @@ pub fn run() {
     let (builder, context) = (tauri::Builder::default(), tauri::generate_context!());
     #[cfg(all(target_os = "macos", debug_assertions))]
     let (builder, context) = test_bridge::prepare(builder, context);
+    #[cfg(all(windows, debug_assertions))]
+    let mut context = context;
+    // Edge WebDriver opens the webview's debugging port through this variable, which the arguments wry always
+    // sets would otherwise override; these are wry's own, with the variable's added. Only for the UI flows, whose
+    // pixels are the page's at any display scale, as under gamescope on Linux and test_bridge.rs on macOS.
+    #[cfg(all(windows, debug_assertions))]
+    if let Ok(added) = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+        for window in &mut context.config_mut().app.windows {
+            window.additional_browser_args = Some(format!(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required \
+                 --force-device-scale-factor=1 {added}"
+            ));
+        }
+    }
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1615,7 +1625,6 @@ mod ipc_lifecycle_tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    #[cfg(unix)]
     #[test]
     fn refused_switch_restores_ipc_after_save_failure() {
         let _children = crate::CHILD_SPAWN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());

@@ -4,25 +4,48 @@ A flow is a function decorated with @flow in its own file under tests/e2e/. It g
 app through the dev-only `window.__nuzky` hook and the keyboard, and records what the user would see
 with r.check(...). Run flows with scripts/repro.py.
 
-On Linux WebKitWebDriver drives the app. macOS has no WebDriver for an app's webview, so there the debug app
-answers the same requests itself, over a private socket, when the harness starts it with a secret
-(src-tauri/src/test_bridge.rs).
+On Linux WebKitWebDriver drives the app and on Windows Microsoft Edge WebDriver drives its WebView2. macOS has
+no WebDriver for an app's webview, so there the debug app answers the same requests itself, over a private
+socket, when the harness starts it with a secret (src-tauri/src/test_bridge.rs).
 """
-import base64, datetime, json, os, queue, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time
+import base64, datetime, functools, json, os, queue, secrets, shutil, signal, socket, subprocess, sys, tempfile, threading, time
 import traceback, urllib.error, urllib.request
 from pathlib import Path
 
+MACOS, WINDOWS = sys.platform == 'darwin', sys.platform == 'win32'
+LINUX = not (MACOS or WINDOWS)
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / 'tmp-test'
 MODELS = FIXTURES / 'xdg/data/nuzky/models'
 OUT = ROOT / 'tmp-test/repro'
 TARGET = Path(os.environ.get('CARGO_TARGET_DIR', ROOT / 'target'))
-APP, CLI, ANALYZE = TARGET / 'debug/nuzky-app', TARGET / 'debug/nuzky', TARGET / 'debug/nuzky-analyze'
+APP, CLI, ANALYZE = (TARGET / 'debug' / (name + ('.exe' if WINDOWS else '')) for name in ('nuzky-app', 'nuzky', 'nuzky-analyze'))
 WEBKIT_DRIVER = shutil.which('WebKitWebDriver') or '/usr/bin/WebKitWebDriver'
 AI_EDITING = 'AI is editing. Stop it to edit yourself.'
 FLOWS = {}
-MACOS = sys.platform == 'darwin'
 RUN = None  # The flow in progress; on macOS its app, socket and secret.
+
+
+def edge_driver():
+    """The Microsoft Edge WebDriver of the installed WebView2 version, which scripts/setup-windows-deps.ps1 fetches;
+    a driver of another version refuses the webview."""
+    import winreg
+    key = r'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, key) as runtime:
+                version = winreg.QueryValueEx(runtime, 'pv')[0]
+            break
+        except OSError:
+            continue
+    else:
+        return Path('msedgedriver.exe (WebView2 is not installed)')
+    deps = Path(os.environ.get('NUZKY_DEPS') or Path(os.environ['LOCALAPPDATA']) / 'Nuzky/build-deps')
+    return deps / f'msedgedriver-{version}/msedgedriver.exe'
+
+
+DRIVER = edge_driver() if WINDOWS else WEBKIT_DRIVER
+DEBUG_PORT = 4445  # The webview's on Windows, which Edge WebDriver attaches to.
 
 
 def flow(name, description, before=None, home=False, first_launch=False):
@@ -86,12 +109,26 @@ class Session:
             if not wait(lambda: RUN.app.poll() is not None or RUN.socket.exists(), 60) or RUN.app.poll() is not None:
                 raise RuntimeError('the app did not start, see app.log')
             caps = {}
+        elif WINDOWS:
+            # Started here too: Edge WebDriver would give the webview a new profile for each session, so nothing the
+            # page keeps would outlive a restart. It attaches to the webview's debugging port instead.
+            webview = ' '.join(filter(None, [RUN.env.get('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'), f'--remote-debugging-port={DEBUG_PORT}']))
+            RUN.app = start([str(APP), *RUN.args], RUN.work / 'app.log', RUN.launch_env(
+                TAURI_WEBVIEW_AUTOMATION='true', WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=webview))
+            if not started(RUN.app, DEBUG_PORT, 60):
+                raise RuntimeError('the app did not start, see app.log')
+            caps = {'capabilities': {'alwaysMatch': {'browserName': 'webview2', 'ms:edgeOptions': {
+                'debuggerAddress': f'127.0.0.1:{DEBUG_PORT}'}}}}
         else:
             # What tauri-driver sends on Linux. Talking to WebKitWebDriver directly avoids tauri-driver's connection
             # pool, whose stale connections now and then dropped a request mid-flow.
             caps = {'capabilities': {'alwaysMatch': {'browserName': 'wry',
                                                      'webkitgtk:browserOptions': {'binary': str(APP), 'args': RUN.args}}}}
         self.path = '/session/' + webdriver('POST', '/session', caps)['sessionId']
+        if WINDOWS:
+            # The page as large as under gamescope, whatever the display's scale; Windows would fit the window to
+            # the screen in fractions of a page pixel.
+            webdriver('POST', self.path + '/window/rect', {'width': 1440, 'height': 900})
 
     def run(self, script, *args, retries=0):
         return webdriver('POST', self.path + '/execute/sync', {'script': script, 'args': list(args)}, retries)
@@ -112,14 +149,20 @@ class Session:
             webdriver('DELETE', self.path)
         except Exception:
             pass
-        if MACOS:
+        if MACOS or WINDOWS:
             stop(RUN.app)
 
 
 def wait(fn, timeout=30, step=0.2):
     end = time.time() + timeout
     while True:
-        value = fn()
+        try:
+            value = fn()
+        except PermissionError:
+            # Windows refuses to open a file while the app replaces it, and to replace one the app holds open.
+            if not WINDOWS:
+                raise
+            value = None
         if value or time.time() > end:
             return value
         time.sleep(step)
@@ -172,6 +215,41 @@ class Run:
             os.symlink(self.work / 'cache/nuzky', home / 'Library/Caches/nuzky')
             self.env.update(HOME=str(home), CFFIXED_USER_HOME=str(home))
             self.socket, self.token = Path(runtime) / 'nuzky/webdriver.sock', secrets.token_hex(32)
+        if WINDOWS:
+            # Windows names a user's folders under USERPROFILE, so the app gets a home of its own as on macOS: its
+            # cache, the webview's storage and CapCut's drafts live in this run's AppData, with the cache joined to
+            # this run's folder. NUZKY_DATA_DIR moves the data folder, which roams elsewhere. The CLI the flows run
+            # gets the same home, so it shares the app's cache and never writes the person's own.
+            home = self.work / 'home'
+            for folder in (home / 'AppData/Local', home / 'AppData/Roaming', self.work / 'cache/nuzky'):
+                folder.mkdir(parents=True)
+            subprocess.run(['cmd', '/c', 'mklink', '/J', str(home / 'AppData/Local/nuzky'), str(self.work / 'cache/nuzky')],
+                           check=True, capture_output=True)
+            self.env.update(HOME=str(home), USERPROFILE=str(home), NUZKY_DATA_DIR=str(self.work / 'data/nuzky'))
+
+    def launch_env(self, **extra):
+        """r.env for a process this run starts; on Windows the home a flow set in HOME is the one apps read."""
+        env = dict(self.env, **extra)
+        if WINDOWS:
+            env['USERPROFILE'] = env['HOME']
+            # Without them Windows names none of the app's folders and Tauri falls back to its own.
+            for folder in ('AppData/Local', 'AppData/Roaming'):
+                (Path(env['HOME']) / folder).mkdir(parents=True, exist_ok=True)
+            for variable in ('NUZKY_AGENT_CLAUDE', 'NUZKY_AGENT_CODEX', 'NUZKY_AGENT_AGY'):
+                path = Path(env[variable])
+                if path.suffix:
+                    continue
+                if path.parent == STAND_INS.parent and path.name in ('fake_agent', 'fake_codex', 'fake_agy'):
+                    path = windows_stand_in(self.work / 'stand-ins' / path.name, path.name)
+                elif path.is_file():
+                    # A flow's copy of the stand-in, which it may take away.
+                    path = windows_stand_in(path, path.name, script=path)
+                # A stand-in a flow installs later goes here.
+                env[variable] = str(path.with_suffix('.cmd'))
+            if 'NUZKY_TEST_BROWSER' in env:
+                browser = Path(env['NUZKY_TEST_BROWSER'])
+                env['NUZKY_TEST_BROWSER'] = str(windows_stand_in(self.work / 'stand-ins' / browser.name, browser.name, script=browser))
+        return env
 
     def check(self, name, ok, detail=None):
         self.checks.append({'check': name, 'ok': bool(ok), 'detail': detail})
@@ -220,12 +298,35 @@ class Run:
         return next((self.work / 'data/nuzky/projects').glob('*.nuzky'))
 
 
+STAND_INS = ROOT / 'tests/e2e/fake_agent'
+
+
+def windows_stand_in(path, name, script=STAND_INS, **env):
+    """The stand-in program `name`, such as fake_codex or fake_browser, at `path` on Windows, which runs neither a
+    shebang nor git's links: a .cmd that runs the Python `script` as `name`, as npm's .cmd runs Codex with Node.
+    Returns its path. `env`: how it answers, such as FAKE_AGENT_SIGNED_OUT."""
+    launcher = path.with_suffix('.cmd')
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    lines = ['@echo off', f'set FAKE_AGENT_AS={name}', 'set FAKE_AGENT_LAUNCHER=%~f0', *(f'set {k}={v}' for k, v in env.items()),
+             f'"{sys.executable}" -X utf8 "{script}" %*']
+    launcher.write_text('\r\n'.join(lines) + '\r\n')
+    return launcher
+
+
 def start(command, log, env=None):
-    return subprocess.Popen(command, cwd=ROOT, env=env, stdout=open(log, 'w'), stderr=subprocess.STDOUT,
-                            start_new_session=True)
+    group = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {'start_new_session': True}
+    return subprocess.Popen(command, cwd=ROOT, env=env, stdout=open(log, 'w'), stderr=subprocess.STDOUT, **group)
 
 
 def stop(process, timeout=5):
+    if WINDOWS:
+        # The whole tree, as the process group on Unix: the app Edge WebDriver started, the node npx started.
+        subprocess.run(['taskkill', '/T', '/F', '/PID', str(process.pid)], capture_output=True)
+        try:
+            process.wait(timeout)
+        except subprocess.TimeoutExpired:
+            pass
+        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout)
@@ -254,12 +355,12 @@ def port_busy(port):
 
 
 def start_driver(r):
-    """WebKitWebDriver, which on Linux starts the app with its own environment, so r.env as it is now."""
+    """The WebDriver, which on Linux starts the app with its own environment, so r.env as it is now."""
     # Tauri 2 lets WebDriver drive its webview only with this set, as tauri-driver does.
-    r.driver = start([WEBKIT_DRIVER, '--port=4444', '--host=127.0.0.1'], r.work / 'driver.log',
-                     dict(r.env, TAURI_WEBVIEW_AUTOMATION='true'))
+    host = [] if WINDOWS else ['--host=127.0.0.1']
+    r.driver = start([str(DRIVER), '--port=4444', *host], r.work / 'driver.log', r.launch_env(TAURI_WEBVIEW_AUTOMATION='true'))
     if not started(r.driver, 4444, 20):
-        raise RuntimeError('WebKitWebDriver did not start, see driver.log')
+        raise RuntimeError(f'{Path(DRIVER).name} did not start, see driver.log')
 
 
 def run_flow(name):
@@ -391,12 +492,28 @@ def _windows(d):
     return found
 
 
+# WebDriver's codes for the X11 key names the flows use.
+WEBDRIVER_KEYS = {'Return': '\ue007', 'Tab': '\ue004', 'space': ' ', 'BackSpace': '\ue003', 'Escape': '\ue00c',
+                  'F8': '\ue038', 'Home': '\ue011', 'Delete': '\ue017', 'End': '\ue010', 'Left': '\ue012', 'Up': '\ue013',
+                  'Right': '\ue014', 'Down': '\ue015'}
+
+
+def actions(*sources):
+    """WebDriver input on Windows, which the webview handles as a person's, whether or not its window has focus."""
+    webdriver('POST', RUN.s.path + '/actions', {'actions': list(sources)})
+
+
 def press(key):
     """A real key press into the app window, an X11 key name or a character: a focused button acts on Enter and
     focus moves on Tab as they do for a person, which key events made by the page do not do. Through XTest under
-    gamescope, through the window itself on macOS; WebKitWebDriver has no key input."""
+    gamescope, through the window itself on macOS and through WebDriver's actions on Windows; WebKitWebDriver has
+    no key input."""
     if MACOS:
         webdriver('POST', '/session/nuzky/nuzky/keys', {'keys': [key]})
+        return
+    if WINDOWS:
+        value = WEBDRIVER_KEYS.get(key, key)
+        actions({'type': 'key', 'id': 'keyboard', 'actions': [{'type': 'keyDown', 'value': value}, {'type': 'keyUp', 'value': value}]})
         return
     from Xlib import X, XK, display
     from Xlib.ext import xtest
@@ -417,11 +534,21 @@ def press(key):
     d.close()
 
 
+def set_clipboard(text):
+    """Puts the person's own text back on the system clipboard of macOS or Windows after a flow copied to it."""
+    if MACOS:
+        subprocess.run(['pbcopy'], input=text, text=True, check=True)
+    else:
+        win32.set_clipboard(text)
+
+
 def clipboard():
-    """The text the app put on the clipboard: on macOS the system's (a flow that copies puts the person's text back
-    afterwards), on Linux the one of gamescope's own X server, asked for as UTF-8 like any app would."""
+    """The text the app put on the clipboard: on macOS and Windows the system's (a flow that copies puts the person's
+    text back afterwards), on Linux the one of gamescope's own X server, asked for as UTF-8 like any app would."""
     if MACOS:
         return subprocess.run(['pbpaste'], capture_output=True, text=True, check=True).stdout
+    if WINDOWS:
+        return win32.clipboard()
     from Xlib import X, display
     d = display.Display()
     try:
@@ -443,7 +570,13 @@ def clipboard():
 
 
 def pointer(kind, x, y, clicks=1):
-    """macOS: the left mouse button `down` or `up` at a point of the page."""
+    """macOS and Windows: the left mouse button `down` or `up` at a point of the page. On Windows the webview counts
+    the clicks itself, from their timing."""
+    if WINDOWS:
+        button = {'type': 'pointerDown' if kind == 'down' else 'pointerUp', 'button': 0}
+        actions({'type': 'pointer', 'id': 'mouse', 'parameters': {'pointerType': 'mouse'}, 'actions': [
+            {'type': 'pointerMove', 'duration': 0, 'origin': 'viewport', 'x': round(x), 'y': round(y)}, button]})
+        return
     webdriver('POST', '/session/nuzky/nuzky/pointer', {'kind': kind, 'x': x, 'y': y, 'clicks': clicks})
 
 
@@ -451,6 +584,10 @@ def close_window(d=None):
     """Closes the app window like the title-bar button."""
     if MACOS:
         webdriver('DELETE', '/session/nuzky/window')
+        return None
+    if WINDOWS:
+        for window in win32.windows('Nuzky'):
+            win32.close(window)
         return None
     from Xlib import X, display
     from Xlib.protocol import event
@@ -488,6 +625,16 @@ def close_window_and_confirm(r):
         (r.work / 'quit-question.txt').write_text('\n'.join(webdriver('GET', r.s.path + '/alert/text')) + '\n')
         webdriver('POST', r.s.path + '/alert/accept')
         return True
+    if WINDOWS:
+        close_window()
+        dialog = wait(lambda: next(iter(win32.windows('Quit Nuzky?')), None), 5, 0.1)
+        if not dialog:
+            return False
+        time.sleep(0.8)
+        win32.capture(dialog).save(r.work / 'quit-question.png')
+        r.shots.append('quit-question.png')
+        win32.press_default(dialog)
+        return True
     from Xlib import X, XK
     from Xlib.protocol import event
     d = close_window()
@@ -509,13 +656,179 @@ def close_window_and_confirm(r):
     return True
 
 
+class win32:
+    """The few Windows calls the flows make where X11 serves them on Linux: windows by title, the clipboard,
+    the app's processes and their memory."""
+
+    @staticmethod
+    @functools.cache
+    def _api():
+        import ctypes
+        from ctypes import wintypes
+        user32, kernel32 = ctypes.WinDLL('user32', use_last_error=True), ctypes.WinDLL('kernel32', use_last_error=True)
+        user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM), wintypes.LPARAM]
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.GetClipboardData.restype = wintypes.HANDLE
+        kernel32.GlobalLock.argtypes, kernel32.GlobalLock.restype = [wintypes.HGLOBAL], ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        return ctypes, wintypes, user32, kernel32
+
+    @staticmethod
+    def windows(title):
+        """The visible top-level windows with exactly this title of this run's app, never of a Nuzky the person has open."""
+        ctypes, wintypes, user32, _ = win32._api()
+        found = []
+
+        def each(hwnd, _):
+            text, pid = ctypes.create_unicode_buffer(256), wintypes.DWORD()
+            user32.GetWindowTextW(hwnd, text, 256)
+            user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+            if text.value == title and user32.IsWindowVisible(hwnd) and RUN.app and pid.value == RUN.app.pid:
+                found.append(hwnd)
+            return True
+        user32.EnumWindows(ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(each), 0)
+        return found
+
+    @staticmethod
+    def close(hwnd):
+        """The title-bar close button's message."""
+        win32._api()[2].PostMessageW(hwnd, 0x0010, 0, 0)
+
+    @staticmethod
+    def capture(hwnd):
+        """The window as it is on screen. The frame DWM reports is in physical pixels, as ImageGrab takes them."""
+        ctypes, wintypes, _, _ = win32._api()
+        from PIL import ImageGrab
+        rect = wintypes.RECT()
+        ctypes.windll.dwmapi.DwmGetWindowAttribute(wintypes.HWND(hwnd), 9, ctypes.byref(rect), ctypes.sizeof(rect))
+        return ImageGrab.grab((rect.left, rect.top, rect.right, rect.bottom), all_screens=True)
+
+    @staticmethod
+    def press_default(hwnd):
+        """Return into the dialog's focused control, as a person presses it, so the dialog acts on its default button."""
+        ctypes, wintypes, user32, _ = win32._api()
+
+        class GuiThreadInfo(ctypes.Structure):
+            _fields_ = [('cbSize', wintypes.DWORD), ('flags', wintypes.DWORD), ('hwndActive', wintypes.HWND),
+                        ('hwndFocus', wintypes.HWND), ('hwndCapture', wintypes.HWND), ('hwndMenuOwner', wintypes.HWND),
+                        ('hwndMoveSize', wintypes.HWND), ('hwndCaret', wintypes.HWND), ('rcCaret', wintypes.RECT)]
+        info = GuiThreadInfo(cbSize=ctypes.sizeof(GuiThreadInfo))
+        user32.GetGUIThreadInfo(user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), None), ctypes.byref(info))
+        target = info.hwndFocus or hwnd
+        user32.PostMessageW(target, 0x0100, 0x0D, 0x001C0001)
+        user32.PostMessageW(target, 0x0101, 0x0D, 0xC01C0001)
+
+    @staticmethod
+    def clipboard():
+        """The text on the clipboard; another program may hold it for a moment."""
+        ctypes, _, user32, kernel32 = win32._api()
+        if not wait(lambda: user32.OpenClipboard(None), 2, 0.05):
+            return None
+        try:
+            handle = user32.GetClipboardData(13)
+            if not handle:
+                return ''
+            try:
+                return ctypes.wstring_at(kernel32.GlobalLock(handle))
+            finally:
+                kernel32.GlobalUnlock(handle)
+        finally:
+            user32.CloseClipboard()
+
+    @staticmethod
+    def set_clipboard(text):
+        ctypes, _, user32, kernel32 = win32._api()
+        data = (text + '\0').encode('utf-16-le')
+        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        handle = kernel32.GlobalAlloc(0x0002, len(data))
+        ctypes.memmove(kernel32.GlobalLock(ctypes.c_void_p(handle)), data, len(data))
+        kernel32.GlobalUnlock(ctypes.c_void_p(handle))
+        if not wait(lambda: user32.OpenClipboard(None), 2, 0.05):
+            raise RuntimeError('the clipboard stayed busy')
+        try:
+            user32.EmptyClipboard()
+            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+            user32.SetClipboardData(13, handle)
+        finally:
+            user32.CloseClipboard()
+
+    @staticmethod
+    def processes():
+        """Every process as {pid: (parent pid, full path of its program or None)}."""
+        ctypes, wintypes, _, kernel32 = win32._api()
+
+        class Entry(ctypes.Structure):
+            _fields_ = [('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD), ('th32ProcessID', wintypes.DWORD),
+                        ('th32DefaultHeapID', ctypes.c_size_t), ('th32ModuleID', wintypes.DWORD), ('cntThreads', wintypes.DWORD),
+                        ('th32ParentProcessID', wintypes.DWORD), ('pcPriClassBase', ctypes.c_long), ('dwFlags', wintypes.DWORD),
+                        ('szExeFile', ctypes.c_wchar * 260)]
+        snapshot, entry, found = kernel32.CreateToolhelp32Snapshot(2, 0), Entry(dwSize=ctypes.sizeof(Entry)), {}
+        try:
+            more = kernel32.Process32FirstW(wintypes.HANDLE(snapshot), ctypes.byref(entry))
+            while more:
+                path, size = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
+                process = kernel32.OpenProcess(0x1000, False, entry.th32ProcessID)
+                ok = process and kernel32.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(size))
+                if process:
+                    kernel32.CloseHandle(process)
+                found[entry.th32ProcessID] = (entry.th32ParentProcessID, path.value if ok else None)
+                more = kernel32.Process32NextW(wintypes.HANDLE(snapshot), ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(snapshot)
+        return found
+
+    @staticmethod
+    def app_pid():
+        """The app of this run: Edge WebDriver starts it, and one run at a time uses this build."""
+        app = str(APP.resolve()).lower()
+        return next((pid for pid, (_, path) in win32.processes().items() if path and path.lower() == app), None)
+
+    @staticmethod
+    def alive(pid):
+        """Whether the process still runs."""
+        ctypes, wintypes, _, kernel32 = win32._api()
+        process = kernel32.OpenProcess(0x1000, False, pid)
+        if not process:
+            return False
+        try:
+            code = wintypes.DWORD()
+            return bool(kernel32.GetExitCodeProcess(wintypes.HANDLE(process), ctypes.byref(code))) and code.value == 259
+        finally:
+            kernel32.CloseHandle(process)
+
+    @staticmethod
+    def memory_mb(pid):
+        """The process's resident memory, its working set, or None once it is gone."""
+        ctypes, wintypes, _, kernel32 = win32._api()
+
+        class Counters(ctypes.Structure):
+            _fields_ = [('cb', wintypes.DWORD), ('PageFaultCount', wintypes.DWORD)] + [
+                (name, ctypes.c_size_t) for name in ('PeakWorkingSetSize', 'WorkingSetSize', 'QuotaPeakPagedPoolUsage',
+                                                     'QuotaPagedPoolUsage', 'QuotaPeakNonPagedPoolUsage', 'QuotaNonPagedPoolUsage',
+                                                     'PagefileUsage', 'PeakPagefileUsage')]
+        process = kernel32.OpenProcess(0x1000, False, pid)
+        if not process:
+            return None
+        try:
+            counters = Counters(cb=ctypes.sizeof(Counters))
+            ok = ctypes.WinDLL('psapi').GetProcessMemoryInfo(wintypes.HANDLE(process), ctypes.byref(counters), counters.cb)
+            return counters.WorkingSetSize / 1048576 if ok else None
+        finally:
+            kernel32.CloseHandle(process)
+
+
 class Bridge:
     """The agent's side: `nuzky mcp` attached to the open app over its local socket."""
 
     def __init__(self, r, project=None, command=None):
         """`command`: what an agent's config runs instead, such as `nuzky-app mcp --current`."""
         command = command or [str(CLI), 'mcp', '--project', str(project), '--allow-write']
-        self.process = subprocess.Popen(command, env=r.env,
+        self.process = subprocess.Popen(command, env=r.launch_env(),
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=open(r.work / 'bridge.log', 'w'),
                                         text=True, start_new_session=True)
         self.lines, self.id = queue.Queue(), 0
@@ -553,9 +866,65 @@ class Bridge:
             stop(self.process)
 
 
+def deny(path, mode, access='W'):
+    """Takes away the right to write `path` (or with access 'R', to read it) until the returned function gives it back:
+    `mode` on Unix, and on Windows, which ignores a folder's read-only flag, a deny entry for the user in its access list."""
+    if WINDOWS:
+        user = os.environ['USERNAME']
+        subprocess.run(['icacls', str(path), '/deny', f'{user}:({access})'], check=True, capture_output=True)
+        return lambda: subprocess.run(['icacls', str(path), '/remove:d', user], check=True, capture_output=True)
+    before = path.stat().st_mode & 0o777
+    os.chmod(path, mode)
+    return lambda: os.chmod(path, before)
+
+
+@functools.cache
+def _launcher():
+    """tests/e2e/launcher.rs, built once per run of the flows."""
+    built = TARGET / 'e2e/launcher.exe'
+    built.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['rustc', '--edition', '2024', '-O', '-o', str(built), str(ROOT / 'tests/e2e/launcher.rs')],
+                   env=dict(os.environ, NUZKY_PYTHON=sys.executable), check=True, capture_output=True)
+    return built
+
+
+def program(r, script, name=None):
+    """A path the app can run as the fake program `script` (a Python file in tests/e2e), called `name` or as the file
+    is. Unix runs the script itself; Windows runs a copy of tests/e2e/launcher.rs named for it, in this run's folder,
+    since the app looks for yt-dlp and keeps its own copy only as an .exe."""
+    name = name or script.name
+    if not WINDOWS:
+        return script
+    exe = r.work / 'bin' / f'{name}.exe'
+    exe.parent.mkdir(exist_ok=True)
+    shutil.copy(_launcher(), exe)
+    r.env[f"NUZKY_FAKE_{name.upper().replace('-', '_')}"] = str(script)
+    return exe
+
+
+def running_with(text):
+    """The ids of the processes whose command line holds `text`, apart from the one that looks."""
+    if WINDOWS:
+        query = f"$_.CommandLine -like '*{text}*' -and $_.ProcessId -ne $PID"
+        listed = subprocess.run(['powershell', '-NoProfile', '-Command',
+                                 f'(Get-CimInstance Win32_Process | Where-Object {{ {query} }}).ProcessId'],
+                                capture_output=True, text=True).stdout
+    else:
+        listed = subprocess.run(['pgrep', '-f', text], capture_output=True, text=True).stdout
+    return listed.split()
+
+
+def kill_hard(pid):
+    """Ends a process at once, as a crash does; Windows has no SIGKILL, and its TerminateProcess is the same."""
+    os.kill(pid, getattr(signal, 'SIGKILL', signal.SIGTERM))
+
+
 def comma_locale(r):
     """Starts the app with numbers written with a decimal comma, as on a Czech system, when such a locale is installed;
-    the person model once saw nobody under one. Returns the locale, or None."""
+    the person model once saw nobody under one. Returns the locale, or None. Windows programs do not take theirs
+    from the environment."""
+    if WINDOWS:
+        return None
     installed = subprocess.run(['locale', '-a'], capture_output=True, text=True).stdout.split()
     found = next((name for name in ('cs_CZ.utf8', 'de_DE.utf8', 'fr_FR.utf8') if name in installed), None)
     if found:

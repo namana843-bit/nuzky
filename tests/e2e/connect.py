@@ -1,9 +1,10 @@
 """Connect your agent: one click puts Nuzky into Claude Code's, Codex's and Gemini's own settings, after a backup and without
 touching anything else there, a copy gives any other agent the same server and a first message, and Agent access
 decides whether an agent attached to the open project may edit it, without restarting the agent."""
-import json, subprocess, time
+import json, time, tomllib
+from pathlib import Path
 
-from e2e.harness import AI_EDITING, MACOS, Bridge, clipboard, flow, press, wait, webdriver
+from e2e.harness import AI_EDITING, LINUX, Bridge, clipboard, flow, press, set_clipboard, wait, webdriver
 
 CLAUDE = '{\n  "numStartups": 12,\n  "projects": {\n    "/home/me/site": {\n      "allowedTools": []\n    }\n  },\n  "mcpServers": {\n    "other": {\n      "type": "stdio",\n      "command": "other-server"\n    }\n  }\n}\n'
 CODEX = '# my Codex settings\nmodel = "gpt-6.1-sol" # keep this\n\n[mcp_servers.other]\ncommand = "other"\n\n[profiles.fast]\nmodel_reasoning_effort = "low"\n'
@@ -63,7 +64,7 @@ def server_of(text):
 def connect(r):
     folder = r.work / 'home'
     # On macOS the copies land on the person's own clipboard; their text goes back at the end.
-    theirs = clipboard() if MACOS else None
+    theirs = clipboard() if not LINUX else None
     agent = None
     try:
         # Connect agent lives in the AI panel's agent menu: AI in the top bar, the agent's name, then the item.
@@ -87,7 +88,7 @@ def connect(r):
         text, toast = copy(r, 'Copy MCP config')
         server = server_of(text) if text and '{' in text else {}
         r.check('Copy MCP config copies a server that runs this app attached to the open project',
-                server.get('args') == ['mcp', '--current', '--allow-write'] and server.get('command', '').endswith('nuzky-app'), text)
+                server.get('args') == ['mcp', '--current', '--allow-write'] and Path(server.get('command', '')).stem == 'nuzky-app', text)
         r.check('it says to add only the nuzky entry to a file that has servers, then gives a first message: read nuzky://guide, '
                 'edit only through the tools, a run is one undo step',
                 'add only the "nuzky" entry' in text and 'nuzky://guide' in text and 'begin_run' in text and 'one undo step' in text, text)
@@ -169,7 +170,7 @@ def connect(r):
         if agent:
             agent.close()
         if theirs is not None:
-            subprocess.run(['pbcopy'], input=theirs, text=True, check=True)
+            set_clipboard(theirs)
 
     claude = (folder / '.claude.json').read_text()
     config = json.loads(claude)
@@ -178,8 +179,13 @@ def connect(r):
     backups = sorted(folder.glob('.claude.json.nuzky-backup-*'))
     r.check("Claude Code's settings were backed up first", len(backups) == 1 and backups[0].read_text() == CLAUDE, backups)
     codex = (folder / '.codex/config.toml').read_text()
-    block = f'[mcp_servers.nuzky]\ncommand = {json.dumps(entry["command"])}\nargs = ["mcp", "--current", "--allow-write"]\nenv_vars = ["XDG_RUNTIME_DIR"]\n\n'
-    r.check("Codex gets the same command and keeps every comment and setting", block in codex and codex.replace(block, '') == CODEX,
+    # TOML writes a Windows path as a literal string, in single quotes.
+    start = codex.find('[mcp_servers.nuzky]\n')
+    block = codex[start:codex.index('\n\n', start) + 2] if start >= 0 else ''
+    table = tomllib.loads(block)['mcp_servers']['nuzky'] if block else None
+    r.check("Codex gets the same command and keeps every comment and setting",
+            table == {'command': entry['command'], 'args': ['mcp', '--current', '--allow-write'], 'env_vars': ['XDG_RUNTIME_DIR']}
+            and codex.replace(block, '') == CODEX,
             codex)
     backups = sorted((folder / '.codex').glob('config.toml.nuzky-backup-*'))
     r.check("Codex's settings were backed up first", len(backups) == 1 and backups[0].read_text() == CODEX, backups)

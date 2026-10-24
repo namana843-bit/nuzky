@@ -57,7 +57,13 @@ fn known_dirs(home: Option<&Path>) -> Vec<PathBuf> {
             dirs.push(home.join(d));
         }
     }
-    dirs.extend(["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"].map(PathBuf::from));
+    if cfg!(windows) {
+        // npm's global folder, where `npm install -g` puts Codex, and where Antigravity CLI's installer puts agy.
+        dirs.extend(std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("npm")));
+        dirs.extend(std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("agy").join("bin")));
+    } else {
+        dirs.extend(["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"].map(PathBuf::from));
+    }
     dirs
 }
 
@@ -114,10 +120,18 @@ fn locate(id: AgentId) -> Option<PathBuf> {
     if let Some(path) = std::env::var_os(override_var) {
         return Some(PathBuf::from(path)).filter(|p| executable(p));
     }
-    let name = if cfg!(windows) { format!("{program}.exe") } else { program.to_owned() };
+    // npm installs a CLI on Windows as a .cmd that runs it with Node.
+    let names =
+        if cfg!(windows) { vec![format!("{program}.exe"), format!("{program}.cmd")] } else { vec![program.to_owned()] };
     let path = std::env::split_paths(agent_path()).collect::<Vec<_>>();
+    #[cfg(unix)]
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    path.into_iter().chain(known_dirs(home.as_deref())).map(|dir| dir.join(&name)).find(|p| executable(p))
+    #[cfg(windows)]
+    let home = std::env::home_dir();
+    path.into_iter()
+        .chain(known_dirs(home.as_deref()))
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .find(|p| executable(p))
 }
 
 /// The first version-looking word of `--version`: "2.1.292 (Claude Code)", "codex-cli 0.160.1".
@@ -174,7 +188,11 @@ fn run_in(
     }
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    #[cfg(windows)]
+    no_window(&mut command);
     let mut child = command.spawn()?;
+    #[cfg(windows)]
+    let job = Job::around(&child);
     if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
         // A CLI that exits without reading closes the pipe; its output says what went wrong.
         let _ = std::io::Write::write_all(&mut stdin, input);
@@ -201,11 +219,70 @@ fn run_in(
     unsafe {
         libc::kill(-(child.id() as i32), libc::SIGKILL)
     };
+    #[cfg(windows)]
+    match job {
+        Some(job) => drop(job),
+        // Without a job only a tree whose top still runs can be found.
+        None if matches!(status, Ok(None)) => kill_tree(child.id()),
+        None => {}
+    }
     let _ = child.kill();
     let _ = child.wait();
     let stdout = stdout.join().unwrap()?;
     let stderr = stderr.join().unwrap()?;
     Ok(status?.map(|status| Output { status, stdout, stderr }))
+}
+
+/// A console program started from the app would otherwise open a terminal window of its own.
+#[cfg(windows)]
+pub fn no_window(command: &mut Command) {
+    std::os::windows::process::CommandExt::creation_flags(command, 0x0800_0000);
+}
+
+/// Ends the process and everything it starts once dropped, as killing its process group does on Unix, also after the
+/// process itself has exited and its helpers hold on to its output.
+#[cfg(windows)]
+struct Job {
+    _handle: std::os::windows::io::OwnedHandle,
+}
+
+#[cfg(windows)]
+impl Job {
+    fn around(child: &std::process::Child) -> Option<Job> {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        };
+        // SAFETY: a job without a name or attributes; OwnedHandle closes the handle CreateJobObjectW returns.
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return None;
+        }
+        let job = Job { _handle: unsafe { OwnedHandle::from_raw_handle(handle) } };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: limits is the structure this information class names, and both handles are open.
+        let set = unsafe {
+            SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            ) != 0
+                && AssignProcessToJobObject(handle, child.as_raw_handle()) != 0
+        };
+        set.then_some(job)
+    }
+}
+
+/// Ends a process with everything it started, as killing its process group does on Unix.
+#[cfg(windows)]
+pub fn kill_tree(pid: u32) {
+    let mut taskkill = Command::new("taskkill");
+    taskkill.args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null());
+    no_window(&mut taskkill);
+    let _ = taskkill.status();
 }
 
 fn version(path: &Path) -> Option<String> {
@@ -263,5 +340,17 @@ mod tests {
         assert_eq!(version_of("codex-cli 0.160.1\n").as_deref(), Some("0.160.1"));
         assert_eq!(version_of("1.4.3\n").as_deref(), Some("1.4.3"));
         assert_eq!(version_of("unknown"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_probe_ends_what_the_cli_left_holding_its_output() {
+        let cmd = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32").join("cmd.exe");
+        let started = Instant::now();
+        // cmd exits at once and leaves ping writing to its output for half a minute, as a CLI's server may.
+        let output =
+            run(&cmd, &["/c", "start /b ping -n 30 127.0.0.1 & exit 0"], &[], None, Duration::from_secs(5)).unwrap();
+        assert!(output.is_some_and(|output| output.status.success()));
+        assert!(started.elapsed() < Duration::from_secs(10), "the probe waited {:?}", started.elapsed());
     }
 }

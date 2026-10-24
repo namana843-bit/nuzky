@@ -3697,6 +3697,7 @@ dependencies = [
  "serde_json",
  "toml 1.1.6+spec-1.1.0",
  "ureq",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3764,6 +3765,7 @@ dependencies = [
  "ureq",
  "uuid",
  "whisper-rs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3798,6 +3800,7 @@ dependencies = [
  "nuzky-vision",
  "png 0.18.1",
  "serde_json",
+ "uds_windows",
 ]
 
 [[package]]
@@ -3844,6 +3847,7 @@ dependencies = [
  "base64 0.23.1",
  "dirs 6.0.0",
  "dunce",
+ "getrandom 0.4.3",
  "imagesize",
  "libc",
  "log",
@@ -3864,8 +3868,10 @@ dependencies = [
  "sha2 0.11.0",
  "tokio",
  "ts-rs",
+ "uds_windows",
  "ureq",
  "url",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

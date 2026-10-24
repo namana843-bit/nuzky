@@ -5,7 +5,7 @@ import os, signal, subprocess, time
 
 from e2e.corrections import Hands
 from e2e.diagnostics import CRASHED, TOASTS, app_pid
-from e2e.harness import FIXTURES, MACOS, Session, close_window, leave_editor, flow, press, start_driver, stop, wait
+from e2e.harness import FIXTURES, MACOS, WINDOWS, Session, close_window, leave_editor, flow, press, start_driver, stop, wait
 from e2e.home import FIRST_RUN_TEXT, OPEN_VIDEO, make, resize
 
 TITLES = ['Captions model', 'Face and person models', 'Music from YouTube', 'Connect your AI']
@@ -72,7 +72,8 @@ def row(r):
 
 def relaunch(r):
     """Starts the app again, with r.env as it is now."""
-    if MACOS:
+    if MACOS or WINDOWS:
+        # The harness started the app, and the next session starts it again.
         leave_editor(r)
         close_window()
         r.check('the window closes and Nuzky quits', wait(lambda: r.app.poll() is not None, 15))
