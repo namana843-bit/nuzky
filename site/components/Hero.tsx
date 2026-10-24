@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Fit } from "./Fit";
 import { HeroDownload } from "./GetNuzky";
+import { LaunchVideo } from "./LaunchVideo";
 import { fitSizes } from "@/lib/fit";
 import { usePlaying } from "@/lib/playing";
 import type { Release } from "@/lib/site";
@@ -271,7 +272,9 @@ export function Hero({ release }: { release: Release }) {
           <span data-show="unknown mac intel linux arm phone">Your</span> own ChatGPT or Claude cuts while you watch, and one undo takes it all back.
         </p>
 
-        <div className="mt-10 w-full sm:mt-11">
+        <LaunchVideo className="mt-10 sm:mt-12" />
+
+        <div className="mt-10 w-full sm:mt-12">
           <HeroDownload release={release} />
         </div>
 
