@@ -64,9 +64,9 @@ if len(sys.argv) > 1 and sys.argv[1] == '--version':
 
 args = sys.argv[1:]
 if OPENCODE and args == ['models', '--pure']:
-    if not os.environ.get('PWD') or os.environ.get('XDG_CONFIG_HOME') != os.environ['PWD'] \
+    if not os.environ.get('PWD') or not os.environ.get('XDG_CONFIG_HOME') == os.environ.get('OPENCODE_TEST_HOME') == os.environ['PWD'] \
             or os.environ.get('OPENCODE_DISABLE_PROJECT_CONFIG') != 'true':
-        print('fake agent: Nuzky left out the panel folder as XDG_CONFIG_HOME and PWD, or OPENCODE_DISABLE_PROJECT_CONFIG', file=sys.stderr)
+        print('fake agent: Nuzky left out the panel folder as XDG_CONFIG_HOME, OPENCODE_TEST_HOME and PWD, or OPENCODE_DISABLE_PROJECT_CONFIG', file=sys.stderr)
         sys.exit(2)
     print('openai/test-first\nanthropic/test-second')
     sys.exit(0)
@@ -200,7 +200,7 @@ if OPENCODE:
                                                'permission': {'*': 'deny', 'nuzky_*': 'allow'}}} \
             or not panel_agent.get('prompt', '').startswith('You are the AI panel inside Nuzky, a video editor.'):
         missing.append('agent.nuzky-panel mode, prompt and permission')
-    for k, v in {'XDG_CONFIG_HOME': os.getcwd(), 'PWD': os.getcwd(), 'OPENCODE_DISABLE_PROJECT_CONFIG': 'true',
+    for k, v in {'XDG_CONFIG_HOME': os.getcwd(), 'PWD': os.getcwd(), 'OPENCODE_TEST_HOME': os.getcwd(), 'OPENCODE_DISABLE_PROJECT_CONFIG': 'true',
                  'OPENCODE_DISABLE_EXTERNAL_SKILLS': 'true',
                  'OPENCODE_DISABLE_CLAUDE_CODE': 'true', 'OPENCODE_DISABLE_AUTOUPDATE': 'true'}.items():
         if os.environ.get(k) != v:

@@ -50,6 +50,11 @@ pub(crate) fn command(req: &TurnRequest) -> Command {
     // project would load that project's AGENTS.md and opencode.json.
     c.env("PWD", &req.cwd);
     c.env("OPENCODE_DISABLE_PROJECT_CONFIG", "true");
+    // OpenCode always loads ~/.opencode/opencode.json, whose instructions it reads into the prompt and whose MCP
+    // servers it starts. This moves only OpenCode's own home: its data folder with the sign-in, and the home other
+    // programs such as the AWS SDK read their credentials from, stay. A test hook of OpenCode's, so the agent's own
+    // permission still holds should a newer one drop it.
+    c.env("OPENCODE_TEST_HOME", &req.cwd);
     c.env("OPENCODE_DISABLE_AUTOUPDATE", "true");
     c.env("OPENCODE_DISABLE_CLAUDE_CODE", "true");
     // Skills in ~/.agents/skills, which the global config folder does not cover.
@@ -264,6 +269,7 @@ mod tests {
         assert_eq!(env("XDG_CONFIG_HOME"), Some(Some("/run/user/1000/nuzky-agent".into())));
         assert_eq!(env("PWD"), Some(Some("/run/user/1000/nuzky-agent".into())));
         assert_eq!(env("OPENCODE_DISABLE_PROJECT_CONFIG"), Some(Some("true".into())));
+        assert_eq!(env("OPENCODE_TEST_HOME"), Some(Some("/run/user/1000/nuzky-agent".into())));
         assert_eq!(env("OPENCODE_DISABLE_EXTERNAL_SKILLS"), Some(Some("true".into())));
         assert_eq!(env("OPENCODE_CONFIG"), Some(None));
         let args: Vec<_> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();

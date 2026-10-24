@@ -474,6 +474,7 @@ pub async fn agent_models(agent: AgentId) -> CmdResult<Vec<AgentModel>> {
                     ("XDG_CONFIG_HOME", &config),
                     ("PWD", &config),
                     ("OPENCODE_DISABLE_PROJECT_CONFIG", "true"),
+                    ("OPENCODE_TEST_HOME", &config),
                     ("OPENCODE_CONFIG", ""),
                     ("OPENCODE_CONFIG_DIR", ""),
                     ("OPENCODE_CONFIG_CONTENT", ""),
