@@ -121,6 +121,11 @@ def setup_codex(r):
     r.env.update(NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_CODEX=str(FAKE.with_name('fake_codex')))
 
 
+def setup_opencode(r):
+    setup(r)
+    r.env.update(NUZKY_AGENT_CLAUDE=str(r.work / 'no-claude'), NUZKY_AGENT_OPENCODE=str(FAKE.with_name('fake_opencode')))
+
+
 class ChatGptPanelServer:
     def __init__(self):
         self.requests, self.errors = [], []
@@ -345,14 +350,14 @@ def ai_panel_chatgpt(r):
         wait(lambda: not r.s.run(dialog), 3)
         r.s.run("window.__nuzky.agent.setState({draft: ''})")
         click(r, 'New chat')
-        check('signed out, the empty panel offers Continue with ChatGPT and, without Claude Code or Codex, how to install them',
-              wait(lambda: all(s in panel(r)['text'] for s in ('Use your ChatGPT plan', 'Continue with ChatGPT', 'Or use Claude Code or Codex'))
+        check('signed out, the empty panel offers Continue with ChatGPT and how to install the missing agents',
+              wait(lambda: all(s in panel(r)['text'] for s in ('Use your ChatGPT plan', 'Continue with ChatGPT', 'Or use Claude Code, Codex or OpenCode'))
                    and 'Using ChatGPT plan' not in panel(r)['text'], 5), panel(r)['text'])
         r.shot('chatgpt-sign-in')
         r.s.run("""document.querySelector('aside[aria-label=AI] button[title="Choose the agent"]').click()""")
         items = "return [...document.querySelectorAll('[role=menu][aria-label=Agent] [role^=menuitem]')].map((b) => b.textContent.trim())"
-        check('the agent menu offers ChatGPT as not signed in, beside the two missing agents',
-              wait(lambda: (r.s.run(items) or [])[:3] == ['Claude CodeNot installed', 'CodexNot installed', 'ChatGPTNot signed in'], 3),
+        check('the agent menu offers ChatGPT as not signed in, beside the three missing agents',
+              wait(lambda: (r.s.run(items) or [])[:4] == ['Claude CodeNot installed', 'CodexNot installed', 'OpenCodeNot installed', 'ChatGPTNot signed in'], 3),
               r.s.run(items))
         r.shot('chatgpt-agent-menu')
         r.key('Escape')
@@ -471,6 +476,118 @@ def ai_panel_web_search(r):
         (r.work / 'requests.json').write_text(json.dumps(server.requests, indent=2) + '\n')
 
 
+@flow('ai_panel_opencode', 'OpenCode edits live with undo, lists models, resumes after steering and Stop, and explains sign-in',
+      before=setup_opencode)
+def ai_panel_opencode(r):
+    r.s.run('document.body.focus()')
+    r.key('j', ctrlKey=True)
+    r.check('the panel uses the installed OpenCode', wait(lambda: panel(r)
+            and r.s.run("return window.__nuzky.agent.getState().agent === 'opencode'"), 10))
+    r.s.run("document.querySelector('aside[aria-label=AI] button[title=\"Choose the agent\"]').click()")
+    menu = r.s.run("return document.querySelector('[role=menu][aria-label=Agent]')?.innerText")
+    agents = r.s.run('return window.__nuzky.agent.getState().agents')
+    r.check('the agent menu lists OpenCode 1.18.34, with Claude Code and Codex not installed',
+            menu and 'OpenCode' in menu and '1.18.34' in menu and
+            [(a['name'], bool(a['path']), a['version']) for a in agents] ==
+            [('Claude Code', False, None), ('Codex', False, None), ('OpenCode', True, '1.18.34')], menu)
+    r.key('Escape')
+    r.check('the model starts on Default', wait(lambda: r.s.run(MODEL) == 'Default', 10), r.s.run(MODEL))
+    before = r.track()
+    message = 'Cut the pause at the start and add captions'
+    send(r, message)
+    if not r.check('OpenCode accepts the isolated command contract',
+                   wait(lambda: runs(r), 10) and not runs(r)[0]['missing'], runs(r)):
+        return
+    r.check('OpenCode locks the editor while working', wait(lambda: r.state()['aiRun'], 15))
+    r.check('the project read shows live', wait(lambda: 'Read the project' in panel(r)['text'], 10), panel(r)['text'])
+    r.check('the cut appears live before the editor unlocks', wait(lambda: r.state()['aiRun']
+            and r.track()[-1]['startUs'] + r.track()[-1]['durationUs'] == before[-1]['startUs'] + before[-1]['durationUs'] - 2_000_000, 15))
+    wait(lambda: agent(r)['status'] == 'idle' and 'run' in agent(r)['kinds'], 30)
+    text = panel(r)['text']
+    r.check('the done card lists the cut and captions, with the whole answer',
+            all(s in text for s in ('Cut out 1 passage, 2.0 s in total', 'Added 2 captions', 'Hotovo.')), text)
+    saved = json.loads(r.saved_project().read_text())
+    main = next(t['clips'] for t in saved['tracks'] if t['id'] == 'main')
+    captions = [c for t in saved['tracks'] if t['name'] == 'Captions' for c in t['clips']]
+    r.check('the saved project has the cut and both captions',
+            main[-1]['startUs'] + main[-1]['durationUs'] == before[-1]['startUs'] + before[-1]['durationUs'] - 2_000_000
+            and [c['content']['text'] for c in captions] == ['Dneska vám', 'ukážu jak'], saved['tracks'])
+    first = runs(r)[0]
+    r.check('the first turn is isolated, has no positional message or model, and reads the message exactly once on stdin',
+            not first['missing'] and not Path(first['cwd']).is_relative_to(Path(r.env['HOME'])) and not first['resume']
+            and first['argv'] == ['run', '--format', 'json', '--pure', '--agent', 'nuzky-panel']
+            and first['prompt'].split('\n\n[Nuzky]')[0] == message and first['prompt'].count(message) == 1, first)
+    r.shot('opencode-run-done')
+    click(r, 'Undo')
+    r.check('Undo restores the whole project', wait(lambda: r.track() == before
+            and not any(t['name'] == 'Captions' for t in r.state()['tracks']), 10), r.state()['tracks'])
+    open_models(r)
+    r.check('the model menu offers Default and both provider/model names, without effort',
+            wait(lambda: r.s.run(MODELS) == ["DefaultOpenCode's last model", 'openai/test-first', 'anthropic/test-second'], 3)
+            and r.s.run(EFFORT) == [], r.s.run(MODELS))
+    time.sleep(0.5)  # WebKitGTK's screenshot can trail a change made just before it.
+    r.shot('opencode-model-menu')
+    r.check('the second model can be picked', click(r, 'anthropic/test-second', MENU) == 'false'
+            and wait(lambda: r.s.run(MODEL) == 'anthropic/test-second', 3))
+    r.key('Escape')
+    send(r, 'hello again')
+    r.check('the next turn resumes the same session and sends the picked model', wait(lambda: len(runs(r)) == 2, 10)
+            and runs(r)[1]['resume'] and runs(r)[1]['session'] == first['session']
+            and flag(runs(r)[1]['argv'], '--session') == first['session']
+            and flag(runs(r)[1]['argv'], '--model') == 'anthropic/test-second'
+            and wait(lambda: 'Rozumím: hello again' in panel(r)['text'], 10), runs(r)[-1])
+    idle(r)
+    send(r, 'steer me please')
+    r.check('the steerable turn edits under the lock', wait(lambda: r.state()['aiRun'] and 'Pracuju' in panel(r)['text'], 15))
+    pid = runs(r)[-1]['pid']
+    send(r, 'Do this instead')
+    r.check('sending while working ends the process and resumes the same session with the next message',
+            wait(lambda: not alive(pid), 5, 0.05) and wait(lambda: len(runs(r)) == 4, 10)
+            and runs(r)[3]['resume'] and flag(runs(r)[3]['argv'], '--session') == first['session']
+            and runs(r)[3]['prompt'].startswith('Do this instead')
+            and wait(lambda: 'Rozumím: do this instead' in panel(r)['text'], 10), runs(r)[-1])
+    idle(r)
+    r.check('the interrupted edit keeps its split and a completed run card', len(r.track()) == len(before) + 1
+            and r.s.run("return window.__nuzky.agent.getState().items.some((i) => i.kind === 'run' && i.label === 'Slow edit' && !i.stopped)"))
+    click(r, 'Undo')
+    wait(lambda: r.track() == before, 10)
+    send(r, 'slow edit please')
+    r.check('a slow turn locks the editor', wait(lambda: r.state()['aiRun'] and len(runs(r)) == 5, 15))
+    pid = runs(r)[-1]['pid']
+    started = time.monotonic()
+    click(r, 'Stop')
+    gone = wait(lambda: not alive(pid), 5, 0.05)
+    r.check('Stop kills OpenCode within seconds and unlocks the editor', gone and wait(lambda: not r.state()['aiRun'], 3),
+            {'seconds': round(time.monotonic() - started, 2)})
+    idle(r)
+    send(r, 'hello after Stop')
+    r.check('the stopped turn also resumes the same session', wait(lambda: len(runs(r)) == 6, 10)
+            and runs(r)[5]['resume'] and flag(runs(r)[5]['argv'], '--session') == first['session']
+            and wait(lambda: 'Rozumím: hello after stop' in panel(r)['text'], 10), runs(r)[-1])
+    idle(r)
+    click(r, 'New chat')
+    send(r, 'think first please')
+    r.check('a fresh session has started while the model is still thinking',
+            wait(lambda: len(runs(r)) == 7 and (r.work / 'fake/thinking').exists(), 10)
+            and not runs(r)[6]['resume'] and runs(r)[6]['session'] != first['session']
+            and not r.state()['aiRun'] and agent(r)['status'] != 'idle', runs(r)[-1])
+    thinking = runs(r)[6]
+    click(r, 'Stop')
+    r.check('Stop also kills the thinking process and leaves the editor unlocked',
+            wait(lambda: not alive(thinking['pid']), 5, 0.05) and idle(r) and not r.state()['aiRun'])
+    send(r, 'hello after thinking')
+    r.check('a turn stopped after only step_start resumes that same session',
+            wait(lambda: len(runs(r)) == 8, 10) and runs(r)[7]['resume']
+            and flag(runs(r)[7]['argv'], '--session') == thinking['session']
+            and wait(lambda: 'Rozumím: hello after thinking' in panel(r)['text'], 10), runs(r)[-1])
+    idle(r)
+    send(r, 'signin please')
+    r.check('the free-tier refusal shows the sign-in command and returns the message to the field',
+            wait(lambda: "OpenCode isn't signed in." in panel(r)['text'] and 'opencode auth login' in panel(r)['text']
+                 and agent(r)['draft'] == 'signin please', 10), panel(r)['text'])
+    r.check('no error toast along the way', not r.errors(), r.errors())
+
+
 @flow('ai_panel_codex', 'The AI panel uses Codex: live edits, undo, choices, conversation after Stop, and prompt login and usage hints',
       before=setup_codex)
 def ai_panel_codex(r):
@@ -480,7 +597,7 @@ def ai_panel_codex(r):
     agents = wait(lambda: r.s.run('return window.__nuzky.agent.getState().agents'), 10) or []
     r.check('Claude Code is not installed and Codex is installed with version 0.162.1',
             [(a['name'], bool(a['path']), a['version']) for a in agents] ==
-            [('Claude Code', False, None), ('Codex', True, '0.162.1')], agents)
+            [('Claude Code', False, None), ('Codex', True, '0.162.1'), ('OpenCode', False, None)], agents)
     r.check('the panel uses Codex', r.s.run("return window.__nuzky.agent.getState().agent === 'codex'")
             and 'Codex' in panel(r)['text'], panel(r)['text'])
     r.check("Codex starts on the first model it lists and that model's default effort",
@@ -981,7 +1098,7 @@ def ai_panel(r):
             p and p['right'] == 6 and p['top'] == 48 and p['bottom'] == 6 and p['width'] == 360 and p['inspector'], p)
     r.check('the field takes focus', wait(lambda: r.s.run('return document.activeElement?.tagName') == 'TEXTAREA', 3))
     agents = wait(lambda: r.s.run('return window.__nuzky.agent.getState().agents'), 10) or []
-    r.check('Claude Code is found and Codex is not installed', [(a['name'], bool(a['path'])) for a in agents] == [('Claude Code', True), ('Codex', False)], agents)
+    r.check('Claude Code is found and Codex and OpenCode are not installed', [(a['name'], bool(a['path'])) for a in agents] == [('Claude Code', True), ('Codex', False), ('OpenCode', False)], agents)
     click(r, 'Add captions')
     r.check('a starting point goes into the field to send or change, not straight to the agent',
             wait(lambda: agent(r)['draft'] == 'Add captions', 3) and not runs(r), agent(r))

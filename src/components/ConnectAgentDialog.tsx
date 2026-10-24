@@ -14,9 +14,10 @@ const STATE_TEXT: Record<AgentConnection["state"], string> = {
 };
 
 const COPIES: { setup: AgentSetup; label: string; name: string }[] = [
-  { setup: "claude", label: "Copy for Claude", name: "Claude Desktop" },
-  { setup: "cursor", label: "Copy for Cursor", name: "Cursor" },
-  { setup: "other", label: "Copy MCP config", name: "your agent" },
+  { setup: "claude", label: "Claude Desktop", name: "Claude Desktop" },
+  { setup: "cursor", label: "Cursor", name: "Cursor" },
+  { setup: "opencode", label: "OpenCode", name: "OpenCode" },
+  { setup: "other", label: "Other agent", name: "your agent" },
 ];
 
 /** Connect your agent: one click writes Nuzky into Claude Code's, Codex's or Antigravity CLI's own settings, a copy serves any other agent, and Agent access decides whether they may edit. */

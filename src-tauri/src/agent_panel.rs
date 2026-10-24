@@ -320,9 +320,11 @@ fn new_id() -> String {
 
 #[tauri::command]
 pub async fn agent_list() -> CmdResult<Vec<AgentInfo>> {
-    tauri::async_runtime::spawn_blocking(|| [AgentId::Claude, AgentId::Codex].map(nuzky_agent::find).to_vec())
-        .await
-        .map_err(err)
+    tauri::async_runtime::spawn_blocking(|| {
+        [AgentId::Claude, AgentId::Codex, AgentId::Opencode].map(nuzky_agent::find).to_vec()
+    })
+    .await
+    .map_err(err)
 }
 
 #[tauri::command]
@@ -459,6 +461,45 @@ pub async fn agent_models(agent: AgentId) -> CmdResult<Vec<AgentModel>> {
             }
             codex_models(&output.stdout).map_err(|_| failed.into())
         }
+        // Run on the panel's own config, as a turn is, so providers only the user's config adds are not offered. `run`
+        // cannot remove a variable, and OpenCode takes an empty one as unset.
+        AgentId::Opencode => {
+            let failed = "MODELS_FAILED: Couldn't list OpenCode's models. Try again.";
+            let path = nuzky_agent::find(agent).path.ok_or(failed)?;
+            let config = work_dir().to_string_lossy().into_owned();
+            let output = nuzky_agent::run(
+                &path,
+                &["models", "--pure"],
+                &[
+                    ("XDG_CONFIG_HOME", &config),
+                    ("PWD", &config),
+                    ("OPENCODE_DISABLE_PROJECT_CONFIG", "true"),
+                    ("OPENCODE_TEST_HOME", &config),
+                    ("OPENCODE_CONFIG", ""),
+                    ("OPENCODE_CONFIG_DIR", ""),
+                    ("OPENCODE_CONFIG_CONTENT", ""),
+                ],
+                None,
+                std::time::Duration::from_secs(15),
+            )
+            .map_err(|_| failed)?
+            .ok_or(failed)?;
+            let models: Vec<AgentModel> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|slug| slug.contains('/'))
+                .map(|slug| AgentModel {
+                    slug: slug.into(),
+                    display_name: slug.into(),
+                    efforts: Vec::new(),
+                    default_effort: None,
+                })
+                .collect();
+            if !output.status.success() || models.is_empty() {
+                return Err(failed.into());
+            }
+            Ok(models)
+        }
         AgentId::ChatGpt => chatgpt::chatgpt().models().map_err(err),
         AgentId::Antigravity => Err("Run Antigravity CLI in your terminal and connect it to Nuzky.".into()),
     })
@@ -587,7 +628,7 @@ fn validate_model_effort(model: Option<&str>, effort: Option<&str>) -> CmdResult
         && (model.is_empty()
             || model.len() > 100
             || !model.as_bytes()[0].is_ascii_alphanumeric()
-            || !model.bytes().all(|c| c.is_ascii_alphanumeric() || b"._:/[]-".contains(&c)))
+            || !model.bytes().all(|c| c.is_ascii_alphanumeric() || b"._:/[]@-".contains(&c)))
     {
         return Err("Choose a valid model name, starting with a letter or digit.".into());
     }
@@ -825,7 +866,7 @@ mod tests {
 
     #[test]
     fn model_effort_validation_rejects_invalid_input() {
-        for model in ["opus", "openai/gpt-6.1", "a:b_[c].-", "7", &"a".repeat(100)] {
+        for model in ["opus", "openai/gpt-6.1", "vertex/claude-4@2025", "a:b_[c].-", "7", &"a".repeat(100)] {
             assert!(validate_model_effort(Some(model), None).is_ok(), "{model}");
         }
         for model in ["", "-m", "_opus", "é", "a b", "a\\b", "a\n", &"a".repeat(101)] {

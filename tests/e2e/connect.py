@@ -85,22 +85,28 @@ def connect(r):
         r.shot('connect-dialog')
 
         # Copies for agents Nuzky does not connect itself: the server for their settings and a first message.
-        text, toast = copy(r, 'Copy MCP config')
+        text, toast = copy(r, 'Other agent')
         server = server_of(text) if text and '{' in text else {}
-        r.check('Copy MCP config copies a server that runs this app attached to the open project',
+        r.check('Other agent copies a server that runs this app attached to the open project',
                 server.get('args') == ['mcp', '--current', '--allow-write'] and Path(server.get('command', '')).stem == 'nuzky-app', text)
         r.check('it says to add only the nuzky entry to a file that has servers, then gives a first message: read nuzky://guide, '
                 'edit only through the tools, a run is one undo step',
                 'add only the "nuzky" entry' in text and 'nuzky://guide' in text and 'begin_run' in text and 'one undo step' in text, text)
         r.check('the toast says what was copied and that Agent access is off',
                 toast.get('kind') == 'success' and 'Turn on Agent access' in toast.get('text', ''), toast)
-        for label, place in (('Copy for Claude', 'Claude Desktop config (Settings, Developer, Edit Config)'), ('Copy for Cursor', '~/.cursor/mcp.json')):
+        for label, place in (('Claude Desktop', 'Claude Desktop config (Settings, Developer, Edit Config)'), ('Cursor', '~/.cursor/mcp.json')):
             text, _ = copy(r, label)
             r.check(f'{label} copies the same server and says where it goes', place in text and server_of(text) == server, text)
+        text, _ = copy(r, 'OpenCode')
+        config = json.loads(text[text.index('{'):text.rindex('}') + 1]) if text and '{' in text else None
+        r.check('OpenCode names its config and copies the same program and arguments as a local MCP server',
+                '~/.config/opencode/opencode.json' in text
+                and config == {'mcp': {'nuzky': {'type': 'local', 'command': [server['command'], *server['args']]}}}, text)
         r.check('copying changes no file', (folder / '.claude.json').read_text() == CLAUDE
                 and (folder / '.codex/config.toml').read_text() == CODEX
                 and (folder / '.gemini/config/mcp_config.json').read_text() == MCP
                 and (folder / '.gemini/antigravity-cli/settings.json').read_text() == SETTINGS
+                and not (folder / '.config/opencode/opencode.json').exists()
                 and not list(folder.rglob('*.nuzky-backup-*'))
                 and not (r.work / 'data/nuzky/agent-access.json').exists())
 
