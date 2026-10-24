@@ -525,6 +525,7 @@ def ai_panel_opencode(r):
     r.check('the model menu offers Default and both provider/model names, without effort',
             wait(lambda: r.s.run(MODELS) == ["DefaultOpenCode's last model", 'openai/test-first', 'anthropic/test-second'], 3)
             and r.s.run(EFFORT) == [], r.s.run(MODELS))
+    time.sleep(0.5)  # WebKitGTK's screenshot can trail a change made just before it.
     r.shot('opencode-model-menu')
     r.check('the second model can be picked', click(r, 'anthropic/test-second', MENU) == 'false'
             and wait(lambda: r.s.run(MODEL) == 'anthropic/test-second', 3))
