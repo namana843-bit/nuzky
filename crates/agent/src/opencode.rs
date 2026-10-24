@@ -32,7 +32,6 @@ fn config(req: &TurnRequest) -> Value {
     })
 }
 
-/// Turns `nuzky_get_state` back into `nuzky.get_state` for the panel.
 fn tool_name(raw: &str) -> String {
     raw.split_once('_').map_or_else(|| raw.to_owned(), |(n, t)| n.to_owned() + "." + t)
 }
@@ -268,7 +267,6 @@ mod tests {
         assert_eq!(env("OPENCODE_DISABLE_EXTERNAL_SKILLS"), Some(Some("true".into())));
         assert_eq!(env("OPENCODE_CONFIG"), Some(None));
         let args: Vec<_> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
-        // The message goes on stdin.
         assert_eq!(
             args,
             [

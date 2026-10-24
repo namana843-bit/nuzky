@@ -56,14 +56,14 @@ def gemini(r):
     r.check('AI in the top bar opens the panel', r.s.run("""const b = [...document.querySelectorAll('header button')].find((b) => b.textContent.trim() === 'AI');
         b.click(); return true;""") and wait(lambda: r.s.run("return !!document.querySelector('aside[aria-label=AI]')"), 5))
 
-    # Without Claude Code or Codex the panel offers ChatGPT, and Gemini under it.
+    # Without Claude Code, Codex or OpenCode the panel offers ChatGPT, and Gemini under it.
     text = wait(lambda: (t := r.s.run("return document.querySelector('aside[aria-label=AI]').innerText")) and 'Use your ChatGPT plan' in t and t, 10)
-    r.check('without Claude Code or Codex, the ChatGPT view offers to set up Gemini under them', text and 'Or use Claude Code or Codex' in text
-            and 'Gemini' in text.split('Or use Claude Code or Codex')[1] and 'Set up' in text.split('Or use Claude Code or Codex')[1], text)
+    r.check('without Claude Code, Codex or OpenCode, the ChatGPT view offers to set up Gemini under them', text and 'Or use Claude Code, Codex or OpenCode' in text
+            and 'Gemini' in text.split('Or use Claude Code, Codex or OpenCode')[1] and 'Set up' in text.split('Or use Claude Code, Codex or OpenCode')[1], text)
     items = menu(r)
     row = next((i for i in items if i['text'].startswith('Gemini')), None)
     r.check('the agent menu lists Gemini after ChatGPT, not installed', row and row['text'] == 'GeminiNot installed'
-            and [i['text'].split('Not')[0].split('Signed')[0] for i in items].index('Gemini') == 3, items)
+            and [i['text'].split('Not')[0].split('Signed')[0] for i in items].index('Gemini') == 4, items)
     press('Escape')
     r.check('Set up beside Gemini switches the panel to it', click(r, 'Set up'))
     g = wait(lambda: (x := guide(r)) and x.get('steps') and x, 10)
