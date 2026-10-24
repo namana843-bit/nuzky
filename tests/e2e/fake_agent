@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""A stand-in for `claude -p` and `codex exec` in the AI panel flows, so they never spend anyone's subscription.
+"""A stand-in for `claude -p`, `codex exec` and `opencode run` in the AI panel flows, so they never spend anyone's subscription.
 
 It takes the same arguments, refuses to run unless Nuzky passed every flag that keeps the agent to
-Nuzky's tools and its own web search, and answers in Claude Code's stream-json or Codex's JSON lines. It is a real MCP client
-of the bridge from --mcp-config or -c, so its edits go through Nuzky like a real agent's. Claude reads
-stream-json user messages from stdin while it works; Codex reads one prompt up to EOF. The message picks what it does:
+Nuzky's tools and its own web search, and answers in Claude Code's stream-json, Codex's or OpenCode's JSON lines. It is a real MCP client
+of the bridge from --mcp-config, -c or OPENCODE_CONFIG_CONTENT, so its edits go through Nuzky like a real agent's. Claude reads
+stream-json user messages from stdin while it works; Codex and OpenCode read one prompt up to EOF. The message picks what it does:
   "cut"      reads the project and its activity, says a message before and after opening its run, cuts 1-3 s out,
              adds two captions and answers
   "retakes"  transcribes, retries a declined model three times, or cuts the first two words in one run
@@ -25,7 +25,7 @@ stream-json user messages from stdin while it works; Codex reads one prompt up t
   "keep: …"  sent from Your style: reads the style and keeps the rest of the message as the creator's rule
   the `thumbnail` prompt (Make a thumbnail): sets both covers in one run with the hook from "Hook: …" in the wishes,
              looks at the cover with inspect_thumbnail, waiting for its mask, and exports nothing
-  "think first"  (Codex) says nothing for 2 s, then is echoed back
+  "think first"  Codex says nothing for 2 s, then echoes it; OpenCode emits only step_start and waits until Stop
   "image gen" (Codex) makes the 9:16 cover from a generated orange PNG: looks at a frame, imports the PNG and sets the
              cover's image with the hook GROKBOT in front, as the guide's cover from a generated picture says
   "image"    (Codex) generates an orange PNG into a Codex home of its own (generated_images/<thread>/) as Codex's image_gen does, imports it with
@@ -49,6 +49,7 @@ from pathlib import Path
 # On Windows the .cmd that runs this names it (windows_stand_in in tests/e2e/harness.py).
 NAME = os.environ.get('FAKE_AGENT_AS') or Path(sys.argv[0]).name
 CODEX = NAME == 'fake_codex'
+OPENCODE = NAME == 'fake_opencode'
 if len(sys.argv) > 1 and sys.argv[1] == '--version':
     if (Path(os.environ.get('NUZKY_FAKE_AGENT_LOG', '/tmp/fake-agent')) / 'vanish').exists():
         # Found, then gone before it starts, slower than the panel's polling. Windows runs any file, so there its
@@ -58,10 +59,17 @@ if len(sys.argv) > 1 and sys.argv[1] == '--version':
             os.remove(os.environ['FAKE_AGENT_LAUNCHER'])
         else:
             os.chmod(sys.argv[0], 0o644)
-    print('1.4.3' if NAME in ('fake_agy', 'agy') else 'codex-cli 0.162.1' if CODEX else '2.1.292 (Claude Code)')
+    print('1.18.34' if OPENCODE else '1.4.3' if NAME in ('fake_agy', 'agy') else 'codex-cli 0.162.1' if CODEX else '2.1.292 (Claude Code)')
     sys.exit(0)
 
 args = sys.argv[1:]
+if OPENCODE and args == ['models', '--pure']:
+    if not os.environ.get('PWD') or os.environ.get('XDG_CONFIG_HOME') != os.environ['PWD'] \
+            or os.environ.get('OPENCODE_DISABLE_PROJECT_CONFIG') != 'true':
+        print('fake agent: Nuzky left out the panel folder as XDG_CONFIG_HOME and PWD, or OPENCODE_DISABLE_PROJECT_CONFIG', file=sys.stderr)
+        sys.exit(2)
+    print('openai/test-first\nanthropic/test-second')
+    sys.exit(0)
 if CODEX and args[:2] == ['debug', 'models']:
     print(json.dumps({'models': [
         {'slug': 'test-second', 'display_name': 'Test Second', 'visibility': 'list', 'priority': 2,
@@ -164,6 +172,10 @@ def opt(name):
 
 
 def emit(obj):
+    if OPENCODE:
+        obj.update(timestamp=int(time.time() * 1000), sessionID=session)
+        if 'part' in obj:
+            obj['part'].update(id=f'prt_{uuid.uuid4().hex}', messageID=f'msg_{os.getpid()}', sessionID=session)
     print(json.dumps(obj, ensure_ascii=False), flush=True)
 
 
@@ -175,7 +187,35 @@ SEARCHES = ['Spotify logo svg', 'Spotify brand colors']
 REQUIRED = {'-p': None, '--input-format': 'stream-json', '--output-format': 'stream-json', '--tools': 'WebSearch', '--strict-mcp-config': None,
             '--permission-mode': 'dontAsk', '--allowedTools': 'mcp__nuzky,WebSearch', '--setting-sources': 'user',
             '--disable-slash-commands': None}
-if CODEX:
+if OPENCODE:
+    settings = json.loads(os.environ.get('OPENCODE_CONFIG_CONTENT', '{}'))
+    server = settings.get('mcp', {}).get('nuzky', {})
+    missing = [k for k, v in {'permission': {'*': 'deny', 'nuzky_*': 'allow'}, 'share': 'disabled', 'autoupdate': False}.items()
+               if settings.get(k) != v]
+    if set(settings.get('mcp', {})) != {'nuzky'} or server.get('type') != 'local' or server.get('enabled') is not True \
+            or not server.get('command') or not server.get('environment', {}).get('XDG_RUNTIME_DIR'):
+        missing.append('mcp.nuzky local command, enabled and environment')
+    panel_agent = settings.get('agent', {}).get('nuzky-panel', {})
+    if settings.get('agent') != {'nuzky-panel': {'mode': 'primary', 'prompt': panel_agent.get('prompt'),
+                                               'permission': {'*': 'deny', 'nuzky_*': 'allow'}}} \
+            or not panel_agent.get('prompt', '').startswith('You are the AI panel inside Nuzky, a video editor.'):
+        missing.append('agent.nuzky-panel mode, prompt and permission')
+    for k, v in {'XDG_CONFIG_HOME': os.getcwd(), 'PWD': os.getcwd(), 'OPENCODE_DISABLE_PROJECT_CONFIG': 'true',
+                 'OPENCODE_DISABLE_EXTERNAL_SKILLS': 'true',
+                 'OPENCODE_DISABLE_CLAUDE_CODE': 'true', 'OPENCODE_DISABLE_AUTOUPDATE': 'true'}.items():
+        if os.environ.get(k) != v:
+            missing.append(k)
+    missing += [k for k in ('OPENCODE_CONFIG', 'OPENCODE_CONFIG_DIR', 'OPENCODE_PERMISSION') if k in os.environ]
+    remaining = args[6:]
+    for name in ('--session', '--model'):
+        if remaining[:1] == [name] and len(remaining) > 1 and remaining[1] and not remaining[1].startswith('-'):
+            remaining = remaining[2:]
+    if args[:6] != ['run', '--format', 'json', '--pure', '--agent', 'nuzky-panel'] \
+            or any(not a.startswith('--file=') or not a[7:] for a in remaining):
+        missing.append('run --format json --pure --agent nuzky-panel without a positional message')
+    resume = '--session' in args
+    session = opt('--session') or f'ses_{uuid.uuid4().hex}'
+elif CODEX:
     settings = dict(a.split('=', 1) for i, a in enumerate(args) if i and args[i - 1] == '-c')
     required = {'default_permissions': '"nuzky"', 'permissions.nuzky.filesystem': '{":minimal"="read"}', 'approval_policy': '"never"', 'features.shell_tool': 'false',
                 'features.code_mode.direct_only_tool_namespaces': '["mcp__nuzky"]', 'features.image_generation': 'true',
@@ -220,9 +260,10 @@ def unpack(content):
 
 
 messages = None
-if CODEX:
+if CODEX or OPENCODE:
     prompt = sys.stdin.read()
-    pictures = [jpeg_size(Path(a.removeprefix('--image=')).read_bytes()) for a in args if a.startswith('--image=')]
+    prefix = '--file=' if OPENCODE else '--image='
+    pictures = [jpeg_size(Path(a.removeprefix(prefix)).read_bytes()) for a in args if a.startswith(prefix)]
 else:
     prompt, pictures = unpack(json.loads(sys.stdin.readline())['message']['content'])
     messages = queue.Queue()
@@ -238,7 +279,8 @@ else:
     threading.Thread(target=read_messages, daemon=True).start()
 with open(LOG / 'runs.jsonl', 'a') as f:
     f.write(json.dumps({'pid': os.getpid(), 'argv': args, 'cwd': os.getcwd(), 'missing': missing, 'prompt': prompt,
-                        'pictures': pictures, 'resume': resume, 'session': session}, ensure_ascii=False) + '\n')
+                        'pictures': pictures, 'resume': resume, 'session': session,
+                        **({'config': settings} if OPENCODE else {})}, ensure_ascii=False) + '\n')
 if missing:
     print(f'fake agent: Nuzky left out {missing}', file=sys.stderr)
     sys.exit(2)
@@ -246,7 +288,7 @@ sessions = LOG / 'sessions'
 sessions.mkdir(exist_ok=True)
 if resume and not (sessions / session).exists():
     print(f'Error: thread/resume: thread/resume failed: no rollout found for thread id {session} (code -32600)'
-          if CODEX else f'No conversation found with session ID: {session}', file=sys.stderr)
+          if CODEX else '\x1b[91m\x1b[1mError: \x1b[0mSession not found' if OPENCODE else f'No conversation found with session ID: {session}', file=sys.stderr)
     sys.exit(1)
 (sessions / session).write_text(prompt)
 
@@ -276,7 +318,9 @@ class Mcp:
                 return m
 
 
-if CODEX:
+if OPENCODE:
+    mcp = Mcp({'command': server['command'][0], 'args': server['command'][1:], 'env': server['environment']})
+elif CODEX:
     server = {k.removeprefix('mcp_servers.nuzky.'): tomllib.loads('v = ' + v)['v']
               for k, v in settings.items() if k in ('mcp_servers.nuzky.command', 'mcp_servers.nuzky.args')}
     server['env'] = {k.removeprefix('mcp_servers.nuzky.env.'): tomllib.loads('v = ' + v)['v']
@@ -286,7 +330,9 @@ else:
     mcp = Mcp(json.loads(opt('--mcp-config'))['mcpServers']['nuzky'])
 tools = [f"mcp__nuzky__{t['name']}" for t in mcp.rpc('tools/list', {})['result']['tools']]
 style = settings.get('outputStyle', 'Proactive')
-if CODEX:
+if OPENCODE:
+    emit({'type': 'step_start', 'part': {'type': 'step-start'}})
+elif CODEX:
     emit({'type': 'thread.started', 'thread_id': session})
     emit({'type': 'turn.started'})
 else:
@@ -304,6 +350,9 @@ def item_id():
 
 
 def say(text):
+    if OPENCODE:
+        emit({'type': 'text', 'part': {'type': 'text', 'text': text, 'time': {'start': 1, 'end': 2}}})
+        return
     if CODEX:
         emit({'type': 'item.completed', 'item': {'id': item_id(), 'type': 'agent_message', 'text': text}})
         return
@@ -317,6 +366,18 @@ def say(text):
 
 def call(tool, arguments, text=False):
     """The tool's structured result, or with `text` the JSON its first text block holds, as inspect_image answers."""
+    if OPENCODE:
+        result = mcp.rpc('tools/call', {'name': tool, 'arguments': arguments})['result']
+        output = '\n'.join(b['text'] for b in result.get('content', []) if b['type'] == 'text')
+        state = {'status': 'error' if result.get('isError') else 'completed', 'input': arguments,
+                 'error' if result.get('isError') else 'output': output, 'metadata': {'truncated': False},
+                 'title': '', 'time': {'start': 1, 'end': 2}}
+        emit({'type': 'tool_use', 'part': {'type': 'tool', 'tool': f'nuzky_{tool}', 'callID': item_id(), 'state': state}})
+        emit({'type': 'step_finish', 'part': {'type': 'step-finish', 'reason': 'tool-calls', 'cost': 0,
+              'tokens': {'input': 0, 'output': 0, 'reasoning': 0, 'cache': {'write': 0, 'read': 0}}}})
+        if result.get('isError'):
+            raise RuntimeError(output)
+        return json.loads(result['content'][0]['text']) if text else result.get('structuredContent', {})
     if CODEX:
         item = {'id': item_id(), 'type': 'mcp_tool_call', 'server': 'nuzky', 'tool': tool,
                 'arguments': arguments, 'result': None, 'error': None, 'status': 'in_progress'}
@@ -367,7 +428,10 @@ def search(query, title='File:Spotify logo.svg', url='https://commons.wikimedia.
 
 
 def finish(error=False, text=''):
-    if CODEX:
+    if OPENCODE:
+        emit({'type': 'step_finish', 'part': {'type': 'step-finish', 'reason': 'stop', 'cost': 0,
+              'tokens': {'input': 0, 'output': 0, 'reasoning': 0, 'cache': {'write': 0, 'read': 0}}}})
+    elif CODEX:
         emit({'type': 'turn.completed', 'usage': {'input_tokens': 1, 'cached_input_tokens': 0,
               'cache_write_input_tokens': 0, 'output_tokens': 1, 'reasoning_output_tokens': 0}})
     else:
@@ -381,6 +445,8 @@ def finish(error=False, text=''):
 
 
 def interrupted(*_):
+    if OPENCODE:
+        return
     if CODEX:
         mcp.p.stdin.close()
         sys.exit(0)
@@ -392,11 +458,18 @@ signal.signal(signal.SIGINT, interrupted)
 message = prompt.split('\n\n[Nuzky]')[0].strip().lower()
 # The thumbnail prompt carries Nuzky's guide, whose words would pick the other answers.
 thumbnail = message.startswith('make a 9:16 cover')
+if OPENCODE and message.startswith('think first'):
+    (LOG / 'thinking').write_text(session)
+    time.sleep(60)
 if CODEX and message.startswith('think first'):
     # Thinking before its first item: until then Codex keeps nothing of the turn.
     time.sleep(2)
 
 if 'signin' in message and not thumbnail:
+    if OPENCODE:
+        emit({'type': 'error', 'error': {'name': 'APIError', 'data': {'statusCode': 403, 'isRetryable': False,
+              'message': "OpenCode's free tier can only be used from within OpenCode. Download it at https://opencode.ai and keep building."}}})
+        sys.exit(1)
     if CODEX:
         error = 'unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses'
         for n in range(1, 6):
@@ -411,6 +484,10 @@ if 'signin' in message and not thumbnail:
     emit({'type': 'result', 'subtype': 'success', 'is_error': True, 'result': 'Not logged in · Please run /login'})
     sys.exit(1)
 if 'limit' in message and not thumbnail:
+    if OPENCODE:
+        emit({'type': 'error', 'error': {'name': 'APIError', 'data': {'statusCode': 429, 'isRetryable': False,
+              'message': 'Rate limited'}}})
+        sys.exit(1)
     if CODEX:
         emit({'type': 'turn.failed', 'error': {'message': 'You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 9:00 PM.'}})
         sys.exit(1)
@@ -617,6 +694,8 @@ elif 'cut' in message:
     style = {'fontSize': 95.0, 'color': '#ffffff', 'strokeWidth': 7.5}
     call('apply_edits', {'run_id': run, 'request_id': 'captions', 'edits': [{'type': 'addCaptions', 'style': style, 'segments': [
         {'startUs': 0, 'endUs': 1_000_000, 'text': 'Dneska vám'}, {'startUs': 1_000_000, 'endUs': 2_000_000, 'text': 'ukážu jak'}]}]})
+    if OPENCODE:
+        time.sleep(0.6)
     # The same tool three times in a row, as an agent reading clip after clip calls it.
     for _ in range(3):
         call('get_state', {'clip_ids': [state['tracks'][0]['clips'][0]['id']]})
@@ -634,7 +713,7 @@ elif 'numbered list' in message:
         '2. **Caption position cannot be set in bulk.** Each caption moves alone.\n\n'
         '3. **Font size meant rebuilding captions.** The size lived in the preset.\n\n'
         'What I would do next:\n\n4. Add a shadow.\n\n5. Move captions together.\n\n- Keep the preset\n\n- Keep the font, then run\n      npm run dev\n\nThat is all.')
-elif 'steer me' in message and not CODEX:
+elif 'steer me' in message and not (CODEX or OPENCODE):
     clip = call('get_state', {})['tracks'][0]['clips'][0]
     run = call('begin_run', {'label': 'Steerable edit'})['run_id']
     call('apply_edits', {'run_id': run, 'request_id': 'split', 'edits': [{'type': 'splitClip', 'clipId': clip['id'], 'atUs': 2_000_000}]})

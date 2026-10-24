@@ -199,7 +199,7 @@ class Run:
                         NUZKY_CHATGPT_ISSUER='http://127.0.0.1:9', NUZKY_TEST_KEYCHAIN=str(self.work / 'keychain.json'),
                         # Nor does it run the person's own agents; a flow that needs one puts a stand-in there.
                         NUZKY_AGENT_CLAUDE=str(self.work / 'no-agent'), NUZKY_AGENT_CODEX=str(self.work / 'no-agent'),
-                        NUZKY_AGENT_AGY=str(self.work / 'no-agent'), PYTHONDONTWRITEBYTECODE='1')
+                        NUZKY_AGENT_AGY=str(self.work / 'no-agent'), NUZKY_AGENT_OPENCODE=str(self.work / 'no-agent'), PYTHONDONTWRITEBYTECODE='1')
         # A data folder the person chose for their own work would win over XDG_DATA_HOME.
         self.env.pop('NUZKY_DATA_DIR', None)
         self.checks, self.shots, self.s, self.app, self.driver = [], [], None, None, None
@@ -235,11 +235,11 @@ class Run:
             # Without them Windows names none of the app's folders and Tauri falls back to its own.
             for folder in ('AppData/Local', 'AppData/Roaming'):
                 (Path(env['HOME']) / folder).mkdir(parents=True, exist_ok=True)
-            for variable in ('NUZKY_AGENT_CLAUDE', 'NUZKY_AGENT_CODEX', 'NUZKY_AGENT_AGY'):
+            for variable in ('NUZKY_AGENT_CLAUDE', 'NUZKY_AGENT_CODEX', 'NUZKY_AGENT_AGY', 'NUZKY_AGENT_OPENCODE'):
                 path = Path(env[variable])
                 if path.suffix:
                     continue
-                if path.parent == STAND_INS.parent and path.name in ('fake_agent', 'fake_codex', 'fake_agy'):
+                if path.parent == STAND_INS.parent and path.name in ('fake_agent', 'fake_codex', 'fake_agy', 'fake_opencode'):
                     path = windows_stand_in(self.work / 'stand-ins' / path.name, path.name)
                 elif path.is_file():
                     # A flow's copy of the stand-in, which it may take away.
