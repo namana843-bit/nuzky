@@ -8,6 +8,8 @@ use crate::turn::{SYSTEM, Step, TurnRequest};
 use serde_json::{Value, json};
 use std::process::Command;
 
+const AGENT: &str = "nuzky-panel";
+
 /// Everything Nuzky grants for the turn. It goes in `OPENCODE_CONFIG_CONTENT`, not in a file, so two windows'
 /// turns cannot swap projects, and stands in for the global config, so the user's own `mcp` servers, plugins
 /// and rules do not load; their provider sign-in stays in the data folder, which Nuzky does not touch.
@@ -15,16 +17,18 @@ fn config(req: &TurnRequest) -> Value {
     let environment: serde_json::Map<String, Value> = req.mcp.env.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
     let command: Vec<String> =
         std::iter::once(req.mcp.command.to_string_lossy().into_owned()).chain(req.mcp.args.iter().cloned()).collect();
+    // The last matching rule wins, so every tool but Nuzky's is denied, also built-ins a newer OpenCode adds; a
+    // denied tool is not offered to the model at all. OpenCode has no web search of the provider's own: its
+    // websearch goes to a search service of its own choosing.
+    let permission = json!({"*": "deny", "nuzky_*": "allow"});
     json!({
         "autoupdate": false,
         "share": "disabled",
         "mcp": {"nuzky": {"type": "local", "command": command, "enabled": true, "environment": environment}},
-        // In place of OpenCode's own prompt, which is about coding with its shell and files.
-        "agent": {"build": {"prompt": SYSTEM}},
-        // The last matching rule wins, so every tool but Nuzky's is denied, also built-ins a newer OpenCode
-        // adds; a denied tool is not offered to the model at all. OpenCode has no web search of the provider's
-        // own: its websearch goes to a search service of its own choosing.
-        "permission": {"*": "deny", "nuzky_*": "allow"},
+        // In place of OpenCode's own agents, whose prompts are about coding with its shell and files. An agent's
+        // rules are read after every config's, ~/.opencode/opencode.json's included, which OpenCode always loads.
+        "agent": {AGENT: {"mode": "primary", "prompt": SYSTEM, "permission": permission}},
+        "permission": permission,
     })
 }
 
@@ -43,12 +47,16 @@ pub(crate) fn command(req: &TurnRequest) -> Command {
     c.env("OPENCODE_CONFIG_CONTENT", config(req).to_string());
     // The global config, its AGENTS.md and its plugins stay behind this private folder.
     c.env("XDG_CONFIG_HOME", &req.cwd);
+    // OpenCode takes its project from PWD, not from its working folder, so Nuzky started from a terminal in a
+    // project would load that project's AGENTS.md and opencode.json.
+    c.env("PWD", &req.cwd);
+    c.env("OPENCODE_DISABLE_PROJECT_CONFIG", "true");
     c.env("OPENCODE_DISABLE_AUTOUPDATE", "true");
     c.env("OPENCODE_DISABLE_CLAUDE_CODE", "true");
     // Skills in ~/.agents/skills, which the global config folder does not cover.
     c.env("OPENCODE_DISABLE_EXTERNAL_SKILLS", "true");
     c.env("PATH", agent_path());
-    c.args(["run", "--format", "json", "--pure"]);
+    c.args(["run", "--format", "json", "--pure", "--agent", AGENT]);
     if req.resume {
         c.args(["--session", &req.session]);
     }
@@ -100,14 +108,19 @@ impl Parser {
         }
         match v["type"].as_str() {
             Some("text") => {
-                self.kept = true;
                 vec![Step::Event(AgentEvent::Text { text: v["part"]["text"].as_str().unwrap_or("").to_owned() })]
             }
             // `run --format json` reports a tool only once finished, so a completed call arrives
             // running and done in one event with its input. Another server's tool would mean its
             // config reached into the turn, so Nuzky stops it.
             Some("tool_use") => self.tool(&v["part"]).into_iter().collect(),
-            Some("reasoning") | Some("step_start") | Some("step_finish") => Vec::new(),
+            // OpenCode has saved the message by the time a step starts, so a turn stopped while the model thinks
+            // still resumes with it.
+            Some("step_start") => {
+                self.kept = true;
+                Vec::new()
+            }
+            Some("reasoning") | Some("step_finish") => Vec::new(),
             Some("error") => {
                 let error = &v["error"];
                 let what = error["data"]["message"].as_str().or(error["name"].as_str()).unwrap_or("OpenCode failed.");
@@ -117,7 +130,7 @@ impl Parser {
         }
     }
 
-    fn tool(&mut self, part: &Value) -> Option<Step> {
+    fn tool(&self, part: &Value) -> Option<Step> {
         if part["type"] != "tool" {
             return None;
         }
@@ -130,7 +143,6 @@ impl Parser {
                 ),
             ));
         }
-        self.kept = true;
         let (status, input) = match part["state"]["status"].as_str() {
             Some("completed") => (ToolStatus::Done, Some(part["state"]["input"].clone())),
             _ => (ToolStatus::Failed, None),
@@ -188,6 +200,11 @@ mod tests {
             ]
         );
         assert_eq!(session.as_deref(), Some("ses_e92b"));
+        // Stopped while the model still thinks, the next message resumes the conversation with this one.
+        let (_, session) = parse(&[
+            r#"{"type":"step_start","timestamp":1792834971749,"sessionID":"ses_e92b","part":{"id":"prt_1","messageID":"msg_1","sessionID":"ses_e92b","type":"step-start"}}"#,
+        ]);
+        assert_eq!(session.as_deref(), Some("ses_e92b"));
     }
 
     #[test]
@@ -241,15 +258,32 @@ mod tests {
                    "enabled":true,"environment":{"XDG_RUNTIME_DIR":"/run/user/1000"}})
         );
         assert_eq!(config["permission"], json!({"*": "deny", "nuzky_*": "allow"}));
-        assert_eq!(config["agent"]["build"]["prompt"], SYSTEM);
+        assert_eq!(
+            config["agent"]["nuzky-panel"],
+            json!({"mode": "primary", "prompt": SYSTEM, "permission": {"*": "deny", "nuzky_*": "allow"}})
+        );
         assert_eq!(env("XDG_CONFIG_HOME"), Some(Some("/run/user/1000/nuzky-agent".into())));
+        assert_eq!(env("PWD"), Some(Some("/run/user/1000/nuzky-agent".into())));
+        assert_eq!(env("OPENCODE_DISABLE_PROJECT_CONFIG"), Some(Some("true".into())));
         assert_eq!(env("OPENCODE_DISABLE_EXTERNAL_SKILLS"), Some(Some("true".into())));
         assert_eq!(env("OPENCODE_CONFIG"), Some(None));
         let args: Vec<_> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         // The message goes on stdin.
         assert_eq!(
             args,
-            ["run", "--format", "json", "--pure", "--session", "ses_a", "--model", "openai/gpt", "--file=/tmp/a b.jpg"]
+            [
+                "run",
+                "--format",
+                "json",
+                "--pure",
+                "--agent",
+                "nuzky-panel",
+                "--session",
+                "ses_a",
+                "--model",
+                "openai/gpt",
+                "--file=/tmp/a b.jpg"
+            ]
         );
     }
 }

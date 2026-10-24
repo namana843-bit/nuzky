@@ -469,7 +469,7 @@ pub async fn agent_models(agent: AgentId) -> CmdResult<Vec<AgentModel>> {
             let output = nuzky_agent::run(
                 &path,
                 &["models", "--pure"],
-                &[("XDG_CONFIG_HOME", &config)],
+                &[("XDG_CONFIG_HOME", &config), ("PWD", &config), ("OPENCODE_DISABLE_PROJECT_CONFIG", "true")],
                 None,
                 std::time::Duration::from_secs(15),
             )

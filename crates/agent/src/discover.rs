@@ -56,7 +56,7 @@ pub struct AgentInfo {
 fn known_dirs(home: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(home) = home {
-        for d in [".local/bin", ".claude/local", ".npm-global/bin", ".bun/bin", ".volta/bin"] {
+        for d in [".local/bin", ".claude/local", ".opencode/bin", ".npm-global/bin", ".bun/bin", ".volta/bin"] {
             dirs.push(home.join(d));
         }
     }
