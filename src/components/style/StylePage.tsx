@@ -53,7 +53,13 @@ function SuggestionCard({ s, busy }: { s: Suggestion; busy: boolean }) {
               {s.changes.map((c, i) => (
                 <span key={c.name}>
                   {i > 0 && " · "}
-                  {c.name}: {c.from ?? "none"} → <span className="text-fg">{c.to ?? "none"}</span>
+                  {c.to === null ? (
+                    `${c.name} removed`
+                  ) : (
+                    <>
+                      {c.name}: {c.from ?? "none"} → <span className="text-fg">{c.to}</span>
+                    </>
+                  )}
                 </span>
               ))}
             </p>
