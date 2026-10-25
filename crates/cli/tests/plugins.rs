@@ -574,7 +574,8 @@ fn a_plugin_places_its_own_picture_which_outlives_it() {
                   transform: {x: 0.35, y: -0.35, scale: 0.2, rotation: 0, opacity: 1}}];\n}\n";
     let save = |manifest: &Value, files: &[(&str, &Path)]| {
         let files = files.iter().map(|(name, path)| (name.to_string(), path.to_path_buf())).collect();
-        plugins::save_with_files(manifest, script, None, &files).map(drop).map_err(|e| format!("{e:#}"))
+        let effects = Default::default();
+        plugins::save_with_files(manifest, Some(script), None, &files, &effects).map(drop).map_err(|e| format!("{e:#}"))
     };
     let old = save(&manifest, &[("logo.png", &logo)]).unwrap_err();
     assert!(old.starts_with("PLUGIN_BROKEN: plugin.json: files needs nuzkyPlugin 2"), "{old}");
@@ -649,7 +650,8 @@ fn a_plugins_sound_with_a_huge_cover_is_refused_unread() {
         "version": "1", "files": ["beep.mp3"]});
     let save = |path: &Path| {
         let files = [("beep.mp3".to_string(), path.to_path_buf())].into_iter().collect();
-        plugins::save_with_files(&manifest, "function run() { return []; }", None, &files).map(drop)
+        plugins::save_with_files(&manifest, Some("function run() { return []; }"), None, &files, &Default::default())
+            .map(drop)
     };
     let ffmpeg = |args: &[&str], out: &Path| {
         let made = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error"]).args(args).arg(out).status();

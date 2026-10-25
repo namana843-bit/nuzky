@@ -4677,3 +4677,65 @@ fn cut_to_beats_fits_short_takes_to_the_built_in_song_over_stdio() {
     assert_eq!(planned["music"]["trimmed_to_us"], json!(end));
     c.finish();
 }
+
+/// An agent saves a plugin's effect, is told the line of its mistake, puts the fixed effect on a clip, and learns from
+/// get_state what the project is drawn without once the plugin is gone.
+#[test]
+fn a_plugin_effect_is_saved_checked_and_put_on_a_clip_over_stdio() {
+    let mut c = Client::start(true, None, Some(None));
+    place_still(&mut c);
+    let clip = c.call("get_state", json!({}))["tracks"][0]["clips"][0]["id"].clone();
+    let manifest = json!({"nuzkyPlugin": 2, "id": "vhs", "name": "VHS", "description": "A tape look",
+        "version": "1.0.0", "effects": [{"id": "vhs", "name": "VHS", "params": [
+            {"type": "number", "id": "amount", "label": "Amount", "min": 0, "max": 1, "step": 0.1, "default": 0.5}]}]});
+    let looped = "fn effect(p: Pixel) -> vec4<f32> {\n    var c = p.color;\n    for (var i = 0; i < 3; i++) { c *= 0.9; }\n    return c;\n}\n";
+    let error = plugin_error(c.error("save_plugin", json!({"manifest": manifest, "effects": {"vhs": looped}})));
+    assert!(error.starts_with("PLUGIN_BROKEN: effects/vhs.wgsl:3:5: an effect cannot use loops"), "{error}");
+    let dim =
+        "fn effect(p: Pixel) -> vec4<f32> {\n    return vec4<f32>(p.color.rgb * (1.0 - p.params[0]), p.color.a);\n}\n";
+    // Without a script nothing would read a button or a file, so a manifest naming one is refused.
+    for (field, value) in [("actions", json!([{"id": "go", "label": "Go"}])), ("files", json!(["logo.png"]))] {
+        let mut runs = manifest.clone();
+        runs[field] = value;
+        let error = plugin_error(c.error("save_plugin", json!({"manifest": runs, "effects": {"vhs": dim}})));
+        assert!(error.starts_with(&format!("PLUGIN_BROKEN: plugin.json: {field} needs a plugin.js")), "{error}");
+    }
+    let mut old = manifest.clone();
+    old["nuzkyPlugin"] = json!(1);
+    let error = plugin_error(c.error("save_plugin", json!({"manifest": old, "effects": {"vhs": dim}})));
+    assert!(error.starts_with("PLUGIN_BROKEN: plugin.json: effects needs nuzkyPlugin 2"), "{error}");
+    let saved = c.call("save_plugin", json!({"manifest": manifest, "effects": {"vhs": dim}}));
+    assert_eq!(saved["plugin"]["status"], "ok", "{saved}");
+    assert_eq!(saved["plugin"]["runs"], false, "{saved}");
+    assert_eq!(saved["plugin"]["effects"], json!([{"id": "vhs", "status": "ok", "error": null}]), "{saved}");
+    let listed = c.call("list_plugins", json!({}));
+    assert_eq!(listed["plugins"][0]["manifest"]["effects"][0]["params"][0]["id"], "amount", "{listed}");
+    let script = plugin_error(c.error("run_plugin", json!({"id": "vhs", "dry_run": true})));
+    assert!(script.starts_with("PLUGIN_NO_SCRIPT"), "{script}");
+
+    let run = c.call("begin_run", json!({"label": "VHS look"}))["run_id"].clone();
+    let effect =
+        json!({"plugin": "vhs", "effect": "vhs", "name": "VHS", "version": "1.0.0", "params": {"amount": 0.8}});
+    c.call(
+        "apply_edits",
+        json!({"run_id": run, "request_id": "vhs", "edits": [
+        {"type": "setEffects", "clipId": clip, "effects": [effect]}]}),
+    );
+    let five = json!({"type": "setEffects", "clipId": clip, "effects": [effect, effect, effect, effect, effect]});
+    assert!(
+        c.error("apply_edits", json!({"run_id": run, "request_id": "five", "edits": [five]})).contains("at most 4")
+    );
+    c.call("end_run", json!({"run_id": run, "action": "keep"}));
+    let state = c.call("get_state", json!({}));
+    assert_eq!(state["tracks"][0]["clips"][0]["effects"], json!([effect]));
+    assert!(state.get("effect_issues").is_none(), "{state}");
+
+    std::fs::remove_dir_all(c.dir.join("data/nuzky/plugins/vhs")).unwrap();
+    let state = c.call("get_state", json!({}));
+    assert_eq!(
+        state["effect_issues"],
+        json!([{"plugin": "vhs", "effect": "vhs", "clip_ids": [clip],
+            "message": "VHS is not installed on this computer, so the clip is drawn without it."}])
+    );
+    c.finish();
+}
