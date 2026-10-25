@@ -2,7 +2,7 @@
 //! apply as one batch of a run. The script runs in QuickJS with no modules, files, network, timers or processes, and
 //! together with the check of its edits in a process of its own (`plugin-sandbox`) with a memory limit.
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -18,6 +18,7 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use nuzky_engine::{
     Project,
     edit::{EditCmd, new_id},
+    model::Asset,
 };
 use nuzky_session::{EndAction, Expect, SessionState, host::Host};
 use rquickjs::{
@@ -27,6 +28,8 @@ use rquickjs::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+
+use crate::plugin_files;
 
 pub const API: u64 = 2;
 pub const GUIDE: &str = include_str!("../../../skills/nuzky-plugin/SKILL.md");
@@ -65,6 +68,9 @@ pub struct Manifest {
     pub needs: Vec<Need>,
     #[serde(default)]
     pub inputs: Vec<Input>,
+    /// Pictures and sounds in the plugin's folder, by file name, that its edits may add to the project.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 fn default_action() -> String {
@@ -209,6 +215,19 @@ fn manifest(value: &Value) -> Result<Manifest> {
         api >= 2 || manifest.needs.iter().all(|need| *need == Need::Words),
         "PLUGIN_BROKEN: plugin.json: needs silences, loudness or beats only with nuzkyPlugin 2"
     );
+    // Nuzky before version 2 would refuse `files` only as an unknown field, so the plugin says it needs 2.
+    ensure!(manifest.files.is_empty() || api >= 2, "PLUGIN_BROKEN: plugin.json: files needs nuzkyPlugin 2");
+    ensure!(
+        manifest.files.len() <= plugin_files::MAX_FILES,
+        "PLUGIN_BROKEN: plugin.json: at most {} files",
+        plugin_files::MAX_FILES
+    );
+    let mut names = HashSet::new();
+    for name in &manifest.files {
+        plugin_files::kind(name).map_err(|e| anyhow!("PLUGIN_BROKEN: plugin.json: files: {e}"))?;
+        // macOS and Windows keep LOGO.PNG and logo.png as one file.
+        ensure!(names.insert(name.to_ascii_lowercase()), "PLUGIN_BROKEN: plugin.json: files names {name} twice");
+    }
     ensure!(is_id(&manifest.id), "PLUGIN_BROKEN: plugin.json: id is 1 to 40 lowercase letters, digits and dashes");
     let texts = [
         ("name", &manifest.name, 40),
@@ -317,6 +336,9 @@ fn open(folder: &Path) -> Result<(Manifest, String)> {
     );
     let script =
         read(&folder.join("plugin.js"), MAX_SCRIPT_BYTES).map_err(|e| anyhow!("PLUGIN_BROKEN: plugin.js: {e:#}"))?;
+    for name in &manifest.files {
+        plugin_files::present(folder, name).map_err(|e| anyhow!("PLUGIN_BROKEN: {name}: {e:#}"))?;
+    }
     Ok((manifest, script))
 }
 
@@ -347,6 +369,17 @@ pub fn list() -> Result<Vec<Plugin>> {
 
 /// Writes the plugin under plugins/<id>/, keeping the files it replaces as plugin.prev.json and plugin.prev.js.
 pub fn save(manifest: &Value, script: &str, readme: Option<&str>) -> Result<Plugin> {
+    save_with_files(manifest, script, readme, &BTreeMap::new())
+}
+
+/// `save` that also copies pictures and sounds into the plugin's folder: `files` maps a name the manifest lists to a
+/// file the agent has, checked as the plugin's own files are when it runs.
+pub fn save_with_files(
+    manifest: &Value,
+    script: &str,
+    readme: Option<&str>,
+    files: &BTreeMap<String, PathBuf>,
+) -> Result<Plugin> {
     let manifest = self::manifest(manifest)?;
     ensure!(script.len() as u64 <= MAX_SCRIPT_BYTES, "PLUGIN_BROKEN: plugin.js is larger than 1 MB");
     ensure!(
@@ -362,7 +395,28 @@ pub fn save(manifest: &Value, script: &str, readme: Option<&str>) -> Result<Plug
         "PLUGIN_BROKEN: plugins/{} is not a folder",
         manifest.id
     );
+    let mut copies = Vec::new();
+    for (name, path) in files {
+        ensure!(manifest.files.contains(name), "PLUGIN_BROKEN: files: {name} is not one of plugin.json's files");
+        ensure!(
+            plugin_files::local(path),
+            "PLUGIN_BROKEN: files: {name}: give the absolute path of a file on this computer"
+        );
+        let (asset, staged) = plugin_files::stock(path, name, false, &|| false)
+            .map_err(|e| anyhow!("PLUGIN_BROKEN: files: {name}: {e:#}"))?;
+        let from = staged.as_ref().map_or_else(|| PathBuf::from(&asset.path), |staged| staged.at.clone());
+        copies.push((name, from, staged));
+    }
+    for name in manifest.files.iter().filter(|name| !files.contains_key(*name)) {
+        plugin_files::present(&folder, name)
+            .map_err(|e| anyhow!("PLUGIN_BROKEN: plugin.json: files: {name}: {e:#}; give it in files"))?;
+    }
     std::fs::create_dir_all(&folder).context(failed)?;
+    // Replacing a link in the folder replaces the link, never the file it points at.
+    for (name, from, _staged) in copies {
+        let copy = |out: &mut std::fs::File| Ok(std::io::copy(&mut std::fs::File::open(&from)?, out).map(drop)?);
+        crate::sounds::publish(&folder.join(name), copy).context(failed)?;
+    }
     for (file, previous) in [("plugin.json", "plugin.prev.json"), ("plugin.js", "plugin.prev.js")] {
         if let Ok(old) = read(&folder.join(file), MAX_SCRIPT_BYTES) {
             crate::sounds::publish(&folder.join(previous), |out| Ok(out.write_all(old.as_bytes())?)).context(failed)?;
@@ -386,9 +440,49 @@ pub(crate) struct Prepared {
     ctx: Value,
     /// The project with its media's full paths, for what `needs` finds in the sound.
     media: Project,
+    folder: PathBuf,
+    /// The plugin's files the project does not have yet, after `stock`.
+    files: Vec<Asset>,
+    /// Their copies, by asset id, until the edits place them.
+    staged: HashMap<String, plugin_files::Staged>,
 }
 
 impl Prepared {
+    /// Checks and copies the plugin's files and puts them into `ctx`. Inside the job, as decoding a picture takes a
+    /// while and Stop ends it.
+    fn stock(&mut self, cancel: &AtomicBool) -> Result<()> {
+        let cancelled = || cancel.load(Ordering::Relaxed);
+        let mut shown = Map::new();
+        for name in &self.manifest.files {
+            let (asset, staged) =
+                plugin_files::stock(&self.folder.join(name), name, true, &cancelled).map_err(|e| {
+                    if cancelled() {
+                        anyhow!("CANCELLED: job cancelled")
+                    } else {
+                        anyhow!("PLUGIN_BROKEN: {name}: {e:#}")
+                    }
+                })?;
+            // Run again, the plugin places the copy the project has.
+            let asset = match self.media.assets.iter().find(|a| Path::new(&a.path) == Path::new(&asset.path)) {
+                Some(had) => had.clone(),
+                None => {
+                    if let Some(staged) = staged {
+                        self.staged.insert(asset.id.clone(), staged);
+                    }
+                    self.files.push(asset.clone());
+                    asset
+                }
+            };
+            shown.insert(
+                name.clone(),
+                json!({"assetId": asset.id, "kind": asset.kind, "width": asset.width, "height": asset.height,
+                    "durationUs": asset.duration_us}),
+            );
+        }
+        self.ctx["files"] = Value::Object(shown);
+        Ok(())
+    }
+
     /// Adds what `needs` finds in the sound to `ctx`; see `plugin_data::gather`.
     fn gather(&mut self, cache: &Path, prepare: bool, cancel: &AtomicBool, progress: &dyn Fn(f32)) -> Result<()> {
         let found = crate::plugin_data::gather(&self.media, cache, &self.manifest.needs, prepare, cancel, progress)?;
@@ -417,6 +511,7 @@ pub(crate) fn prepare(
         "inputs": inputs(&manifest, given)?,
         "selection": selection.unwrap_or_else(|| state.selection.clone()),
         "playheadUs": playhead_us.unwrap_or(state.playhead_us),
+        "files": {},
     });
     let dir = host.session.path().parent().map(Path::to_path_buf).unwrap_or_default();
     let mut media = state.project.clone();
@@ -432,7 +527,7 @@ pub(crate) fn prepare(
         );
         ctx["words"] = crate::transcript::summary(&derived, None)?["words"].take();
     }
-    Ok(Prepared { manifest, script, ctx, media })
+    Ok(Prepared { manifest, script, ctx, media, folder, files: vec![], staged: HashMap::new() })
 }
 
 #[derive(Serialize, Deserialize)]
@@ -518,12 +613,33 @@ fn kind(edit: &EditCmd) -> String {
     serde_json::to_value(edit).ok().and_then(|v| v["type"].as_str().map(str::to_owned)).unwrap_or_default()
 }
 
-/// The project after the edits, applied one by one to a copy as the session applies a batch. A plugin never adds a
-/// file or points the project at one, so a project it edited opens anywhere without it.
-fn check(project: &Project, edits: &[EditCmd]) -> Result<Project> {
+/// The plugin's files its edits name, which join the project ahead of them in the same batch.
+fn adds(edits: &[EditCmd], files: &[Asset]) -> Option<EditCmd> {
+    if files.is_empty() {
+        return None;
+    }
+    let named = serde_json::to_string(edits).unwrap_or_default();
+    let assets: Vec<_> = files.iter().filter(|a| named.contains(&format!("\"{}\"", a.id))).cloned().collect();
+    (!assets.is_empty()).then_some(EditCmd::AddAssets { assets })
+}
+
+fn added(add: &Option<EditCmd>) -> Vec<String> {
+    match add {
+        Some(EditCmd::AddAssets { assets }) => assets.iter().map(|a| a.name.clone()).collect(),
+        _ => vec![],
+    }
+}
+
+/// The project after the edits, applied one by one to a copy as the session applies a batch. A plugin adds no file
+/// but its own, which Nuzky copied into its own folder, and never points the project at one, so a project it edited
+/// opens anywhere without it.
+fn check(project: &Project, edits: &[EditCmd], files: &[Asset]) -> Result<Project> {
     let made: HashSet<_> = project.reel_candidates.iter().filter_map(|c| c.project_path.as_ref()).collect();
     let new_path = |path: &Option<String>| path.as_ref().is_some_and(|path| !made.contains(path));
     let mut after = project.clone();
+    if let Some(add) = adds(edits, files) {
+        after.apply(add).map_err(|e| anyhow!("PLUGIN_BAD_EDIT: the plugin's files: {e:#}"))?;
+    }
     for (i, edit) in edits.iter().enumerate() {
         let forbidden = match edit {
             EditCmd::AddAssets { .. } => true,
@@ -533,7 +649,7 @@ fn check(project: &Project, edits: &[EditCmd]) -> Result<Project> {
         };
         ensure!(
             !forbidden,
-            "PLUGIN_FORBIDDEN_EDIT: edit {i} ({}): a plugin cannot add files to the project or point it at one",
+            "PLUGIN_FORBIDDEN_EDIT: edit {i} ({}): a plugin cannot add files to the project or point it at one; place its own files by their assetId in ctx.files",
             kind(edit)
         );
         after.apply(edit.clone()).map_err(|e| anyhow!("PLUGIN_BAD_EDIT: edit {i} ({}): {e:#}", kind(edit)))?;
@@ -555,26 +671,46 @@ fn check(project: &Project, edits: &[EditCmd]) -> Result<Project> {
 }
 
 /// The answer of a dry run, and the project after the edits when they apply.
-fn dry((output, after): Checked) -> (Value, Option<Project>) {
+fn dry((output, after): Checked, files: &[Asset]) -> (Value, Option<Project>) {
     let (after, error) = match after {
         Ok(after) => (Some(after), None),
         Err(error) => (None, Some(error)),
     };
     let answer = json!({"dry_run": true, "valid": after.is_some(), "error": error, "edits": output.edits,
-        "message": output.message, "logs": output.logs});
+        "adds": added(&adds(&output.edits, files)), "message": output.message, "logs": output.logs});
     (answer, after)
 }
 
-fn apply(host: &Host, run_id: &str, revision: u64, (output, after): Checked, cancel: &AtomicBool) -> Result<Value> {
+fn apply(
+    host: &Host,
+    run_id: &str,
+    revision: u64,
+    (output, after): Checked,
+    files: &[Asset],
+    staged: &mut HashMap<String, plugin_files::Staged>,
+    cancel: &AtomicBool,
+) -> Result<Value> {
     after.map_err(anyhow::Error::msg)?;
     // A cancelled job reports no result, so its edits must not land either.
     ensure!(!cancel.load(Ordering::Relaxed), "CANCELLED: job cancelled");
+    // The sandbox refuses them too; only files Nuzky copied itself may join the project.
+    ensure!(
+        !output.edits.iter().any(|edit| matches!(edit, EditCmd::AddAssets { .. })),
+        "PLUGIN_FORBIDDEN_EDIT: a plugin cannot add files to the project"
+    );
     let count = output.edits.len();
+    let add = adds(&output.edits, files);
+    let names = added(&add);
+    if let Some(EditCmd::AddAssets { assets }) = &add {
+        for asset in assets {
+            staged.remove(&asset.id).map(plugin_files::Staged::keep).transpose()?;
+        }
+    }
     if count > 0 {
         let expect = Expect { revision: Some(revision), speech_layout_key: None };
-        host.session.apply_edits(run_id, &new_id(), output.edits, expect)?;
+        host.session.apply_edits(run_id, &new_id(), add.into_iter().chain(output.edits).collect(), expect)?;
     }
-    Ok(json!({"applied": count, "message": output.message, "logs": output.logs}))
+    Ok(json!({"applied": count, "added": names, "message": output.message, "logs": output.logs}))
 }
 
 pub(crate) enum Mode {
@@ -603,14 +739,17 @@ pub(crate) fn start(
     host.start_job(owner, run.as_deref(), "plugin", state.stamp.clone(), move |cancel, progress| {
         let listening = progress.clone();
         let checked = prepared
-            .gather(&cache, true, &cancel, &|done| listening.set("listening", Some(done)))
+            .stock(&cancel)
+            .and_then(|()| prepared.gather(&cache, true, &cancel, &|done| listening.set("listening", Some(done))))
             .and_then(|()| isolated(&prepared, &project, &cancel, move |done| progress.set("running", Some(done))));
         let host = weak.upgrade().context("APP_CLOSED: project is closed")?;
+        let Prepared { files, staged, .. } = &mut prepared;
         match mode {
-            Mode::DryRun => Ok(dry(checked?).0),
-            Mode::Apply => apply(&host, &run_id, revision, checked?, &cancel),
+            Mode::DryRun => Ok(dry(checked?, files).0),
+            Mode::Apply => apply(&host, &run_id, revision, checked?, files, staged, &cancel),
             Mode::App => {
-                let result = checked.and_then(|checked| apply(&host, &run_id, revision, checked, &cancel));
+                let result =
+                    checked.and_then(|checked| apply(&host, &run_id, revision, checked, files, staged, &cancel));
                 match &result {
                     Ok(_) => {
                         host.session.end_run(&run_id, EndAction::Keep)?;
@@ -656,9 +795,10 @@ pub fn dry_run_in_app(
 ) -> Result<Value> {
     let state = host.session.state()?;
     let mut prepared = prepare(host, &state, id, inputs, Some(selection), Some(playhead_us))?;
+    prepared.stock(&cancel)?;
     // The app prepares every file's sound in a job of its own, which the user sees; a preview never decodes.
     prepared.gather(&host.cache_dir, false, &cancel, &|_| {})?;
-    let (mut answer, after) = dry(isolated(&prepared, &state.project, &cancel, |_| {})?);
+    let (mut answer, after) = dry(isolated(&prepared, &state.project, &cancel, |_| {})?, &prepared.files);
     answer["project"] = json!(after);
     Ok(answer)
 }
@@ -711,7 +851,7 @@ fn isolated(
     // It waits for its input, so the limit holds before it does anything.
     #[cfg(windows)]
     let _job = limit_memory(&child.0)?;
-    let input = serde_json::to_vec(&(&prepared.script, prepared.ctx.to_string(), project))?;
+    let input = serde_json::to_vec(&(&prepared.script, prepared.ctx.to_string(), project, &prepared.files))?;
     let mut stdin = child.0.stdin.take().context("PLUGIN_FAILED: no input")?;
     std::thread::spawn(move || stdin.write_all(&input));
     let stdout = std::io::BufReader::new(child.0.stdout.take().context("PLUGIN_FAILED: no output")?);
@@ -760,7 +900,8 @@ fn isolated(
     bail!("PLUGIN_FAILED: the plugin's process stopped unexpectedly ({status})")
 }
 
-/// The `plugin-sandbox` command: the script, its ctx and the project come on stdin, the answer leaves on stdout as
+/// The `plugin-sandbox` command: the script, its ctx, the project and the plugin's files the project does not have
+/// yet come on stdin, the answer leaves on stdout as
 /// `Result<Checked, String>`, the progress on stderr. It touches no file.
 pub fn sandbox_main() -> Result<()> {
     #[cfg(target_os = "linux")]
@@ -774,7 +915,8 @@ pub fn sandbox_main() -> Result<()> {
         std::thread::sleep(RUN_LIMIT + Duration::from_secs(5));
         std::process::exit(1);
     });
-    let (script, input, project): (String, String, Project) = serde_json::from_reader(std::io::stdin().lock())?;
+    let (script, input, project, files): (String, String, Project, Vec<Asset>) =
+        serde_json::from_reader(std::io::stdin().lock())?;
     let shown = Cell::new(-1.0);
     let progress = move |done: f32| {
         let done = (done * 100.0).round() / 100.0;
@@ -784,7 +926,7 @@ pub fn sandbox_main() -> Result<()> {
     };
     let answer = execute(&script, input, progress)
         .map(|output| {
-            let after = check(&project, &output.edits).map_err(|error| format!("{error:#}"));
+            let after = check(&project, &output.edits, &files).map_err(|error| format!("{error:#}"));
             (output, after)
         })
         .map_err(|error| format!("{error:#}"));

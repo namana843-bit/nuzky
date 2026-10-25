@@ -519,3 +519,153 @@ fn stop_ends_a_plugin_while_it_prepares_the_sound() {
     assert!(state.open_run.is_none());
     assert_eq!(state.project, before);
 }
+
+/// A plugin puts its own logo in the corner: Nuzky copies the picture into its own folder and adds it in the batch
+/// that places it, as one undo step, a second run places the same copy, and the copy stays once the plugin is
+/// deleted. Its folder may hold only plain files: a link there, even a hard one, could name one of the user's files.
+#[test]
+fn a_plugin_places_its_own_picture_which_outlives_it() {
+    let f = project();
+    let logo = f.dir.join("source-logo.png");
+    let made = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=magenta:s=64x32", "-frames:v", "1"])
+        .arg(&logo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let mut manifest = json!({"nuzkyPlugin": 1, "id": "logo", "name": "Logo", "description": "Puts the logo in the corner",
+        "version": "1", "files": ["logo.png"]});
+    let script = "function run(ctx) {\n  const logo = ctx.files['logo.png'];\n  nuzky.log(logo.kind, logo.width, logo.height);\n  \
+                  return [{type: 'addSticker', assetId: logo.assetId, startUs: 0, durationUs: 1000000,\n    \
+                  transform: {x: 0.35, y: -0.35, scale: 0.2, rotation: 0, opacity: 1}}];\n}\n";
+    let save = |manifest: &Value, files: &[(&str, &Path)]| {
+        let files = files.iter().map(|(name, path)| (name.to_string(), path.to_path_buf())).collect();
+        plugins::save_with_files(manifest, script, None, &files).map(drop).map_err(|e| format!("{e:#}"))
+    };
+    let old = save(&manifest, &[("logo.png", &logo)]).unwrap_err();
+    assert!(old.starts_with("PLUGIN_BROKEN: plugin.json: files needs nuzkyPlugin 2"), "{old}");
+    manifest["nuzkyPlugin"] = json!(2);
+    let missing = save(&manifest, &[]).unwrap_err();
+    assert!(missing.contains("give it in files"), "{missing}");
+    let text = f.dir.join("text.png");
+    std::fs::write(&text, "not a picture").unwrap();
+    let unreadable = save(&manifest, &[("logo.png", &text)]).unwrap_err();
+    assert!(unreadable.starts_with("PLUGIN_BROKEN: files: logo.png: not a picture Nuzky can read"), "{unreadable}");
+    let mut twice = manifest.clone();
+    twice["files"] = json!(["logo.png", "LOGO.PNG"]);
+    let twice = save(&twice, &[("logo.png", &logo)]).unwrap_err();
+    assert!(twice.starts_with("PLUGIN_BROKEN: plugin.json: files names LOGO.PNG twice"), "{twice}");
+    save(&manifest, &[("logo.png", &logo)]).unwrap();
+    let folder = plugins::dir().unwrap().join("logo");
+    assert_eq!(std::fs::read(folder.join("logo.png")).unwrap(), std::fs::read(&logo).unwrap());
+
+    #[cfg(unix)]
+    let links: [fn(&Path, &Path) -> std::io::Result<()>; 2] =
+        [|from, to| std::os::unix::fs::symlink(from, to), |from, to| std::fs::hard_link(from, to)];
+    #[cfg(unix)]
+    for link in links {
+        std::fs::remove_file(folder.join("logo.png")).unwrap();
+        link(&logo, &folder.join("logo.png")).unwrap();
+        let error = format!("{:#}", plugins::run_in_app(&f.host, "logo", &Map::new(), vec![], 0).unwrap_err());
+        assert!(error.starts_with("PLUGIN_BROKEN: logo.png: "), "{error}");
+        save(&manifest, &[("logo.png", &logo)]).unwrap();
+        assert!(!std::fs::symlink_metadata(folder.join("logo.png")).unwrap().is_symlink());
+    }
+
+    let before = f.host.session.state().unwrap().project;
+    let dry = plugins::dry_run_in_app(&f.host, "logo", &Map::new(), vec![], 0, Arc::default()).unwrap();
+    assert_eq!(
+        (&dry["valid"], &dry["adds"], &dry["logs"]),
+        (&json!(true), &json!(["logo.png"]), &json!(["image 64 32"]))
+    );
+    assert_eq!(f.host.session.state().unwrap().project, before);
+    // Only a copy the edits place stays in Nuzky's folder; saving and previewing keep none.
+    let kept_files = || std::fs::read_dir(data().join("plugin-files")).map_or(0, |dir| dir.count());
+    assert_eq!(kept_files(), 0);
+
+    for run in 1..=2 {
+        let job = plugins::run_in_app(&f.host, "logo", &Map::new(), vec![], 0).unwrap();
+        let done = finish(&f.host, &job, Duration::from_secs(10));
+        assert_eq!(done["result"]["added"], if run == 1 { json!(["logo.png"]) } else { json!([]) }, "{done}");
+    }
+    let project = f.host.session.state().unwrap().project;
+    let added: Vec<_> = project.assets.iter().filter(|a| a.name == "logo.png").collect();
+    assert_eq!(added.len(), 1, "a second run added the logo again");
+    let kept = PathBuf::from(&added[0].path);
+    assert_eq!(kept.parent().unwrap(), dunce::canonicalize(data()).unwrap().join("plugin-files"));
+    let placed = project.tracks.iter().flat_map(|t| &t.clips);
+    let placed =
+        placed.filter(|c| matches!(&c.content, ClipContent::Media { asset_id, .. } if *asset_id == added[0].id));
+    assert_eq!(placed.count(), 2);
+    assert_eq!(kept_files(), 1);
+
+    std::fs::remove_dir_all(&folder).unwrap();
+    assert_eq!(std::fs::read(&kept).unwrap(), std::fs::read(&logo).unwrap());
+    f.host.session.undo().unwrap();
+    f.host.session.undo().unwrap();
+    assert_eq!(f.host.session.state().unwrap().project, before);
+}
+
+/// A plugin's sound may hold no picture: FFmpeg's look at a file decodes a cover of any size, so an MP3 whose cover is
+/// 8192 × 4096 is refused before that, and so is MPEG-TS named .mp3, which can add a video after its header.
+#[test]
+fn a_plugins_sound_with_a_huge_cover_is_refused_unread() {
+    let f = project();
+    let manifest = json!({"nuzkyPlugin": 2, "id": "beep", "name": "Beep", "description": "Beeps",
+        "version": "1", "files": ["beep.mp3"]});
+    let save = |path: &Path| {
+        let files = [("beep.mp3".to_string(), path.to_path_buf())].into_iter().collect();
+        plugins::save_with_files(&manifest, "function run() { return []; }", None, &files).map(drop)
+    };
+    let ffmpeg = |args: &[&str], out: &Path| {
+        let made = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error"]).args(args).arg(out).status();
+        assert!(made.unwrap().success());
+    };
+    let plain = f.dir.join("plain.mp3");
+    ffmpeg(&["-f", "lavfi", "-i", "sine=d=1", "-c:a", "libmp3lame"], &plain);
+    save(&plain).unwrap();
+    let stream = f.dir.join("stream.mp3");
+    ffmpeg(&["-f", "lavfi", "-i", "sine=d=1", "-c:a", "aac", "-f", "mpegts"], &stream);
+    let covered = f.dir.join("covered.mp3");
+    ffmpeg(
+        &["-f", "lavfi", "-i", "sine=d=1", "-f", "lavfi", "-i", "color=s=8192x4096:d=1", "-map", "0", "-map", "1"]
+            .into_iter()
+            .chain(["-c:a", "libmp3lame", "-c:v", "png", "-frames:v", "1", "-disposition:v", "attached_pic"])
+            .chain(["-id3v2_version", "3"])
+            .collect::<Vec<_>>(),
+        &covered,
+    );
+    for refused in [stream, covered] {
+        let error = save(&refused).unwrap_err();
+        assert!(format!("{error:#}").contains("or one with a picture in it"), "{refused:?}: {error:#}");
+    }
+}
+
+/// Copying and checking a plugin's files happens in its job: Run answers at once, and Stop ends the check of a picture
+/// file that holds a hundred huge frames within two seconds, with nothing added.
+#[test]
+fn stop_ends_the_check_of_a_plugins_files() {
+    let f = project();
+    let folder = plugins::dir().unwrap().join("frames");
+    std::fs::create_dir_all(&folder).unwrap();
+    let made = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=s=8192x3000:r=1:d=120"])
+        .args(["-c:v", "png", "-f", "image2pipe"])
+        .arg(folder.join("logo.png"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let manifest = json!({"nuzkyPlugin": 2, "id": "frames", "name": "Frames", "description": "Places a logo",
+        "version": "1", "files": ["logo.png"]});
+    std::fs::write(folder.join("plugin.json"), manifest.to_string()).unwrap();
+    std::fs::write(folder.join("plugin.js"), "function run() { return []; }").unwrap();
+    let before = f.host.session.state().unwrap().project;
+    let asked = Instant::now();
+    let job = plugins::run_in_app(&f.host, "frames", &Map::new(), vec![], 0).unwrap();
+    assert!(asked.elapsed() < Duration::from_secs(1), "Run waited {:?}", asked.elapsed());
+    std::thread::sleep(Duration::from_millis(300));
+    f.host.stop_run().unwrap();
+    let done = finish(&f.host, &job, Duration::from_secs(2));
+    assert_ne!(done["status"], "done", "{done}");
+    assert_eq!(f.host.session.state().unwrap().project, before);
+}

@@ -88,9 +88,10 @@ function changeText(name: string, now: Clip, then: Clip) {
  * How the timeline changes from `now` to `then`, the project undo or redo would restore. When the step takes
  * clips away and the others keep their lengths and only shift, the lanes draw `now` with the removed clips marked,
  * so they are seen where they are; otherwise they draw `then`. `marks` are for the drawn project's clips; `lines` say it in words. Clips that only shift with a cut are
- * marked but not described, since the cut says it.
+ * marked but not described, since the cut says it. `ahead` is for a step not taken yet, such as a plugin's, whose new
+ * clips and media are added rather than brought back.
  */
-export function describePeek(now: Project, then: Project): { draw: "now" | "then"; marks: Map<string, PeekMark>; lines: string[] } {
+export function describePeek(now: Project, then: Project, ahead = false): { draw: "now" | "then"; marks: Map<string, PeekMark>; lines: string[] } {
   const before = placed(now);
   const after = placed(then);
   const marks = new Map<string, PeekMark>();
@@ -125,7 +126,13 @@ export function describePeek(now: Project, then: Project): { draw: "now" | "then
     }
 
   const lines: string[] = [];
-  if (back.length) lines.push(`Brings back ${some(then, back)}`);
+  const media = then.assets.filter((a) => !now.assets.some((b) => b.id === a.id));
+  const files = media.length === 1 ? media[0].name : `${media.length} media files`;
+  const uses = (p: Placed, id: string) => p.clip.content.type === "media" && p.clip.content.assetId === id;
+  // Only a plugin's own files join ahead of its step; they lead, so a list of changed clips never hides them.
+  const theirs = ahead && media.length > 0 && back.length > 0 && back.every((p) => media.some((a) => uses(p, a.id))) && media.every((a) => back.some((p) => uses(p, a.id)));
+  if (ahead && media.length) lines.push(theirs ? `Adds the plugin's ${files} to the video and Media` : `Adds the plugin's ${files} to Media`);
+  if (back.length && !theirs) lines.push(`${ahead ? "Adds" : "Brings back"} ${some(then, back)}`);
   if (gone.length) lines.push(`Removes ${some(now, gone)}`);
   for (const [a, b] of trimmed) lines.push(`${clipName(then, b)} length ${formatDuration(a.durationUs)} → ${formatDuration(b.durationUs)}`);
   for (const c of moved) lines.push(`${clipName(then, c)} moves to ${formatTime(c.startUs)}`);
@@ -134,8 +141,7 @@ export function describePeek(now: Project, then: Project): { draw: "now" | "then
   if (now.name !== then.name) lines.push(`Name “${now.name}” → “${then.name}”`);
   if (now.canvas.width !== then.canvas.width || now.canvas.height !== then.canvas.height)
     lines.push(`Format ${now.canvas.width} × ${now.canvas.height} → ${then.canvas.width} × ${then.canvas.height}`);
-  const media = then.assets.filter((a) => !now.assets.some((b) => b.id === a.id));
-  if (media.length) lines.push(`Brings back ${media.length === 1 ? media[0].name : `${media.length} media files`} in Media`);
+  if (media.length && !ahead) lines.push(`Brings back ${files} in Media`);
   const dropped = now.assets.filter((a) => !then.assets.some((b) => b.id === a.id));
   if (dropped.length) lines.push(`Removes ${dropped.length === 1 ? dropped[0].name : `${dropped.length} media files`} from Media`);
   const tracks = (p: Project) => p.tracks.map(({ clips: _, ...t }) => t);
