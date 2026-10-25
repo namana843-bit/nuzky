@@ -283,8 +283,10 @@ export function Timeline({ height }: { height: number }) {
 
   const tracks = useMemo(() => (drawn ? displayTracks(drawn) : []), [drawn]);
   const duration = drawn ? contentEnd(drawn) : 0;
-  // A shorter preview never narrows the lanes, so the scroll position survives it.
-  const laneWidth = Math.max(view.width - HEADER_W, (Math.max(duration, project ? contentEnd(project) : 0) / US + 30) * zoom);
+  // A shorter preview never narrows the lanes, so the scroll position survives it. Nor does anything narrow them
+  // under what is on screen: zooming out at the end keeps its anchor, and a clip dragged past the end has the ruler above it.
+  const lanesShown = view.width - HEADER_W;
+  const laneWidth = Math.max(view.left + lanesShown, (Math.max(duration, project ? contentEnd(project) : 0) / US) * zoom + lanesShown / 2);
   // Clips get the window they draw filmstrip tiles in. It moves in steps, with at least 200 px of margin on
   // each side, so scrolling re-renders the clips once per step instead of on every scroll event.
   const windowFrom = Math.floor(view.left / VISIBLE_STEP) * VISIBLE_STEP;
@@ -660,7 +662,8 @@ export function Timeline({ height }: { height: number }) {
           {/* Ruler */}
           <div className="sticky top-0 z-40 flex shrink-0" style={{ height: RULER_H }}>
             <div className="shrink-0" style={{ width: HEADER_W }} />
-            <div data-ruler className="relative flex-1 cursor-pointer border-b border-white/[.07] bg-panel" onPointerDown={startScrub}>
+            {/* Clipped, or labels past the lanes' end would widen the scroll, which draws more labels, without end. */}
+            <div data-ruler className="relative flex-1 cursor-pointer overflow-x-clip border-b border-white/[.07] bg-panel" onPointerDown={startScrub}>
               {ticks.map((t) => (
                 <div key={t} className="absolute top-0 h-full" style={{ left: t * zoom }}>
                   <span className="tabular absolute left-1 top-[5px] text-[11px] leading-[13px] text-muted">{formatTime(t * US, step < 1)}</span>
@@ -774,9 +777,10 @@ export function Timeline({ height }: { height: number }) {
                     {drag?.moved && ghostTiming && ghostTrackId === track.id && (
                       <ClipView clip={drag.clip} track={track} project={project} zoom={zoom} height={h} visible={visible} selected ghost timing={ghostTiming} />
                     )}
-                    {/* The group's ghosts keep their own times and shift together, so they do not re-render as the pointer moves. */}
+                    {/* The group's ghosts keep their own times and shift together, so they do not re-render as the pointer moves.
+                        The layer has no width of its own, so shifting it does not widen the lanes. */}
                     {drag?.moved && ghostTiming && drag.group && (
-                      <div className="pointer-events-none absolute inset-0 z-30" style={{ transform: `translateX(${((ghostTiming.startUs - drag.clip.startUs) / US) * zoom}px)` }}>
+                      <div className="pointer-events-none absolute inset-y-0 left-0 z-30" style={{ transform: `translateX(${((ghostTiming.startUs - drag.clip.startUs) / US) * zoom}px)` }}>
                         {track.clips
                           .filter((clip) => groupIds.has(clip.id))
                           .map((clip) => (
