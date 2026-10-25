@@ -299,6 +299,7 @@ impl OpenSession {
                             "analysis" => "Analysing media",
                             "segment" | "matte" => "Finding the person",
                             "reframe" => "Reframing",
+                            "plugin" => "Running a plugin",
                             _ => "Working",
                         };
                         app.emit(
