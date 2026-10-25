@@ -151,6 +151,53 @@ export type Background = {
   assetId: string,
 };
 
+export type BeatCutDone = {
+  snapshot: Snapshot,
+  clips: number,
+  repeated: number,
+  captionsRemoved: number,
+};
+
+/**
+ * What each rhythm would do to the project as it is, or as it was before the cut it would replace.
+ */
+export type BeatPlans = {
+  clipId: string,
+  song: SongBeats,
+  /**
+   * False when the song has no steady beat to cut to; then there are no rhythms.
+   */
+  steady: boolean,
+  /**
+   * On the timeline, at the clip's speed.
+   */
+  bpm: number,
+  /**
+   * Where the beat comes in on the timeline; null when that is before the clip starts in the song.
+   */
+  beatFromUs: number | null,
+  /**
+   * The drop Builds to the drop turns faster at, on the timeline; null when the song has none after its intro.
+   */
+  buildsDropUs: number | null,
+  /**
+   * Distinct videos and pictures on the main track.
+   */
+  videos: number,
+  pictures: number,
+  /**
+   * Where the main track ends now, before cutting.
+   */
+  footageEndUs: number,
+  songEndUs: number,
+  rhythms: Array<RhythmPlan>,
+  current: CurrentCut | null,
+  /**
+   * The cover shows a frame of the timeline, which will show other footage.
+   */
+  coverFrame: boolean,
+};
+
 export type Boot = {
   limits: Limits,
   snapshot: Snapshot,
@@ -491,6 +538,14 @@ export type Crop = {
   bottom: number,
 };
 
+export type CurrentCut = {
+  rhythm: Rhythm,
+  /**
+   * The cut is the newest step, so picking a rhythm replaces it.
+   */
+  newest: boolean,
+};
+
 /**
  * What Undo needs to bring a deleted collection back.
  */
@@ -798,7 +853,7 @@ export type Imported = {
 
 export type JobEvent = {
   id: string,
-  kind: "audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels" | "speech-model" | "agent",
+  kind: "audio" | "proxy" | "matte" | "export" | "captions" | "transcript" | "style" | "vision-models" | "cover" | "reframe" | "reels" | "speech-model" | "agent" | "beats",
   label: string,
   status: "running" | "done" | "failed" | "cancelled",
   progress: number,
@@ -956,6 +1011,15 @@ export type MotionKind = "pushIn" | "pullOut" | "kenBurns";
 export type Part = {
   startUs: number,
   endUs: number,
+};
+
+/**
+ * Clips other than the song that still run after the cut main track ends, keeping the video going.
+ */
+export type PastEnd = {
+  titles: number,
+  captions: number,
+  overlays: number,
 };
 
 export type PlannedRecording = {
@@ -1142,6 +1206,54 @@ export type ReelFraming = "crop" | "blur";
 
 export type ReelStatus = "proposed" | "picked" | "rejected" | "made";
 
+export type Rhythm = "calm" | "builds" | "fast";
+
+export type RhythmPlan = {
+  rhythm: Rhythm,
+  /**
+   * Main-track clips after the cut.
+   */
+  clips: number,
+  /**
+   * Where each new main-track clip starts on the timeline, the first at 0.
+   */
+  cutUs: Array<number>,
+  /**
+   * Where the cut main track ends.
+   */
+  endUs: number,
+  /**
+   * Where the video ends after the cut: later than `end_us` while titles or overlays run past it.
+   */
+  projectEndUs: number,
+  pastEnd: PastEnd,
+  /**
+   * Clips that show footage shown before, because the videos ran out.
+   */
+  repeated: number,
+  /**
+   * Cuts that do not show, because no other video was long enough and the shot before goes on across them.
+   */
+  continued: number,
+  /**
+   * The beat comes in only after the cut ends, so nothing is cut to it.
+   */
+  beatAfterEnd: boolean,
+  captionsRemoved: number,
+  /**
+   * The intro before the beat is cut on bar lines, because no video is as long as it.
+   */
+  introCut: boolean,
+  /**
+   * An earlier rhythm whose cuts are the same.
+   */
+  sameAs: Rhythm | null,
+  /**
+   * Why this rhythm cannot cut, in words for the user.
+   */
+  error: string | null,
+};
+
 /**
  * Where Instagram Reels and TikTok draw nothing over a vertical video, in canvas pixels: clear of
  * the top bar, the like and comment rail on the right and the caption and buttons at the bottom.
@@ -1243,6 +1355,29 @@ export type Snapshot = {
    * Set when agents cannot attach to this project live; editing works without them.
    */
   agentBridgeError: string | null,
+};
+
+/**
+ * The beat of the song's file, for the ticks on its clip: source microseconds, mapped through the clip by the UI.
+ */
+export type SongBeats = {
+  /**
+   * Every beat heard, from where the beat is steady.
+   */
+  beatsUs: Array<number>,
+  /**
+   * Index into `beats_us` of the first beat that starts a bar; every fourth after it does too.
+   */
+  firstBar: number,
+  drops: Array<SongDrop>,
+};
+
+export type SongDrop = {
+  atUs: number,
+  /**
+   * The drop is where the beat comes in, so it only ends the intro.
+   */
+  beatStarts: boolean,
 };
 
 /**
