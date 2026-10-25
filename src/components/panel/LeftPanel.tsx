@@ -1,4 +1,4 @@
-import { Blend, Captions, Film, Music, Palette, ScrollText, Type } from "lucide-react";
+import { Blend, Captions, Film, Music, Palette, Puzzle, ScrollText, Type } from "lucide-react";
 import { useCover } from "../../lib/cover";
 import { useReels } from "../../lib/reels";
 import { useEditor, type PanelTab } from "../../lib/store";
@@ -9,6 +9,7 @@ import { AudioTab } from "./AudioTab";
 import { CaptionsTab } from "./CaptionsTab";
 import { FiltersTab } from "./FiltersTab";
 import { MediaTab } from "./MediaTab";
+import { PluginsTab } from "./PluginsTab";
 import { TextTab } from "./TextTab";
 import { TranscriptTab } from "./TranscriptTab";
 import { TransitionsTab } from "./TransitionsTab";
@@ -22,6 +23,7 @@ const TABS: { id: PanelTab; label: string; icon: typeof Film }[] = [
   { id: "transcript", label: "Transcript", icon: ScrollText },
   { id: "transitions", label: "Transitions", icon: Blend },
   { id: "filters", label: "Filters", icon: Palette },
+  { id: "plugins", label: "Plugins", icon: Puzzle },
 ];
 
 const TAB_IDS = TABS.map((t) => t.id);
@@ -63,7 +65,7 @@ export function LeftPanel({ width }: { width: number }) {
             aria-controls={tab === t.id ? tabIds("library", t.id).panel : undefined}
             tabIndex={tab === t.id ? 0 : -1}
             onClick={() => setTab(t.id)}
-            className={`flex flex-auto flex-col items-center gap-[3px] rounded-[11px] px-0.5 pt-1.5 pb-[5px] text-[11px] leading-[13px] font-medium whitespace-nowrap transition-colors duration-[120ms] ease-out ${
+            className={`flex flex-auto flex-col items-center gap-[3px] rounded-[11px] px-px pt-1.5 pb-[5px] text-[11px] leading-[13px] font-medium tracking-[-0.02em] whitespace-nowrap transition-colors duration-[120ms] ease-out ${
               tab === t.id ? "seg-on text-fg" : "text-muted hover:text-fg"
             }`}
           >
@@ -81,6 +83,7 @@ export function LeftPanel({ width }: { width: number }) {
           {tab === "transcript" && <TranscriptTab />}
           {tab === "transitions" && <TransitionsTab />}
           {tab === "filters" && <FiltersTab />}
+          {tab === "plugins" && <PluginsTab />}
         </AiLock>
       </TabPanel>
     </aside>
