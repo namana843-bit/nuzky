@@ -394,7 +394,7 @@ fn remove_pauses_cuts_the_silences_where_the_timeline_has_them() {
     let job = plugins::run_in_app(&f.host, "remove-pauses", &Map::new(), vec![], 0).unwrap();
     let done = finish(&f.host, &job, Duration::from_secs(20));
     assert_eq!(done["status"], "done", "{done}");
-    assert_eq!(done["result"]["message"], "Removed 1 pause, 0.8 s in all.");
+    assert_eq!(done["result"]["message"], "Removed 1 pause, 0.8\u{a0}s in all.");
     // The pause is 1.0-2.0 s of the timeline, so 1.1-1.9 s goes.
     let clips = main(&f.host);
     assert_eq!(clips.len(), 2, "{clips:?}");
@@ -417,7 +417,7 @@ fn remove_pauses_cuts_the_silences_where_the_timeline_has_them() {
     // A cut in the middle of the long pause gives one silence per clip; it is still one pause.
     edit(&f.host, json!({"type": "splitClip", "clipId": clip, "atUs": 1_500_000}));
     let split = plugins::dry_run_in_app(&f.host, "remove-pauses", &Map::new(), vec![], 0, Arc::default()).unwrap();
-    assert_eq!(split["message"], "Removed 1 pause, 0.8 s in all.", "{split}");
+    assert_eq!(split["message"], "Removed 1 pause, 0.8\u{a0}s in all.", "{split}");
 }
 
 /// A clip that starts inside a loudness window hears only what it plays: the file is loud for its first 50 ms, the
@@ -668,4 +668,18 @@ fn stop_ends_the_check_of_a_plugins_files() {
     let done = finish(&f.host, &job, Duration::from_secs(2));
     assert_ne!(done["status"], "done", "{done}");
     assert_eq!(f.host.session.state().unwrap().project, before);
+}
+
+/// Edits that leave the project as it was make no undo step, and the run says it changed nothing, so the app's Undo for
+/// a pass of plugins never takes back an edit made before it.
+#[test]
+fn a_plugin_whose_edits_change_nothing_says_so() {
+    let f = project();
+    let name = f.host.session.state().unwrap().project.name.clone();
+    let same = json!({"nuzkyPlugin": 1, "id": "same", "name": "Same", "description": "Renames to the same name", "version": "1"});
+    let script = format!("function run() {{ return [{{type: 'renameProject', name: {}}}]; }}", json!(name));
+    plugins::save(&same, &script, None).unwrap();
+    let job = plugins::run_in_app(&f.host, "same", &Map::new(), vec![], 0).unwrap();
+    let done = finish(&f.host, &job, Duration::from_secs(10));
+    assert_eq!((&done["result"]["applied"], &done["result"]["changed"]), (&json!(1), &json!(false)), "{done}");
 }
