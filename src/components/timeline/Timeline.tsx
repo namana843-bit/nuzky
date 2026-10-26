@@ -29,7 +29,8 @@ import type { Clip, EditCmd, Project, Track } from "../../lib/types";
 import { candidateReason, thumbnailOf, useCandidates, useCover } from "../../lib/cover";
 import { describePeek } from "../../lib/peek";
 import { usePlugins } from "../../lib/plugins";
-import { setDropResolver, type DropMedia } from "../panel/assets";
+import { usePreview } from "../../lib/preview";
+import { addDropResolver, type DropMedia } from "../panel/assets";
 import { IconButton, RangeInput } from "../ui";
 import { ClipMenu, type MenuAt } from "./ClipMenu";
 import { ClipView } from "./ClipView";
@@ -325,7 +326,8 @@ export function Timeline({ height }: { height: number }) {
   const dropAt = useCallback(
     (x: number, y: number) => {
       const el = scroller.current;
-      if (!el || !project) return null;
+      // The full screen preview covers the timeline, which still has its place under it.
+      if (!el || !project || usePreview.getState().full) return null;
       const r = el.getBoundingClientRect();
       if (x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
       let trackId: string | null = null;
@@ -344,13 +346,14 @@ export function Timeline({ height }: { height: number }) {
   );
 
   // Media dragged from the media panel lands here.
-  useEffect(() => {
-    setDropResolver((x, y, media) => {
-      const place = dropAt(x, y);
-      return place && { ...place, replaceId: replaceTarget(x, y, media)?.clipId ?? null };
-    });
-    return () => setDropResolver(null);
-  }, [dropAt, replaceTarget]);
+  useEffect(
+    () =>
+      addDropResolver((x, y, media) => {
+        const place = dropAt(x, y);
+        return place && { ...place, replaceId: replaceTarget(x, y, media)?.clipId ?? null };
+      }),
+    [dropAt, replaceTarget],
+  );
 
   useLayoutEffect(() => {
     const el = scroller.current;
