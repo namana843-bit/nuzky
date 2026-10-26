@@ -1337,6 +1337,10 @@ fn isolated(
         if let Some(root) = std::env::var_os("SystemRoot") {
             command.env("SystemRoot", root);
         }
+        // Windows loads DLLs from PATH, where a build outside the installer finds FFmpeg's.
+        if let Some(paths) = std::env::var_os("PATH") {
+            command.env("PATH", paths);
+        }
         std::os::windows::process::CommandExt::creation_flags(&mut command, 0x0800_0000); // CREATE_NO_WINDOW
     }
     let mut child = Sandboxed(command.spawn().context("PLUGIN_FAILED: cannot start the plugin's process")?);
@@ -1652,7 +1656,8 @@ mod tests {
     #[test]
     fn the_guide_shows_edits_and_a_manifest_nuzky_accepts() {
         let mut edits = 0;
-        for block in GUIDE.split("```json\n").skip(1) {
+        // A Windows checkout may end the guide's lines with \r\n.
+        for block in GUIDE.replace("\r\n", "\n").split("```json\n").skip(1) {
             let value: Value = serde_json::from_str(block.split("```").next().unwrap()).unwrap();
             if value.get("nuzkyPlugin").is_some() {
                 manifest(&value).unwrap();
