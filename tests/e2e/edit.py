@@ -43,6 +43,22 @@ SOURCE_IN = """return window.__nuzky.store.getState().snap.project.tracks.flatMa
 UNDER = """const b = document.querySelector(`[data-clip-id='${arguments[0]}'] [data-fade='${arguments[1]}']`).getBoundingClientRect();
 return document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)?.closest('[data-fade]')?.dataset.fade ?? null;"""
 KNOBS = "return document.querySelectorAll(`[data-clip-id='${arguments[0]}'] [data-fade]`).length"
+# Whether the clip `arguments[0]`'s name `arguments[1]` sits above its waveform and fade dots, covering none of them.
+NAME_CLEAR = """const clip = document.querySelector(`[data-clip-id='${arguments[0]}']`);
+const name = [...clip.querySelectorAll('span.truncate')].find((s) => s.textContent === arguments[1])?.getBoundingClientRect();
+const wave = clip.querySelector('canvas')?.getBoundingClientRect();
+if (!name || !wave) return null;
+return [wave, ...[...clip.querySelectorAll('[data-fade]')].map((d) => d.getBoundingClientRect())].every((b) => b.top >= name.bottom)
+  && wave.height >= 28;"""
+# Presses the middle of a clip and drags it `arguments[1]` px down, without letting go.
+DRAG_DOWN = """const el = document.querySelector(`[data-clip-id='${arguments[0]}']`);
+const b = el.getBoundingClientRect();
+const at = (type, dy) => new PointerEvent(type, {bubbles: true, button: 0, pointerId: 1,
+  clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 + dy});
+el.dispatchEvent(at('pointerdown', 0));
+window.dispatchEvent(at('pointermove', 10));
+window.dispatchEvent(at('pointermove', arguments[1]));"""
+GHOST_WAVE = "return document.querySelector('section[aria-label=Timeline] .opacity-85 canvas')?.getBoundingClientRect().height ?? null"
 SELECTION = 'return window.__nuzky.store.getState().selection'
 # Sends `arguments[2]` Ctrl + wheel events of `arguments[1]` px over the clip `arguments[0]` and returns the zoom.
 WHEEL = """const b = document.querySelector(`[data-clip-id='${arguments[0]}']`).getBoundingClientRect();
@@ -226,6 +242,8 @@ def edit(r):
     r.focus_clip(clip)
     time.sleep(0.5)
     r.check('the selected sound clip shows a fade dot at each end', r.s.run(KNOBS, clip) == 2, r.s.run(KNOBS, clip))
+    r.check("the sound clip's name sits above its waveform and fade dots, which keep their height",
+            wait(lambda: r.s.run(NAME_CLEAR, clip, 'tone.wav'), 5), r.s.run(NAME_CLEAR, clip, 'tone.wav'))
     r.s.run(FADE_DRAG, clip, 'in', 100)
     r.check('dragging the fade-in dot 100 px shows "Fade in 1.0 s"', wait(lambda: r.s.run(TIP, 'Fade in 1.0 s'), 5))
     r.shot('fade-drag')
@@ -248,6 +266,15 @@ def edit(r):
             r.s.run(SELECTION))
     r.key('Escape')
     r.check('the next Esc clears the selection', wait(lambda: r.s.run(SELECTION) == [], 5), r.s.run(SELECTION))
+    tracks = len(r.state()['tracks'])
+    r.s.run(DRAG_DOWN, clip, 120)
+    r.check('dragged below the tracks, the sound keeps its waveform height under its name',
+            wait(lambda: (r.s.run(GHOST_WAVE) or 0) >= 28, 5), r.s.run(GHOST_WAVE))
+    r.shot('sound-drag-new-track')
+    r.key('Escape')
+    r.s.run(RELEASE)
+    time.sleep(0.5)
+    r.check('Esc cancels that drag without a new track', len(r.state()['tracks']) == tracks, len(r.state()['tracks']))
     r.focus_clip(clip)
     webdriver('POST', r.s.path + '/window/rect', {'width': 1024, 'height': 640})
     wait(lambda: r.s.run('return [innerWidth, innerHeight]') == [1024, 640], 5)
